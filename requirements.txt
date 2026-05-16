@@ -1,0 +1,21 @@
+# ── Core ML / Vision ─────────────────────────────────────────────────────────
+torch>=2.1.0
+torchvision>=0.16.0
+transformers>=4.40.0          # V-JEPA 2 via HuggingFace
+accelerate>=0.27.0            # Efficient model loading on CPU/GPU
+ultralytics>=8.1.0            # YOLOv8
+
+# ── Robot / Hardware ─────────────────────────────────────────────────────────
+pyserial>=3.5                 # Serial communication with Freenove ESP32
+
+# ── Computer Vision ───────────────────────────────────────────────────────────
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# ── Config / Utilities ───────────────────────────────────────────────────────
+PyYAML>=6.0
+numpy>=1.24.0
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest>=7.4.0
+pytest-timeout>=2.1.0

@@ -1,0 +1,109 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Predictive Navigation System – Runtime Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Mode ─────────────────────────────────────────────────────────────────────
+mode: demo          # "live" | "demo"
+navigation_mode: predictive   # "predictive" | "baseline"
+
+# ── Camera ───────────────────────────────────────────────────────────────────
+camera:
+  device_index: 0           # OpenCV device index (live mode)
+  demo_video_path: "assets/demo_video/corridor.mp4"
+  frame_width: 640
+  frame_height: 480
+  fps: 30
+
+# ── Detector (YOLOv8) ────────────────────────────────────────────────────────
+detector:
+  model: "yolov8n.pt"       # nano is fine for embedded; swap to yolov8s for accuracy
+  confidence_threshold: 0.40
+  iou_threshold: 0.45
+  # Classes that count as obstacles in a corridor
+  obstacle_classes:
+    - "person"
+    - "chair"
+    - "couch"
+    - "dining table"
+    - "potted plant"
+    - "suitcase"
+    - "backpack"
+    - "box"
+  # Horizontal thirds of the frame: left / center / right
+  center_zone_ratio: 0.40   # fraction of frame width considered "center"
+  # An obstacle is "close" when its bounding-box area exceeds this fraction
+  close_area_threshold: 0.08
+
+# ── V-JEPA 2 World Model ─────────────────────────────────────────────────────
+world_model:
+  # HuggingFace model id or local checkpoint path
+  model_id: "facebook/vjepa2-vitl-fpc64-256"
+  # Number of past frames kept in the rolling buffer for prediction
+  clip_length: 16
+  # How many future steps to predict
+  prediction_horizon: 4
+  # Target spatial size fed to V-JEPA 2
+  input_size: 224
+  # Cosine-similarity threshold: predicted vs "obstacle" anchor embedding
+  risk_similarity_threshold: 0.55
+  device: "cpu"             # "cuda" | "cpu"
+
+# ── Temporal Action Recognition (SSv2-style) ─────────────────────────────────
+temporal_action:
+  # Rolling window of per-frame obstacle states used to classify motion pattern
+  window_size: 10
+  # Fraction of center-zone frames needed to trigger APPROACHING label
+  approach_ratio: 0.6
+  # Fraction of clear frames to call a path CLEARING
+  clear_ratio: 0.7
+  # Pixels-per-frame speed threshold to distinguish moving vs static obstacle
+  movement_speed_threshold: 5.0
+
+# ── Decision Fusion ──────────────────────────────────────────────────────────
+decision:
+  # Risk score is a weighted sum of detector_risk + world_model_risk + temporal_risk
+  weights:
+    detector: 0.35
+    world_model: 0.45
+    temporal: 0.20
+  # Thresholds for risk levels
+  low_risk_max: 0.30
+  medium_risk_max: 0.60
+  # high risk  > medium_risk_max
+  # Hysteresis: must cross threshold by this margin before changing action
+  hysteresis: 0.05
+  # Seconds to hold a STOP decision before re-evaluating
+  stop_hold_seconds: 1.5
+
+# ── Robot Motor Control ───────────────────────────────────────────────────────
+robot:
+  # Serial port for Freenove ESP32 board
+  port: "/dev/ttyUSB0"
+  baud: 115200
+  connection_timeout: 3.0
+  # Speed values (0-4095 for the Freenove PWM range)
+  speed_full: 1800
+  speed_slow: 900
+  speed_stop: 0
+  # Reroute: turn for this many seconds then continue
+  reroute_turn_seconds: 1.2
+  reroute_direction: "left"   # "left" | "right"
+  # Emergency stop: hold for this long
+  safe_stop_hold_seconds: 3.0
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  log_dir: "logs"
+  log_level: "INFO"           # DEBUG | INFO | WARNING | ERROR
+  save_annotated_frames: true
+  annotated_frame_interval: 5  # save every N frames
+  csv_log: true
+
+# ── Visualization ─────────────────────────────────────────────────────────────
+visualization:
+  show_window: true
+  window_name: "Predictive Navigation"
+  overlay_detections: true
+  overlay_risk_bar: true
+  overlay_action: true
+  overlay_world_model_label: true
