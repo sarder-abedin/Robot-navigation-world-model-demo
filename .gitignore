@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.pt
+*.pth
+*.bin
+*.safetensors
+# Run logs (keep structure placeholders)
+logs/run_*/
+!logs/.gitkeep
+logs_rpi/run_*/
+!logs_rpi/.gitkeep
+# Demo video files (user-provided)
+assets/demo_video/*.mp4
+assets/demo_video/*.avi
+assets/demo_video/*.mov
+!assets/demo_video/.gitkeep
+assets/demo_clips/*.mp4
+assets/demo_clips/*.avi
+!assets/demo_clips/.gitkeep
+# Freenove hardware params file
+Code/Server/params.json
+.env

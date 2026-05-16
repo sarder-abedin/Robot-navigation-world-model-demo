@@ -1,0 +1,112 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Predictive Navigation – Server-side Runtime Configuration
+# Freenove Tank Robot Kit for Raspberry Pi (FNK0077)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Run mode ──────────────────────────────────────────────────────────────────
+mode: demo          # "live" (physical Pi) | "demo" (recorded video on any machine)
+navigation_mode: predictive   # "predictive" | "baseline"
+
+# ── Camera / Frame buffer ──────────────────────────────────────────────────────
+camera:
+  # In demo mode this is the path to the recorded video file.
+  demo_video_path: "../../assets/demo_clips/corridor.mp4"
+  # Resolution the Pi camera streams at (used for AI; set in camera.py for streaming).
+  stream_width: 400
+  stream_height: 300
+  # Number of frames kept in the rolling clip buffer for V-JEPA 2.
+  clip_length: 16
+  # Target size that all frames are resized to before any model inference.
+  ai_frame_size: 224
+
+# ── Detector (YOLOv8) ─────────────────────────────────────────────────────────
+detector:
+  model: "yolov8n.pt"             # nano for Pi; swap to yolov8s if you have a Pi 5
+  confidence_threshold: 0.40
+  iou_threshold: 0.45
+  obstacle_classes:
+    - "person"
+    - "chair"
+    - "couch"
+    - "dining table"
+    - "potted plant"
+    - "suitcase"
+    - "backpack"
+    - "bottle"
+    - "book"
+  # Fraction of frame width that counts as the "center danger zone"
+  center_zone_ratio: 0.40
+  # An obstacle is "close" when its bbox area exceeds this fraction of the frame
+  close_area_threshold: 0.08
+  # Run detector on every Nth frame to save CPU (1 = every frame)
+  run_every_n_frames: 2
+
+# ── V-JEPA 2 world model ──────────────────────────────────────────────────────
+world_model:
+  # HuggingFace model ID or local checkpoint path.
+  # The system falls back to a lightweight stub when the weights are absent.
+  model_id: "facebook/vjepa2-vitl-fpc64-256"
+  input_size: 224
+  prediction_horizon: 4        # future frames to predict
+  risk_similarity_threshold: 0.55
+  device: "cpu"                # "cuda" for GPU; "cpu" for Raspberry Pi
+  # Run world-model inference every N frames (expensive on CPU)
+  run_every_n_frames: 8
+
+# ── Temporal action recognition (Something-Something V2 style) ────────────────
+temporal_action:
+  window_size: 10              # rolling window of per-frame obstacle states
+  approach_ratio: 0.6          # fraction of centre-zone frames → APPROACHING
+  clear_ratio: 0.7             # fraction of absent frames → CLEARING
+  movement_speed_threshold: 5.0  # px/frame to distinguish moving vs static
+
+# ── Decision fusion ────────────────────────────────────────────────────────────
+decision:
+  weights:
+    detector: 0.35
+    world_model: 0.45
+    temporal: 0.20
+  low_risk_max: 0.30
+  medium_risk_max: 0.60
+  hysteresis: 0.05
+  stop_hold_seconds: 1.5
+
+# ── Robot motor control ────────────────────────────────────────────────────────
+robot:
+  # tankMotor.setMotorModel(left, right) — range −4095 … +4095
+  speed_full: 1500
+  speed_slow: 800
+  speed_stop: 0
+  # Reroute: turn for this many seconds then resume
+  reroute_turn_seconds: 1.2
+  reroute_direction: "left"    # "left" | "right"
+  # Safety: stop if ultrasonic reads below this distance (cm)
+  ultrasonic_stop_cm: 15.0
+  # Ultrasonic check also guards the AI-driven forward motion
+  use_ultrasonic_guard: true
+
+# ── Logging ────────────────────────────────────────────────────────────────────
+logging:
+  log_dir: "../../logs_rpi"
+  log_level: "INFO"
+  save_annotated_frames: true
+  annotated_frame_interval: 5
+  csv_log: true
+
+# ── TCP / Server ───────────────────────────────────────────────────────────────
+server:
+  cmd_port: 5003
+  video_port: 8003
+  # How often (seconds) to broadcast AI status to connected clients
+  status_broadcast_interval: 0.5
+
+# ── Visualization ──────────────────────────────────────────────────────────────
+visualization:
+  show_window: false            # set true only if a display is attached to the Pi
+  window_name: "Predictive Navigation"
+  overlay_detections: true
+  overlay_risk_bar: true
+  overlay_action: true
+  overlay_world_model_label: true
+  # Annotated frames are sent via the video TCP channel
+  stream_annotated: true
