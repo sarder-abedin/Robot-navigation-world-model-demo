@@ -1,237 +1,290 @@
 # Freenove Tank Robot – Predictive Indoor Navigation
 
-A predictive indoor navigation system for the **Freenove Tank Robot** that uses
-**V-JEPA 2** as a world model to anticipate future obstacles — not just react to
-what is currently visible.
+A predictive indoor navigation system for the **Freenove Tank Robot Kit for
+Raspberry Pi (FNK0077)** that uses **V-JEPA 2** as a world model to anticipate
+future obstacles — not just react to what is currently visible.
 
 ---
 
 ## Project overview
 
 The robot drives through a small indoor corridor (chairs, boxes, tape lines,
-temporary occlusions, people crossing).  Instead of only reacting when an
-obstacle fills the camera frame, the system uses three complementary perception
-layers:
+temporary occlusions, people crossing).  Instead of only stopping when an
+obstacle fills the camera frame, the system uses three complementary layers:
 
-| Layer | Model | Role |
-|---|---|---|
-| Instantaneous detection | **YOLOv8** | What is visible right now? |
-| Predictive world model | **V-JEPA 2** | What will the scene look like in ~0.5 s? |
-| Temporal motion pattern | **SSv2-style rules** | Is the obstacle approaching, crossing, blocking, or clearing? |
+| Layer | Model | Role | Where it runs |
+|---|---|---|---|
+| Instantaneous detection | **YOLOv8n** | What is blocking the path *right now*? | Server (Pi) |
+| Predictive world model | **V-JEPA 2** | What will the scene look like in ~0.5 s? | Server (Pi) |
+| Temporal motion pattern | **SSv2-style rules** | Is the obstacle approaching, crossing, or clearing? | Server (Pi) |
+| Motor execution | **Freenove tankMotor** | `setMotorModel(L, R)` | Server (Pi) |
+| Status display | Lightweight PyQt5 | Show AI state; switch modes | Client (laptop) |
 
-All three signals are fused into a single risk score that drives one of four
-actions: **FORWARD → SLOW → STOP → REROUTE**.
-
-Two modes are provided for direct comparison:
-
-- **Predictive mode** – V-JEPA 2 and temporal reasoning are both active.
-  The robot starts decelerating *before* the obstacle fully enters the frame.
-- **Baseline mode** – V-JEPA 2 weight is zeroed; the robot reacts only to
-  current-frame detections.
+All heavy AI workload runs on the Raspberry Pi server.  The client is a
+thin viewer that connects via the existing Freenove TCP protocol.
 
 ---
 
 ## Architecture
 
 ```
-main.py
-│
-├── camera.py          LiveCamera | DemoCamera
-├── detector.py        YOLOv8 → DetectionResult (instantaneous risk)
-├── world_model.py     V-JEPA 2 → WorldModelResult (predictive risk)
-├── temporal_action.py SSv2-style → TemporalResult (motion pattern risk)
-├── decision.py        weighted fusion + hysteresis → Action
-├── robot.py           RobotController | MockRobot (Freenove motor commands)
-├── logger.py          CSV + annotated frame archive
-├── visualization.py   OpenCV HUD overlay
-└── config.yaml        all thresholds and runtime settings
+┌─────────────────────────────────────────────────────────────────┐
+│  Raspberry Pi  (Server)                                         │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Freenove existing stack (UNCHANGED)                     │   │
+│  │  camera.py · car.py · motor.py · ultrasonic.py          │   │
+│  │  server.py · tcp_server.py · command.py · message.py    │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                          │ wraps / extends                       │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  AI Pipeline  (new files alongside existing)             │   │
+│  │                                                          │   │
+│  │  main_predictive.py  ← new entry point                  │   │
+│  │  ai_pipeline.py      ← orchestrates all AI threads      │   │
+│  │  camera_buffer.py    ← rolling JPEG→numpy frame buffer  │   │
+│  │  detector.py         ← YOLOv8 obstacle detection        │   │
+│  │  world_model.py      ← V-JEPA 2 future-latent predict   │   │
+│  │  temporal_action.py  ← SSv2-style motion patterns       │   │
+│  │  decision.py         ← weighted risk fusion + hysteresis│   │
+│  │  robot_control.py    ← wraps car.motor.setMotorModel()  │   │
+│  │  ai_logger.py        ← CSV + annotated JPEG archive     │   │
+│  │  visualization.py    ← OpenCV HUD overlay               │   │
+│  │  config.yaml         ← thresholds and settings          │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  TCP port 5003 (commands)    TCP port 8003 (video)             │
+└─────────────────────────────────────────────────────────────────┘
+            ▲                              ▲
+            │                              │
+┌───────────────────────────────────────────────────────────────┐
+│  Client (operator laptop / PC)                                │
+│                                                               │
+│  ai_viewer.py     ← NEW: lightweight AI status display       │
+│  Main.py          ← original Freenove client (unchanged)     │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## How V-JEPA 2 is used as a world model
 
-V-JEPA 2 is a joint-embedding predictive architecture.  Its encoder maps
-video clips to latent space, and its predictor imagines future latents *without
-reconstructing pixels*.
+V-JEPA 2 predicts **future latent representations** of a scene without
+reconstructing pixels.  We exploit this to ask:
 
-In this system:
+> "Given the last 16 frames, what will the scene embedding look like 4 frames
+> from now (~0.5 s at 8 fps)?"
 
-1. The last `clip_length` (default: 16) frames are kept in a rolling buffer.
-2. V-JEPA 2 is run with the final `prediction_horizon` frames **masked out**,
-   forcing the predictor to imagine the near future.
-3. The resulting predicted embedding is compared (cosine similarity) against
-   two **anchor embeddings**:
-   - `obstacle_anchor` – average latent of corridor scenes with a large
-     centered obstacle
-   - `clear_anchor` – average latent of obstacle-free corridor scenes
-4. The difference in similarity scores is converted to a `predicted_risk`
-   value in [0, 1].
+1. A **rolling 16-frame buffer** is maintained from the camera stream.
+2. V-JEPA 2 runs with the last 4 frames **masked**, forcing the predictor to
+   imagine the near future.
+3. The predicted embedding is compared (cosine similarity) against two anchors:
+   - `obstacle_anchor` — average latent of corridor frames with a centred blocker
+   - `clear_anchor` — average latent of obstacle-free corridor frames
+4. The similarity difference becomes `predicted_risk ∈ [0, 1]`.
 
-This means the system can see a person walking towards the frame *at the
-edge*, predict that they will be blocking in ~0.5 s, and begin slowing down —
-well before the baseline reactive system would react.
+**Why this matters:** a person entering at the frame edge has a low *current*
+detection risk (small bbox, off-centre) but produces a *predicted* embedding
+much closer to the obstacle anchor than the clear anchor.  The robot starts
+decelerating several frames before the baseline system would react.
 
-### Anchor calibration
-
-The system ships with **synthetic anchors** that are good enough for a first
-run.  For best results in your specific corridor, run:
-
-```bash
-python main.py --build-anchors
+The predictive early-warning path is in `decision.py:65`:
+```python
+if self._mode == "predictive" and world_model_label == "BLOCKED" and action == Action.FORWARD:
+    action = Action.SLOW   # decelerate proactively
 ```
 
-Then press `o` / `c` to label obstacle / clear frames from live camera and the
-anchors are updated automatically.
+---
+
+## Baseline vs Predictive comparison
+
+| Feature | Baseline | Predictive |
+|---|---|---|
+| YOLOv8 detection | ✓ | ✓ |
+| V-JEPA 2 future prediction | ✗ (weight = 0) | ✓ (weight = 0.45) |
+| SSv2-style temporal patterns | ½ weight | full weight |
+| Ultrasonic guard | ✓ | ✓ |
+| V-JEPA 2 early-warning deceleration | ✗ | ✓ |
+
+Both modes run on the **same code path** — the only difference is the weight
+vector in `config.yaml decision.weights`.
 
 ---
 
 ## Setup
 
-### Requirements
-
-- Python 3.10+
-- Linux / macOS (Windows should work but is untested with the serial port)
-- For live mode: Freenove Tank Robot Kit for ESP32 connected via USB
-
-### Install
+### Raspberry Pi (server)
 
 ```bash
+# 1. Clone this repo onto the Pi
 git clone https://github.com/sarder-abedin/robot-navigation-world-model-demo
 cd robot-navigation-world-model-demo
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+
+# 2. Install Pi system packages
+sudo apt-get update
+sudo apt-get install -y python3-picamera2 python3-gpiozero python3-opencv
+
+# 3. Install Python packages
+pip3 install -r requirements_server.txt
+
+# 4. (First run only) Create hardware params file
+cd Code/Server
+python3 parameter.py
 ```
 
-V-JEPA 2 weights (~300 MB) are downloaded automatically from HuggingFace on
-first run.  If no GPU is available the system falls back to a lightweight
-embedding stub so the full pipeline still runs on CPU.
+V-JEPA 2 weights (~300 MB) are downloaded from HuggingFace on first run.
+If the Pi has no internet access, the system automatically falls back to a
+lightweight `_StubEncoder` that produces consistent embeddings from pixel
+statistics — enough to exercise the full pipeline and demonstrate the
+predictive vs baseline difference.
+
+### Client (operator laptop)
+
+```bash
+pip install -r requirements_client.txt
+```
 
 ---
 
 ## Running the demo
 
-### Demo mode (recorded video, no hardware required)
+### Demo mode (recorded video – no Raspberry Pi required)
 
-Place a corridor video at `assets/demo_video/corridor.mp4` then:
+Place a corridor video at `assets/demo_clips/corridor.mp4`, then:
 
 ```bash
-# Predictive mode (default)
-python main.py --mode demo --nav predictive
+cd Code/Server
+
+# Predictive mode
+python main_predictive.py --mode demo --nav predictive
 
 # Baseline reactive mode (for comparison)
-python main.py --mode demo --nav baseline
+python main_predictive.py --mode demo --nav baseline
 
-# Use a custom video file
-python main.py --mode demo --video /path/to/my_video.mp4
+# Custom video file
+python main_predictive.py --mode demo --video /path/to/my_video.mp4
 
-# Headless (no display window)
-python main.py --mode demo --no-display
+# Disable display window (headless)
+python main_predictive.py --mode demo --no-display
 ```
 
-### Live mode (physical Freenove robot)
+### Live mode (physical Freenove tank robot)
 
 ```bash
-# Check the serial port in config.yaml (robot.port), then:
-python main.py --mode live --nav predictive
+cd Code/Server
+python main_predictive.py --mode live --nav predictive
 ```
 
-Press **q** in the display window to quit gracefully at any time.
-
----
-
-## Configuration
-
-All thresholds and settings live in `config.yaml`.
-
-Key knobs:
-
-| Setting | Default | Effect |
-|---|---|---|
-| `world_model.clip_length` | 16 | Frames in the rolling V-JEPA 2 buffer |
-| `world_model.prediction_horizon` | 4 | Future frames to predict |
-| `world_model.risk_similarity_threshold` | 0.55 | Cosine similarity for BLOCKED label |
-| `decision.weights.world_model` | 0.45 | V-JEPA 2 contribution to fused risk |
-| `decision.low_risk_max` | 0.30 | Below this → FORWARD |
-| `decision.medium_risk_max` | 0.60 | Below this → SLOW, above → STOP/REROUTE |
-| `decision.hysteresis` | 0.05 | Prevents oscillation near thresholds |
-| `robot.speed_full` | 1800 | Full-speed PWM value |
-| `robot.speed_slow` | 900 | Reduced-speed PWM value |
-
----
-
-## Running tests
+### Connect the client viewer
 
 ```bash
-pytest tests/ -v
+cd Code/Client
+python ai_viewer.py
+# Enter the Pi's IP address and click Connect
 ```
 
-The test suite runs entirely without GPU or hardware — the world model tests
-use the lightweight `_StubEncoder` fallback.
+Use the **PREDICTIVE MODE / BASELINE MODE / STOP AI** buttons to switch modes
+at runtime.  The annotated video stream (detections + risk bar + action) is
+shown in the viewer window.
+
+### Calibrate V-JEPA 2 anchors for your corridor
+
+```bash
+cd Code/Server
+python main_predictive.py --build-anchors
+# Press 'o' to label obstacle frames, 'c' for clear frames, 'q' to finish
+```
 
 ---
 
-## Visualisation HUD
+## Extended TCP protocol
 
-The live display window shows:
+This project adds two new commands on top of the standard Freenove protocol:
 
-- **Bounding boxes** – colour-coded by obstacle class
-- **Risk bar** – green → yellow → red gradient showing fused risk
-- **Action label** – large centred text: FORWARD / SLOW / STOP / REROUTE
-- **V-JEPA 2 label** – CLEAR / MIXED / BLOCKED prediction
-- **Motion pattern** – STATIC_CLEAR / APPROACHING / CROSSING / BLOCKING / CLEARING
-- **Mode badge** – PREDICTIVE (green) or BASELINE (amber)
-- **FPS counter**
+| Command | Direction | Format | Meaning |
+|---|---|---|---|
+| `CMD_AIMODE` | client → server | `CMD_AIMODE#0` / `#1` / `#2` | Stop AI / Baseline / Predictive |
+| `CMD_AISTATUS` | server → client | `CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>` | Live AI state broadcast |
 
----
-
-## Logging
-
-Each run creates a timestamped directory under `logs/`:
-
-```
-logs/
-└── run_20240515_143022_predictive/
-    ├── navigation_log.csv      # one row per frame
-    ├── system.log              # text log
-    └── frames/                 # annotated JPEGs (every 5th frame)
-```
-
-The CSV captures: timestamp, action, risk scores from all three layers,
-detection counts, and the explanation string.
+All existing Freenove commands (`CMD_MOTOR`, `CMD_SERVO`, `CMD_LED`, etc.)
+continue to work as before.  Manual `CMD_MOTOR` commands are honoured when
+`CMD_AIMODE#0` (stop AI) is active.
 
 ---
 
 ## Something-Something V2 motion patterns
 
 The temporal recogniser classifies the **trajectory** of detections over the
-last `window_size` (default: 10) frames into SSv2-inspired categories:
+last `window_size` (default 10) frames into SSv2-inspired categories:
 
 | Pattern | Description | Risk |
 |---|---|---|
 | `STATIC_CLEAR` | No obstacle in the window | 0.00 |
 | `CLEARING` | Obstacle was present but is moving away | 0.10 |
-| `CROSSING` | Obstacle moves laterally without growing | 0.45 |
 | `UNCERTAIN` | Not enough signal | 0.25 |
-| `APPROACHING` | Area growing, obstacle in center | 0.70 |
-| `BLOCKING` | Large, centered, stationary obstacle | 0.85 |
+| `CROSSING` | Obstacle moves laterally without growing | 0.45 |
+| `APPROACHING` | Area growing, obstacle in centre zone | 0.70 |
+| `BLOCKING` | Large, centred, stationary obstacle | 0.85 |
 
 ---
 
-## Hardware wiring (Freenove)
+## Running tests
 
-The system sends `CMD_MOTOR#<lf>#<lb>#<rf>#<rb>#` strings over the serial port.
-This matches the Freenove ESP32 firmware protocol.
+```bash
+# Tests that need no GPU or hardware (run on any machine)
+pytest tests_rpi/ -v
 
-Default serial port: `/dev/ttyUSB0` (Linux).  Change `robot.port` in
-`config.yaml` if your port differs.
+# Original ESP32-targeted tests
+pytest tests/ -v
+```
+
+24 tests run across 4 test files, covering decision fusion, temporal patterns,
+world model mathematics, and camera buffer behaviour.
+
+---
+
+## Configuration (`Code/Server/config.yaml`)
+
+Key knobs for the demo:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `navigation_mode` | `predictive` | Which mode starts on launch |
+| `world_model.risk_similarity_threshold` | `0.55` | V-JEPA 2 BLOCKED sensitivity |
+| `decision.weights.world_model` | `0.45` | V-JEPA 2 contribution to fused risk |
+| `decision.low_risk_max` | `0.30` | Below this → FORWARD |
+| `decision.medium_risk_max` | `0.60` | Below this → SLOW, above → STOP/REROUTE |
+| `robot.ultrasonic_stop_cm` | `15.0` | Hard stop distance (cm) |
+| `robot.speed_full` | `1500` | Full-speed PWM (max 4095) |
+| `robot.speed_slow` | `800` | Reduced-speed PWM |
+| `detector.run_every_n_frames` | `2` | YOLOv8 cadence (CPU saving) |
+| `world_model.run_every_n_frames` | `8` | V-JEPA 2 cadence (CPU saving) |
+
+---
+
+## Logging
+
+Each run creates a timestamped directory under `logs_rpi/`:
+
+```
+logs_rpi/
+└── run_20240515_143022_predictive/
+    ├── navigation_log.csv   # one row per frame: action, risk scores, labels
+    ├── system.log           # Python logging output
+    └── frames/              # annotated JPEGs (every 5th frame)
+```
+
+The CSV captures all three risk signals separately, so you can plot predictive
+vs baseline risk trajectories from the same scenario and show how V-JEPA 2
+raises risk earlier.
 
 ---
 
 ## Success criteria
 
 - Robot reaches the goal point reliably in both modes
-- **Predictive mode** begins decelerating visibly earlier than baseline mode
-- System runs stably at ≥ 10 FPS on a modern laptop CPU (demo mode)
-- All detections, predictions, and actions are logged to CSV for post-analysis
+- Predictive mode visibly begins decelerating **earlier** than baseline mode
+- The V-JEPA 2 label shows `BLOCKED` before the YOLOv8 detector fills the risk bar
+- Motion is smoother in predictive mode (fewer full stops from a cold start)
+- System runs stably at ≥ 8 FPS on a Raspberry Pi 4 (demo mode)
+- All signals are logged to CSV for post-run analysis
