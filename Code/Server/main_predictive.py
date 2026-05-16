@@ -97,9 +97,10 @@ class PredictiveServer:
     ignored (the AI controls the motors).  CMD_AIMODE switches control back.
     """
 
-    # New command added by this project
+    # New commands added by this project
     CMD_AIMODE = "CMD_AIMODE"    # #0 stop AI  #1 baseline  #2 predictive
     CMD_AISTATUS = "CMD_AISTATUS"  # sent TO client: action#risk#wm#pattern#sonic
+    CMD_KILL = "CMD_KILL"        # #0 full server shutdown
 
     def __init__(self, cfg: dict, nav_mode: str):
         self._cfg = cfg
@@ -237,6 +238,15 @@ class PredictiveServer:
                 idx = self._parser.intParameter[0]
                 angle = self._parser.intParameter[1]
                 self._car.servo.setServoAngle(idx, angle)
+
+        elif cmd == self.CMD_KILL:
+            # Client emergency kill: stop motors and shut down the server process
+            logger.warning("CMD_KILL received from client – initiating shutdown")
+            if self._car:
+                self._car.motor.setMotorModel(0, 0)
+            self._ai.stop()
+            global _shutdown
+            _shutdown = True
 
         elif cmd == self._command.CMD_MODE:
             # Mode 0 = manual (disables AI), others re-enable

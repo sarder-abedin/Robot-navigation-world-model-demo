@@ -146,11 +146,154 @@ pip install -r requirements_client.txt
 
 ---
 
-## Running the demo
+## How to run
 
-### Demo mode (recorded video – no Raspberry Pi required)
+### Prerequisites
 
-Place a corridor video at `assets/demo_clips/corridor.mp4`, then:
+| Machine | Packages |
+|---|---|
+| Raspberry Pi (server) | `python3-picamera2 python3-gpiozero python3-opencv` (via apt) + `requirements_server.txt` |
+| Laptop / PC (client) | `requirements_client.txt` |
+
+```bash
+# Raspberry Pi
+sudo apt-get install -y python3-picamera2 python3-gpiozero python3-opencv
+pip3 install -r requirements_server.txt
+
+# Laptop / PC
+pip install -r requirements_client.txt
+```
+
+V-JEPA 2 weights (~300 MB) are fetched from HuggingFace automatically on
+first run.  If the Pi has no internet access the system falls back to a
+lightweight stub encoder that preserves the full pipeline behaviour.
+
+---
+
+### Option A – Demo mode (laptop only, no robot hardware needed)
+
+This is the fastest way to see the predictive vs baseline comparison.
+
+**Step 1** – Provide a corridor video clip:
+
+```
+assets/demo_clips/corridor.mp4
+```
+
+Any short indoor walkway video works (30 s is plenty).  The clip loops
+automatically.
+
+**Step 2** – Start the server in demo mode:
+
+```bash
+cd Code/Server
+
+# Predictive navigation (V-JEPA 2 active)
+python main_predictive.py --mode demo --nav predictive
+
+# Baseline reactive (YOLOv8 + temporal only, no world model)
+python main_predictive.py --mode demo --nav baseline
+
+# Custom video path
+python main_predictive.py --mode demo --video /path/to/my_video.mp4
+
+# Headless (no OpenCV window)
+python main_predictive.py --mode demo --no-display
+```
+
+An annotated OpenCV window opens showing detections, the risk bar, the
+V-JEPA 2 world-model label, the motion pattern, and the current action.
+
+**Step 3 (optional)** – Connect the client viewer while the server runs:
+
+```bash
+# In a second terminal (or on a second machine on the same network)
+cd Code/Client
+python ai_viewer.py
+# Type 127.0.0.1 (localhost) in the IP field and click Connect
+```
+
+---
+
+### Option B – Live mode (physical Freenove Tank Robot)
+
+**Step 1** – One-time hardware parameter file (run once on the Pi):
+
+```bash
+cd Code/Server
+python3 parameter.py
+```
+
+**Step 2** – Start the server on the Pi:
+
+```bash
+cd Code/Server
+python main_predictive.py --mode live --nav predictive
+```
+
+The server binds on:
+- TCP port **5003** (commands)
+- TCP port **8003** (video stream)
+
+**Step 3** – Connect the client viewer from your laptop:
+
+```bash
+cd Code/Client
+python ai_viewer.py
+# Enter the Pi's IP address and click Connect
+```
+
+---
+
+### Client viewer controls
+
+| Control | Action |
+|---|---|
+| **PREDICTIVE MODE** button / `Ctrl+P` | Switch to V-JEPA 2 predictive mode |
+| **BASELINE MODE** button / `Ctrl+B` | Switch to reactive-only baseline mode |
+| **STOP AI** button | Pause AI control; manual `CMD_MOTOR` commands honoured |
+| **EMERGENCY STOP** button / `Space` / `Esc` | Immediately cut motor power and pause AI |
+| **SHUTDOWN SERVER** button / `Ctrl+Q` | Send `CMD_KILL` – stop motors, shut down the server process |
+
+The **EMERGENCY STOP** button turns green for 4 seconds to confirm the
+command was sent, then resets to ready state.  To resume driving after an
+emergency stop, click **PREDICTIVE MODE** or **BASELINE MODE**.
+
+---
+
+### Calibrate V-JEPA 2 anchors for your corridor
+
+The default anchors work for most indoor corridors.  To recalibrate for
+your specific environment:
+
+```bash
+cd Code/Server
+python main_predictive.py --build-anchors
+# o  → label current frame as "obstacle"
+# c  → label current frame as "clear"
+# q  → finish and save anchors
+```
+
+At least 10 frames of each class are recommended.
+
+---
+
+### Baseline vs predictive comparison walkthrough
+
+1. Place the robot at the corridor start.
+2. Run `python main_predictive.py --mode live --nav baseline` (or demo).
+3. Walk into the camera view from the side.  Note the frame at which the
+   robot begins to decelerate — this is the **baseline reaction point**.
+4. Restart with `--nav predictive`.
+5. Repeat the same approach.  V-JEPA 2 should raise the world-model label
+   to `BLOCKED` (visible in the HUD and client status bar) **before** the
+   YOLOv8 bounding box fills the risk bar.  The robot decelerates earlier.
+6. Compare the logged CSVs in `logs_rpi/` — the `world_model_risk` column
+   rises several frames ahead of `detector_risk` in predictive mode.
+
+---
+
+### Demo mode (recorded video – quick reference)
 
 ```bash
 cd Code/Server
@@ -167,25 +310,6 @@ python main_predictive.py --mode demo --video /path/to/my_video.mp4
 # Disable display window (headless)
 python main_predictive.py --mode demo --no-display
 ```
-
-### Live mode (physical Freenove tank robot)
-
-```bash
-cd Code/Server
-python main_predictive.py --mode live --nav predictive
-```
-
-### Connect the client viewer
-
-```bash
-cd Code/Client
-python ai_viewer.py
-# Enter the Pi's IP address and click Connect
-```
-
-Use the **PREDICTIVE MODE / BASELINE MODE / STOP AI** buttons to switch modes
-at runtime.  The annotated video stream (detections + risk bar + action) is
-shown in the viewer window.
 
 ### Calibrate V-JEPA 2 anchors for your corridor
 
