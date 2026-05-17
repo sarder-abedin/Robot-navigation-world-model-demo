@@ -14,56 +14,68 @@ obstacle fills the camera frame, the system uses three complementary layers:
 
 | Layer | Model | Role | Where it runs |
 |---|---|---|---|
-| Instantaneous detection | **YOLOv8n** | What is blocking the path *right now*? | Server (Pi) |
-| Predictive world model | **V-JEPA 2** | What will the scene look like in ~0.5 s? | Server (Pi) |
-| Temporal motion pattern | **SSv2-style rules** | Is the obstacle approaching, crossing, or clearing? | Server (Pi) |
-| Motor execution | **Freenove tankMotor** | `setMotorModel(L, R)` | Server (Pi) |
-| Status display | Lightweight PyQt5 | Show AI state; switch modes | Client (laptop) |
+| Instantaneous detection | **YOLOv8n** | What is blocking the path *right now*? | **Server (Pi 5)** |
+| Predictive world model | **V-JEPA 2** | What will the scene look like in ~0.5 s? | **Client (laptop/PC)** |
+| Temporal motion pattern | **SSv2-style rules** | Is the obstacle approaching, crossing, or clearing? | **Client (laptop/PC)** |
+| Decision fusion | Weighted risk fuser | Combine all three signals → action | **Client (laptop/PC)** |
+| Motor execution | **Freenove tankMotor** | `setMotorModel(L, R)` | **Server (Pi 5)** |
 
-All heavy AI workload runs on the Raspberry Pi server.  The client is a
-thin viewer that connects via the existing Freenove TCP protocol.
+The Pi handles fast reactive tasks (YOLOv8, ultrasonic, motors).  The client
+PC handles the heavy transformer inference (V-JEPA 2) where GPU headroom is
+available and sends navigation commands back to the Pi.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Raspberry Pi  (Server)                                         │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  Freenove existing stack (UNCHANGED)                     │   │
-│  │  camera.py · car.py · motor.py · ultrasonic.py          │   │
-│  │  server.py · tcp_server.py · command.py · message.py    │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                          │ wraps / extends                       │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  AI Pipeline  (new files alongside existing)             │   │
-│  │                                                          │   │
-│  │  main_predictive.py  ← new entry point                  │   │
-│  │  ai_pipeline.py      ← orchestrates all AI threads      │   │
-│  │  camera_buffer.py    ← rolling JPEG→numpy frame buffer  │   │
-│  │  detector.py         ← YOLOv8 obstacle detection        │   │
-│  │  world_model.py      ← V-JEPA 2 future-latent predict   │   │
-│  │  temporal_action.py  ← SSv2-style motion patterns       │   │
-│  │  decision.py         ← weighted risk fusion + hysteresis│   │
-│  │  robot_control.py    ← wraps car.motor.setMotorModel()  │   │
-│  │  ai_logger.py        ← CSV + annotated JPEG archive     │   │
-│  │  visualization.py    ← OpenCV HUD overlay               │   │
-│  │  config.yaml         ← thresholds and settings          │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  TCP port 5003 (commands)    TCP port 8003 (video)             │
-└─────────────────────────────────────────────────────────────────┘
-            ▲                              ▲
-            │                              │
-┌───────────────────────────────────────────────────────────────┐
-│  Client (operator laptop / PC)                                │
-│                                                               │
-│  ai_viewer.py     ← NEW: lightweight AI status display       │
-│  Main.py          ← original Freenove client (unchanged)     │
-└───────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  Raspberry Pi 5  (Server)                                            │
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  Freenove existing stack (UNCHANGED)                        │    │
+│  │  camera.py · car.py · motor.py · ultrasonic.py             │    │
+│  │  server.py · tcp_server.py · command.py · message.py       │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                           │ wraps / extends                          │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  Pi-side AI (detection + hardware only)                     │    │
+│  │                                                             │    │
+│  │  main_predictive.py  ← entry point + TCP command handler   │    │
+│  │  ai_pipeline.py      ← YOLOv8 loop + CMD_DETECTION bcast  │    │
+│  │  camera_buffer.py    ← rolling JPEG→numpy frame buffer     │    │
+│  │  detector.py         ← YOLOv8 obstacle detection           │    │
+│  │  robot_control.py    ← wraps car.motor.setMotorModel()     │    │
+│  │  ai_logger.py        ← CSV + annotated JPEG archive        │    │
+│  │  visualization.py    ← OpenCV HUD (YOLO boxes + sonic)     │    │
+│  │  config.yaml         ← Pi-side thresholds and settings     │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│  TCP 5003 (CMD_DETECTION ──►  CMD_AIMOVE ◄── CMD_AIMODE/KILL)       │
+│  TCP 8003 (video stream JPEG ──►)                                   │
+└──────────────────────────────────────────────────────────────────────┘
+       CMD_DETECTION ──►                     ◄── CMD_AIMOVE
+       (YOLOv8 results, sonic)               (FORWARD/SLOW/STOP/REROUTE)
+┌──────────────────────────────────────────────────────────────────────┐
+│  Client  (operator laptop / PC with GPU)                             │
+│                                                                      │
+│  ai_viewer.py         ← full AI client (V-JEPA 2 + SSv2 + decision) │
+│  world_model.py       ← V-JEPA 2 future-latent prediction           │
+│  temporal_action.py   ← SSv2-style motion pattern recognition       │
+│  decision.py          ← weighted risk fusion + hysteresis           │
+│  config_client.yaml   ← client AI thresholds (device, weights …)   │
+│  Main.py              ← original Freenove client (unchanged)        │
+└──────────────────────────────────────────────────────────────────────┘
 ```
+
+### Why split this way?
+
+| Concern | Pi 5 | Laptop/PC |
+|---|---|---|
+| V-JEPA 2 (ViT-L, ~300 MB) | ❌ slow on CPU-only | ✅ GPU or fast CPU |
+| YOLOv8n (4 MB, 2 FPS budget) | ✅ sufficient | unnecessary round-trip |
+| Ultrasonic safety | ✅ must be local (hard real-time) | ❌ network latency risk |
+| Motor latency | ✅ <1 ms local | ~5–20 ms LAN (acceptable) |
 
 ---
 
@@ -323,16 +335,23 @@ python main_predictive.py --build-anchors
 
 ## Extended TCP protocol
 
-This project adds two new commands on top of the standard Freenove protocol:
+This project adds new commands on top of the standard Freenove protocol:
 
 | Command | Direction | Format | Meaning |
 |---|---|---|---|
 | `CMD_AIMODE` | client → server | `CMD_AIMODE#0` / `#1` / `#2` | Stop AI / Baseline / Predictive |
-| `CMD_AISTATUS` | server → client | `CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>` | Live AI state broadcast |
+| `CMD_AIMOVE` | client → server | `CMD_AIMOVE#FORWARD` / `#SLOW` / `#STOP` / `#REROUTE` | AI navigation action (from client V-JEPA2+SSv2+decision) |
+| `CMD_KILL` | client → server | `CMD_KILL#0` | Stop motors + shut down server process |
+| `CMD_DETECTION` | server → client | `CMD_DETECTION#<yolo_risk_pct>#<obs_in_center>#<area_frac_pct>#<centroid_x_pct>#<sonic_cm>` | Per-frame YOLOv8 detection results |
 
 All existing Freenove commands (`CMD_MOTOR`, `CMD_SERVO`, `CMD_LED`, etc.)
 continue to work as before.  Manual `CMD_MOTOR` commands are honoured when
 `CMD_AIMODE#0` (stop AI) is active.
+
+The `CMD_DETECTION` → `CMD_AIMOVE` round-trip is the new AI control loop:
+the Pi detects obstacles and sends results to the client; the client runs
+V-JEPA 2 + SSv2 + decision fusion and replies with a navigation action that
+the Pi executes on its motors.
 
 ---
 

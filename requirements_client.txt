@@ -1,5 +1,12 @@
 # ── Client (runs on the operator's laptop / PC) ───────────────────────────────
+# V-JEPA 2 and SSv2 inference now runs here; install torch before this file.
+# CPU-only:  pip install torch --index-url https://download.pytorch.org/whl/cpu
+# CUDA 12.x: pip install torch --index-url https://download.pytorch.org/whl/cu121
+
 PyQt5>=5.15.0
 opencv-python>=4.8.0
 numpy>=1.24.0
 Pillow>=10.0.0
+pyyaml>=6.0.0
+torch>=2.0.0
+transformers>=4.40.0

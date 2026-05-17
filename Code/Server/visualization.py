@@ -73,11 +73,16 @@ class Visualizer:
         self,
         frame_bgr: np.ndarray,
         detector_result,
-        decision_result,
-        temporal_result,
         ultrasonic_cm: float = -1.0,
+        client_action: str = "---",
     ) -> np.ndarray:
-        """Return an annotated BGR copy of frame_bgr."""
+        """
+        Annotate a BGR frame with Pi-side data.
+
+        V-JEPA 2 label and temporal pattern are computed on the client PC and
+        displayed there; the server video stream shows only YOLOv8 boxes, the
+        YOLO risk bar, the last action received from the client, and sonic data.
+        """
         vis = frame_bgr.copy()
         h, w = vis.shape[:2]
 
@@ -91,15 +96,11 @@ class Visualizer:
             self._draw_boxes(vis, detector_result)
 
         if self._overlay_risk:
-            self._draw_risk_bar(vis, decision_result.risk_score, w, h)
+            self._draw_risk_bar(vis, detector_result.raw_risk, w, h)
 
         if self._overlay_action:
-            self._draw_action(vis, decision_result.action, w, h)
+            self._draw_action(vis, client_action, w, h)
 
-        if self._overlay_wm:
-            self._draw_wm_label(vis, decision_result.world_model_label)
-
-        self._draw_temporal(vis, temporal_result.pattern)
         self._draw_sonic(vis, ultrasonic_cm, w)
         self._draw_mode_badge(vis, w)
         self._draw_fps(vis, fps)

@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Predictive Navigation – Client-side AI Configuration
+# Edit this file on the operator laptop; no changes needed on the Pi.
+# ─────────────────────────────────────────────────────────────────────────────
+
+navigation_mode: predictive     # "predictive" | "baseline"
+
+# ── Camera clip (must match server config camera.clip_length) ──────────────────
+camera:
+  clip_length: 16               # number of frames fed to V-JEPA 2
+
+# ── V-JEPA 2 world model (runs on THIS machine) ───────────────────────────────
+world_model:
+  model_id: "facebook/vjepa2-vitl-fpc64-256"
+  input_size: 224
+  prediction_horizon: 4         # future frames to predict
+  risk_similarity_threshold: 0.55
+  # Use "cuda" if your laptop/PC has a NVIDIA GPU, "mps" for Apple Silicon,
+  # "cpu" as fallback (slower but functional; stub encoder auto-selected)
+  device: "cpu"
+  run_every_n_frames: 8         # inference cadence (every Nth AI loop tick)
+
+# ── Temporal pattern recognition ───────────────────────────────────────────────
+temporal_action:
+  window_size: 10
+  approach_ratio: 0.6
+  clear_ratio: 0.7
+
+# ── Decision fusion ────────────────────────────────────────────────────────────
+decision:
+  weights:
+    detector: 0.35              # YOLOv8 risk (computed on Pi, sent via CMD_DETECTION)
+    world_model: 0.45           # V-JEPA 2 risk (computed here)
+    temporal: 0.20              # SSv2-style temporal risk (computed here)
+  low_risk_max: 0.30            # below → FORWARD
+  medium_risk_max: 0.60         # below → SLOW, above → STOP / REROUTE
+  hysteresis: 0.05              # minimum drop needed to lower action level
+  stop_hold_seconds: 1.5        # minimum time to hold STOP before resuming
+
+# ── Ultrasonic safety (mirrored from server config) ───────────────────────────
+robot:
+  ultrasonic_stop_cm: 15.0     # client also treats sonic < this as risk=1.0
