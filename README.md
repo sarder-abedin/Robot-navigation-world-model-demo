@@ -144,10 +144,10 @@ available and sends navigation commands back to the Pi.
 
 | Concern | Pi 5 | Laptop / PC |
 |---|---|---|
-| V-JEPA 2 (ViT-L, ~300 MB) | ❌ slow on CPU-only | ✅ GPU or fast CPU |
-| YOLOv8n (4 MB, runs every 2 frames) | ✅ sufficient | unnecessary round-trip |
-| Ultrasonic safety stop | ✅ must be local (hard real-time) | ❌ network latency risk |
-| Motor command latency | ✅ <1 ms local | ~5–20 ms LAN (acceptable for navigation) |
+| V-JEPA 2 (ViT-L, ~300 MB) | slow on CPU-only | GPU or fast CPU |
+| YOLOv8n (4 MB, runs every 2 frames) | sufficient | unnecessary round-trip |
+| Ultrasonic safety stop | must be local (hard real-time) | network latency risk |
+| Motor command latency | <1 ms local | ~5–20 ms LAN (acceptable for navigation) |
 
 ---
 
