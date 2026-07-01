@@ -98,9 +98,10 @@ class PredictiveServer:
     """
 
     # New commands added by this project
-    CMD_AIMODE = "CMD_AIMODE"    # #0 stop AI  #1 baseline  #2 predictive
+    CMD_AIMODE   = "CMD_AIMODE"    # #0 stop AI  #1 baseline  #2 predictive
     CMD_AISTATUS = "CMD_AISTATUS"  # sent TO client: action#risk#wm#pattern#sonic
-    CMD_KILL = "CMD_KILL"        # #0 full server shutdown
+    CMD_KILL     = "CMD_KILL"      # #0 full server shutdown
+    CMD_AIMOVE   = "CMD_AIMOVE"    # FORWARD/SLOW/STOP/REROUTE — from client PC AI
 
     def __init__(self, cfg: dict, nav_mode: str):
         self._cfg = cfg
@@ -238,6 +239,13 @@ class PredictiveServer:
                 idx = self._parser.intParameter[0]
                 angle = self._parser.intParameter[1]
                 self._car.servo.setServoAngle(idx, angle)
+
+        elif cmd == self.CMD_AIMOVE:
+            # Navigation command from client PC AI (V-JEPA2+SSv2+decision on client)
+            parts = msg.split("#")
+            action_str = parts[1].strip() if len(parts) > 1 else "STOP"
+            if self._ai_active:
+                self._ai.apply_client_action(action_str)
 
         elif cmd == self.CMD_KILL:
             # Client emergency kill: stop motors and shut down the server process

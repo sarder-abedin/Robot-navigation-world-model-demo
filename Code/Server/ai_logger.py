@@ -64,6 +64,7 @@ class NavigationLogger:
         detector_result,
         ultrasonic_cm: float = -1.0,
     ) -> None:
+        """Legacy full-pipeline logging (kept for backward compat with tests)."""
         ts = time.time()
         self._frame_idx += 1
 
@@ -84,6 +85,48 @@ class NavigationLogger:
                 "closest_area":    f"{detector_result.closest_area:.4f}",
                 "ultrasonic_cm":   f"{ultrasonic_cm:.1f}",
                 "explanation":     decision_result.explanation,
+            })
+            if self._frame_idx % 20 == 0:
+                self._csv_file.flush()
+
+        if self._save_frames and (self._frame_idx % self._frame_interval == 0):
+            fname = self._frames_dir / f"frame_{self._frame_idx:06d}.jpg"
+            cv2.imwrite(str(fname), annotated_frame)
+
+    def log_detection_frame(
+        self,
+        annotated_frame: np.ndarray,
+        detector_result,
+        ultrasonic_cm: float = -1.0,
+        client_action: str = "UNKNOWN",
+    ) -> None:
+        """
+        Pi-side detection logging (post-refactor).
+
+        Records YOLOv8 detection data and the last action received from the
+        client PC.  V-JEPA 2 / temporal / decision columns are omitted because
+        those computations now run on the client.
+        """
+        ts = time.time()
+        self._frame_idx += 1
+
+        if self._csv_writer:
+            self._csv_writer.writerow({
+                "timestamp":       f"{ts:.4f}",
+                "frame_idx":       self._frame_idx,
+                "nav_mode":        self._nav_mode,
+                "action":          client_action,
+                "risk_score":      f"{detector_result.raw_risk:.4f}",
+                "detector_risk":   f"{detector_result.raw_risk:.4f}",
+                "world_model_risk":"client",
+                "temporal_risk":   "client",
+                "wm_label":        "client",
+                "temporal_pattern":"client",
+                "obstacles":       len(detector_result.boxes),
+                "in_center":       int(detector_result.obstacle_in_center),
+                "closest_area":    f"{detector_result.closest_area:.4f}",
+                "ultrasonic_cm":   f"{ultrasonic_cm:.1f}",
+                "explanation":     "pi-side detection only",
             })
             if self._frame_idx % 20 == 0:
                 self._csv_file.flush()
