@@ -79,6 +79,7 @@ class PCNavigationServer:
 
     CMD_AIMODE = "CMD_AIMODE"
     CMD_KILL   = "CMD_KILL"
+    CMD_MOTOR  = "CMD_MOTOR"
 
     def __init__(self, cfg: dict, nav_mode: str):
         self._cfg = cfg
@@ -216,6 +217,15 @@ class PCNavigationServer:
             # Forward mode change to robot
             if self._robot_conn:
                 self._robot_conn.send_aimode(val)
+
+        elif cmd == self.CMD_MOTOR:
+            # Manual motor command from operator UI – relay directly to robot
+            if self._robot_conn and len(self._parser.intParameter) >= 2:
+                L, R = self._parser.intParameter[0], self._parser.intParameter[1]
+                self._robot_conn.send_motor_command(L, R)
+                logger.debug("Manual CMD_MOTOR relayed: L=%d R=%d", L, R)
+            elif self._robot_conn:
+                logger.warning("CMD_MOTOR with unexpected format: %s", msg)
 
         elif cmd == self.CMD_KILL:
             logger.warning("CMD_KILL from UI viewer – shutting down")

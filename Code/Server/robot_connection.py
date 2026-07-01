@@ -3,15 +3,20 @@ robot_connection.py – PC-side TCP server that accepts the robot's connection.
 
 The Raspberry Pi connects outbound to the PC on:
   - port 5004 (robot cmd): bidirectional command channel
-      Receives: CMD_SONIC#<cm>\r\n   (ultrasonic readings)
-      Sends:    CMD_MOTOR#<L>#<R>\r\n, CMD_STOP\r\n, CMD_AIMODE#<n>\r\n
+      Receives: CMD_DETECTION#<risk_pct>#<in_center>#<area_pct>#<cx_pct>#<sonic_cm>
+                CMD_SONIC#<cm>  (legacy; still accepted)
+      Sends:    CMD_AIMOVE#<FORWARD|SLOW|STOP|REROUTE>
+                CMD_MOTOR#<L>#<R>  (manual mode)
+                CMD_STOP, CMD_AIMODE#<n>, CMD_KILL
   - port 8004 (robot video): one-way camera stream
       Receives: 4-byte LE uint32 frame length + JPEG bytes
 
 Once the robot connects this class:
   • Decodes each JPEG frame and pushes it into the shared CameraBuffer
-  • Stores the latest ultrasonic reading (polled by AIPipeline)
-  • Provides send_motor_command() for the AI decision loop
+  • Stores the latest CMD_DETECTION result (polled by AIPipeline)
+  • Provides get_latest_detection() returning a DetectionResult for the pipeline
+  • Provides send_aimove() for the AI decision loop
+  • Provides send_motor_command() for manual UI control
 """
 from __future__ import annotations
 
@@ -44,6 +49,16 @@ class RobotConnectionServer:
 
         self._latest_sonic_cm: float = -1.0
         self._sonic_lock = threading.Lock()
+
+        # Detection result received from Pi via CMD_DETECTION
+        self._latest_detection: dict = {
+            "yolo_risk_pct": 0,
+            "obs_in_center": False,
+            "area_frac_pct": 0,
+            "centroid_x_pct": 50,
+            "n_obstacles": 0,
+        }
+        self._detection_lock = threading.Lock()
 
         self._extra_cmd_queue: queue.Queue[str] = queue.Queue()
 
@@ -100,16 +115,72 @@ class RobotConnectionServer:
         """Forward a CMD_AIMODE change to the robot."""
         return self._send_cmd(f"CMD_AIMODE#{mode}\r\n")
 
+    def send_aimove(self, action: str) -> bool:
+        """
+        Send an AI navigation action to the robot.
+
+        The Pi maps the action string to motor PWM calls locally:
+          FORWARD  → full-speed forward
+          SLOW     → slow forward
+          STOP     → halt
+          REROUTE  → back-up + spin maneuver
+        """
+        return self._send_cmd(f"CMD_AIMOVE#{action}\r\n")
+
     def send_kill(self) -> bool:
         """Forward CMD_KILL to the robot."""
         return self._send_cmd("CMD_KILL\r\n")
 
-    # ── Sensor API ────────────────────────────────────────────────────────────
+    # ── Sensor / Detection API ────────────────────────────────────────────────
 
     def get_sonic_cm(self) -> float:
         """Return the latest ultrasonic distance received from the robot."""
         with self._sonic_lock:
             return self._latest_sonic_cm
+
+    def get_latest_detection(self):
+        """
+        Return the most recent CMD_DETECTION result as a DetectionResult
+        compatible with the server-side AI pipeline.
+
+        Reconstructs a synthetic bounding box from the aggregated area/centroid
+        fields so that the temporal action recogniser has a box to work with.
+        """
+        import math
+        from detector import DetectionResult
+
+        with self._detection_lock:
+            d = dict(self._latest_detection)
+
+        risk = d["yolo_risk_pct"] / 100.0
+        area_frac = d["area_frac_pct"] / 100.0
+        cx_norm = d["centroid_x_pct"] / 100.0
+        obs_in_center = d["obs_in_center"]
+        n = d["n_obstacles"]
+
+        boxes = []
+        if n > 0 and area_frac > 0:
+            frame_area = 400 * 300
+            side = math.sqrt(area_frac * frame_area)
+            cx = int(cx_norm * 400)
+            cy = 150
+            x1 = max(0, int(cx - side / 2))
+            y1 = max(0, int(cy - side / 2))
+            x2 = min(400, int(cx + side / 2))
+            y2 = min(300, int(cy + side / 2))
+            if x2 > x1 and y2 > y1:
+                boxes = [(x1, y1, x2, y2)]
+
+        return DetectionResult(
+            boxes=boxes,
+            labels=["obstacle"] * len(boxes),
+            confidences=[risk] * len(boxes),
+            obstacle_in_center=obs_in_center,
+            closest_area=area_frac,
+            raw_risk=risk,
+            frame_width=400,
+            frame_height=300,
+        )
 
     # ── State ─────────────────────────────────────────────────────────────────
 
@@ -176,7 +247,30 @@ class RobotConnectionServer:
                     line = line.strip()
                     if not line:
                         continue
-                    if line.startswith("CMD_SONIC"):
+                    if line.startswith("CMD_DETECTION"):
+                        # CMD_DETECTION#<risk_pct>#<in_center>#<area_pct>#<cx_pct>#<sonic_cm>
+                        parts = line.split("#")
+                        if len(parts) >= 6:
+                            try:
+                                risk_pct = int(parts[1])
+                                in_center = parts[2].strip() == "1"
+                                area_pct = int(parts[3])
+                                cx_pct = int(parts[4])
+                                sonic_cm = float(parts[5])
+                                with self._detection_lock:
+                                    self._latest_detection = {
+                                        "yolo_risk_pct": risk_pct,
+                                        "obs_in_center": in_center,
+                                        "area_frac_pct": area_pct,
+                                        "centroid_x_pct": cx_pct,
+                                        "n_obstacles": 1 if risk_pct > 0 else 0,
+                                    }
+                                with self._sonic_lock:
+                                    self._latest_sonic_cm = sonic_cm
+                            except (ValueError, IndexError):
+                                pass
+                    elif line.startswith("CMD_SONIC"):
+                        # Legacy sonic-only message
                         parts = line.split("#")
                         if len(parts) >= 2:
                             try:

@@ -6,33 +6,38 @@ What this viewer does
 1. Connects to the PC navigation server (CMD port 5003, Video port 8003).
 2. Shows live AI state: current action, fused risk bar, V-JEPA 2 prediction
    label, motion pattern, and ultrasonic distance.
-3. Lets the operator switch navigation modes at runtime.
-4. Displays the annotated video stream from the server (Video port 8003).
-5. Provides an EMERGENCY STOP kill switch – button AND keyboard shortcuts –
-   that immediately halts the robot motors and disables AI on the server.
+3. Lets the operator switch between AUTO (AI drives) and MANUAL (operator drives).
+4. In MANUAL mode, provides on-screen drive buttons and arrow-key control.
+5. Displays the annotated video stream from the server (Video port 8003).
+6. Provides an EMERGENCY STOP kill switch – button AND keyboard shortcuts.
 
 Architecture
 ────────────
-  PC (server)   → runs all AI (YOLOv8 + V-JEPA 2 + SSv2 + decision)
-                  listens on 5003 (cmd) and 8003 (video)
-  Pi (robot)    → connects to PC on 5004/8004, streams camera, drives motors
-  This viewer   → connects to PC on 5003/8003, shows AI state + video
+  Pi (client)   → runs YOLOv8n + camera + motors; sends CMD_DETECTION
+  PC (server)   → runs V-JEPA 2 + SSv2 + decision; listens on 5003/8003
+  This viewer   → connects to PC on 5003/8003; shows AI state + video
+
+Control modes
+─────────────
+  AUTO MODE    → PC decision fuser drives the robot via CMD_AIMOVE
+  MANUAL MODE  → Operator drives via arrow keys / buttons (CMD_MOTOR relayed by PC)
+
+TCP protocol (send)
+───────────────────
+  CMD_AIMODE#0          → stop AI, halt motors (STOP AI / MANUAL transition)
+  CMD_AIMODE#1          → switch to baseline reactive mode
+  CMD_AIMODE#2          → switch to predictive mode
+  CMD_MOTOR#<L>#<R>     → manual motor command (−4095 … +4095)
+  CMD_KILL#0            → stop AI + robot, shut down server process
+
+TCP protocol (receive)
+──────────────────────
+  CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>
 
 Kill switch controls
 ────────────────────
   Space / Escape           → EMERGENCY STOP  (motors stop, AI disabled)
   Ctrl+Q or the button     → SHUTDOWN SERVER (stops the entire demo process)
-  "STOP AI / MANUAL" btn   → same as Space (motor stop, server stays alive)
-
-TCP protocol
-────────────
-  SEND:
-    CMD_AIMODE#0          → stop AI, halt motors (keep server alive)
-    CMD_AIMODE#1          → switch to baseline reactive mode
-    CMD_AIMODE#2          → switch to predictive mode
-    CMD_KILL#0            → stop AI + robot, shut down server process
-  RECV:
-    CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>
 """
 
 from __future__ import annotations
@@ -51,7 +56,7 @@ from PyQt5.QtGui import QColor, QFont, QImage, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QProgressBar, QPushButton,
-    QShortcut, QVBoxLayout, QWidget,
+    QRadioButton, QShortcut, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 # ── Colour maps ────────────────────────────────────────────────────────────────
@@ -79,8 +84,21 @@ _SHUTDOWN_READY = ("background:#4a0000; color:#ffbbbb; font-size:11px; "
 _SHUTDOWN_SENT  = ("background:#220000; color:#ff6666; font-size:11px; "
                    "font-weight:bold; padding:6px; border-radius:3px;")
 
+_AUTO_BTN_ACTIVE   = "background:#0a5a8a; color:white; font-weight:bold; padding:6px;"
+_AUTO_BTN_INACTIVE = "background:#2a2a2a; color:#aaa; font-weight:bold; padding:6px;"
+_MANUAL_BTN_ACTIVE   = "background:#5a3a00; color:white; font-weight:bold; padding:6px;"
+_MANUAL_BTN_INACTIVE = "background:#2a2a2a; color:#aaa; font-weight:bold; padding:6px;"
+
+_DRIVE_BTN = ("background:#333; color:white; font-size:16px; "
+              "font-weight:bold; padding:10px; border-radius:4px; min-width:60px;")
+_DRIVE_STOP_BTN = ("background:#550000; color:white; font-size:14px; "
+                   "font-weight:bold; padding:10px; border-radius:4px; min-width:60px;")
+
 CMD_PORT   = 5003
 VIDEO_PORT = 8003
+
+SPEED_FULL = 1500
+SPEED_SLOW = 600
 
 
 class AIViewer(QMainWindow):
@@ -90,13 +108,17 @@ class AIViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Freenove Predictive Navigation – AI Viewer")
-        self.resize(700, 640)
+        self.resize(720, 800)
 
         self._cmd_sock: socket.socket | None = None
         self._video_sock: socket.socket | None = None
         self._connected = False
         self._recv_thread: threading.Thread | None = None
         self._video_thread: threading.Thread | None = None
+
+        self._control_mode: str = "AUTO"   # "AUTO" | "MANUAL"
+        self._manual_speed: int = SPEED_FULL
+        self._keys_held: set[int] = set()  # avoid repeated motor sends on auto-repeat
 
         self._build_ui()
         self._register_shortcuts()
@@ -166,15 +188,15 @@ class AIViewer(QMainWindow):
 
         root.addWidget(state_box)
 
-        # ── Mode control row ──────────────────────────────────────────────────
-        mode_box = QGroupBox("Navigation Mode")
+        # ── Navigation Mode ───────────────────────────────────────────────────
+        mode_box = QGroupBox("Navigation Mode  (AI mode only)")
         mode_row = QHBoxLayout(mode_box)
 
         self._btn_predictive = QPushButton("PREDICTIVE")
         self._btn_predictive.setStyleSheet(
             "background:#1a5f1a; color:white; font-weight:bold; padding:6px;"
         )
-        self._btn_predictive.setToolTip("Switch to predictive mode (V-JEPA 2 active on PC)")
+        self._btn_predictive.setToolTip("Switch to predictive mode (V-JEPA 2 active)")
         self._btn_predictive.clicked.connect(lambda: self._send_ai_mode(2))
         mode_row.addWidget(self._btn_predictive)
 
@@ -186,15 +208,70 @@ class AIViewer(QMainWindow):
         self._btn_baseline.clicked.connect(lambda: self._send_ai_mode(1))
         mode_row.addWidget(self._btn_baseline)
 
-        self._btn_stop_ai = QPushButton("STOP AI / MANUAL")
-        self._btn_stop_ai.setStyleSheet(
-            "background:#7a0000; color:white; font-weight:bold; padding:6px;"
-        )
-        self._btn_stop_ai.setToolTip("Disable AI; motors stop. Manual CMD_MOTOR commands are accepted.")
-        self._btn_stop_ai.clicked.connect(lambda: self._send_ai_mode(0))
-        mode_row.addWidget(self._btn_stop_ai)
-
         root.addWidget(mode_box)
+
+        # ── Drive Control ─────────────────────────────────────────────────────
+        drive_box = QGroupBox("Drive Control")
+        drive_layout = QVBoxLayout(drive_box)
+        drive_layout.setSpacing(4)
+
+        # AUTO / MANUAL toggle row
+        toggle_row = QHBoxLayout()
+        self._btn_auto = QPushButton("AUTO MODE  (AI drives)")
+        self._btn_auto.setStyleSheet(_AUTO_BTN_ACTIVE)
+        self._btn_auto.setToolTip("Let the AI decision fuser control the robot (Ctrl+A)")
+        self._btn_auto.clicked.connect(self._switch_to_auto)
+        toggle_row.addWidget(self._btn_auto)
+
+        self._btn_manual = QPushButton("MANUAL MODE  (you drive)")
+        self._btn_manual.setStyleSheet(_MANUAL_BTN_INACTIVE)
+        self._btn_manual.setToolTip("Take direct control via buttons or arrow keys (Ctrl+M)")
+        self._btn_manual.clicked.connect(self._switch_to_manual)
+        toggle_row.addWidget(self._btn_manual)
+        drive_layout.addLayout(toggle_row)
+
+        # Drive button grid (shown only in MANUAL mode)
+        self._drive_widget = QWidget()
+        dg = QtWidgets.QGridLayout(self._drive_widget)
+        dg.setSpacing(4)
+
+        self._btn_fwd  = self._make_drive_btn("▲", lambda: self._drive_press("FWD"))
+        self._btn_back = self._make_drive_btn("▼", lambda: self._drive_press("BACK"))
+        self._btn_left = self._make_drive_btn("◄", lambda: self._drive_press("LEFT"))
+        self._btn_right = self._make_drive_btn("►", lambda: self._drive_press("RIGHT"))
+        self._btn_drive_stop = QPushButton("■ STOP")
+        self._btn_drive_stop.setStyleSheet(_DRIVE_STOP_BTN)
+        self._btn_drive_stop.clicked.connect(self._drive_stop)
+
+        dg.addWidget(self._btn_fwd,        0, 1)
+        dg.addWidget(self._btn_left,       1, 0)
+        dg.addWidget(self._btn_drive_stop, 1, 1)
+        dg.addWidget(self._btn_right,      1, 2)
+        dg.addWidget(self._btn_back,       2, 1)
+
+        # Speed selector
+        speed_row = QHBoxLayout()
+        speed_row.addWidget(QLabel("Speed:"))
+        self._radio_full = QRadioButton("Full")
+        self._radio_full.setChecked(True)
+        self._radio_full.toggled.connect(self._update_speed)
+        self._radio_slow = QRadioButton("Slow")
+        speed_row.addWidget(self._radio_full)
+        speed_row.addWidget(self._radio_slow)
+        speed_row.addStretch()
+        spd_widget = QWidget()
+        spd_widget.setLayout(speed_row)
+        dg.addWidget(spd_widget, 3, 0, 1, 3)
+
+        hint = QLabel("Keyboard: Arrow keys drive  |  ↑↓←→ hold to move  |  release to stop")
+        hint.setStyleSheet("color:#888; font-size:10px;")
+        hint.setAlignment(Qt.AlignCenter)
+        dg.addWidget(hint, 4, 0, 1, 3)
+
+        drive_layout.addWidget(self._drive_widget)
+        self._drive_widget.setVisible(False)  # hidden in AUTO mode
+
+        root.addWidget(drive_box)
 
         # ── Kill switch panel ─────────────────────────────────────────────────
         kill_box = QGroupBox("Kill Switch")
@@ -206,35 +283,32 @@ class AIViewer(QMainWindow):
         kill_layout = QVBoxLayout(kill_box)
         kill_layout.setSpacing(4)
 
-        # Primary kill switch: emergency stop (motor halt, AI disabled)
         self._btn_kill = QPushButton("EMERGENCY STOP   [Space / Esc]")
         self._btn_kill.setStyleSheet(_KILL_READY)
         self._btn_kill.setToolTip(
             "Immediately stops all motors and disables AI navigation.\n"
-            "The server process keeps running; use SHUTDOWN to exit it fully.\n"
+            "Server stays running; resume with PREDICTIVE or BASELINE.\n"
             "Keyboard: Space or Escape"
         )
         self._btn_kill.clicked.connect(self._emergency_stop)
         kill_layout.addWidget(self._btn_kill)
 
-        # Secondary: full server shutdown
         self._btn_shutdown = QPushButton("SHUTDOWN SERVER   [Ctrl+Q]")
         self._btn_shutdown.setStyleSheet(_SHUTDOWN_READY)
         self._btn_shutdown.setToolTip(
-            "Stops motors AND shuts down the server process on the Raspberry Pi.\n"
+            "Stops motors AND shuts down the server process.\n"
             "Use this to end the demo completely.\n"
             "Keyboard: Ctrl+Q"
         )
         self._btn_shutdown.clicked.connect(self._shutdown_server)
         kill_layout.addWidget(self._btn_shutdown)
 
-        # Hint label
-        hint = QLabel(
+        hint2 = QLabel(
             "Space / Esc = emergency stop motors   |   Ctrl+Q = shutdown server"
         )
-        hint.setStyleSheet("color:#884444; font-size:10px;")
-        hint.setAlignment(Qt.AlignCenter)
-        kill_layout.addWidget(hint)
+        hint2.setStyleSheet("color:#884444; font-size:10px;")
+        hint2.setAlignment(Qt.AlignCenter)
+        kill_layout.addWidget(hint2)
 
         root.addWidget(kill_box)
 
@@ -257,56 +331,128 @@ class AIViewer(QMainWindow):
         lbl.setStyleSheet("color:#aaa;")
         return lbl
 
+    def _make_drive_btn(self, symbol: str, slot) -> QPushButton:
+        btn = QPushButton(symbol)
+        btn.setStyleSheet(_DRIVE_BTN)
+        btn.pressed.connect(slot)
+        btn.released.connect(self._drive_stop)
+        return btn
+
     # ── Keyboard shortcuts ─────────────────────────────────────────────────────
 
     def _register_shortcuts(self) -> None:
-        # Space / Escape → emergency stop
         QShortcut(QKeySequence(Qt.Key_Space),  self, self._emergency_stop)
         QShortcut(QKeySequence(Qt.Key_Escape), self, self._emergency_stop)
-        # Ctrl+Q → shutdown server
         QShortcut(QKeySequence("Ctrl+Q"), self, self._shutdown_server)
-        # Mode shortcuts
         QShortcut(QKeySequence("Ctrl+P"), self, lambda: self._send_ai_mode(2))
         QShortcut(QKeySequence("Ctrl+B"), self, lambda: self._send_ai_mode(1))
+        QShortcut(QKeySequence("Ctrl+A"), self, self._switch_to_auto)
+        QShortcut(QKeySequence("Ctrl+M"), self, self._switch_to_manual)
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if self._control_mode != "MANUAL" or event.isAutoRepeat():
+            return super().keyPressEvent(event)
+        key = event.key()
+        if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+            if key not in self._keys_held:
+                self._keys_held.add(key)
+                self._apply_key_drive()
+        else:
+            super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event: QtGui.QKeyEvent) -> None:
+        if self._control_mode != "MANUAL" or event.isAutoRepeat():
+            return super().keyReleaseEvent(event)
+        key = event.key()
+        if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+            self._keys_held.discard(key)
+            if not self._keys_held:
+                self._send_motor(0, 0)
+            else:
+                self._apply_key_drive()
+        else:
+            super().keyReleaseEvent(event)
+
+    def _apply_key_drive(self) -> None:
+        """Send motor command based on the set of currently-held arrow keys."""
+        s = self._manual_speed
+        if Qt.Key_Up in self._keys_held and Qt.Key_Left in self._keys_held:
+            self._send_motor(s // 2, s)
+        elif Qt.Key_Up in self._keys_held and Qt.Key_Right in self._keys_held:
+            self._send_motor(s, s // 2)
+        elif Qt.Key_Down in self._keys_held and Qt.Key_Left in self._keys_held:
+            self._send_motor(-s, -s // 2)
+        elif Qt.Key_Down in self._keys_held and Qt.Key_Right in self._keys_held:
+            self._send_motor(-s // 2, -s)
+        elif Qt.Key_Up in self._keys_held:
+            self._send_motor(s, s)
+        elif Qt.Key_Down in self._keys_held:
+            self._send_motor(-s, -s)
+        elif Qt.Key_Left in self._keys_held:
+            self._send_motor(-s, s)
+        elif Qt.Key_Right in self._keys_held:
+            self._send_motor(s, -s)
+
+    # ── Drive button actions ───────────────────────────────────────────────────
+
+    def _drive_press(self, direction: str) -> None:
+        s = self._manual_speed
+        mapping = {
+            "FWD":   (s, s),
+            "BACK":  (-s, -s),
+            "LEFT":  (-s, s),
+            "RIGHT": (s, -s),
+        }
+        L, R = mapping.get(direction, (0, 0))
+        self._send_motor(L, R)
+
+    def _drive_stop(self) -> None:
+        if not self._keys_held:  # don't interrupt keyboard driving
+            self._send_motor(0, 0)
+
+    def _update_speed(self) -> None:
+        self._manual_speed = SPEED_FULL if self._radio_full.isChecked() else SPEED_SLOW
+
+    # ── Drive control mode ─────────────────────────────────────────────────────
+
+    def _switch_to_auto(self) -> None:
+        self._control_mode = "AUTO"
+        self._keys_held.clear()
+        self._drive_widget.setVisible(False)
+        self._btn_auto.setStyleSheet(_AUTO_BTN_ACTIVE)
+        self._btn_manual.setStyleSheet(_MANUAL_BTN_INACTIVE)
+        # Resume predictive AI
+        self._send_ai_mode(2)
+        self._status_bar.setText("AUTO MODE – AI decision fuser is driving")
+
+    def _switch_to_manual(self) -> None:
+        self._control_mode = "MANUAL"
+        self._drive_widget.setVisible(True)
+        self._btn_auto.setStyleSheet(_AUTO_BTN_INACTIVE)
+        self._btn_manual.setStyleSheet(_MANUAL_BTN_ACTIVE)
+        # Disable AI motors; PC relays manual CMD_MOTOR from now on
+        self._send_ai_mode(0)
+        self._send_motor(0, 0)
+        self._status_bar.setText(
+            "MANUAL MODE – arrow keys / buttons drive  |  Ctrl+A = return to AUTO"
+        )
 
     # ── Kill switch actions ────────────────────────────────────────────────────
 
     def _emergency_stop(self) -> None:
-        """
-        Send CMD_AIMODE#0 to the server.
-
-        Effect on server:
-          - AI pipeline motor commands are blocked immediately.
-          - car.motor.setMotorModel(0, 0) is called.
-          - Server stays alive; the demo can be resumed with PREDICTIVE or
-            BASELINE buttons without restarting the server.
-        """
         self._send_ai_mode(0)
+        self._send_motor(0, 0)
         self._btn_kill.setText("STOPPED  ✓  – click PREDICTIVE / BASELINE to resume")
         self._btn_kill.setStyleSheet(_KILL_SENT)
         self._status_bar.setText(
-            "EMERGENCY STOP sent – robot motors halted, AI disabled. "
+            "EMERGENCY STOP sent – motors halted, AI disabled. "
             "Click PREDICTIVE or BASELINE to resume."
         )
-        # Reset button appearance after 4 seconds
         QTimer.singleShot(4000, self._reset_kill_button)
 
     def _shutdown_server(self) -> None:
-        """
-        Send CMD_KILL#0 to the server.
-
-        Effect on server:
-          - Motors are halted with safe_stop().
-          - AI pipeline thread is stopped.
-          - TCP server shuts down.
-          - The server process exits cleanly.
-
-        After this the client will lose its connection.
-        """
         if not (self._cmd_sock and self._connected):
-            self._status_bar.setText(
-                "Not connected – cannot send shutdown command."
-            )
+            self._status_bar.setText("Not connected – cannot send shutdown command.")
             return
         try:
             self._cmd_sock.sendall(b"CMD_KILL#0\n")
@@ -342,14 +488,14 @@ class AIViewer(QMainWindow):
             self._btn_connect.setText("Disconnect")
             self._status_bar.setText(
                 f"Connected to {ip}:{CMD_PORT}  |  "
-                "Space/Esc = stop   Ctrl+Q = shutdown"
+                "Space/Esc = stop   Ctrl+Q = shutdown   Ctrl+M = manual"
             )
             self._recv_thread = threading.Thread(
                 target=self._recv_loop, daemon=True, name="CmdRecv"
             )
             self._recv_thread.start()
 
-            # Try video connection (non-fatal if unavailable)
+            # Video connection (non-fatal if unavailable)
             self._video_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
                 self._video_sock.settimeout(3.0)
@@ -369,6 +515,7 @@ class AIViewer(QMainWindow):
 
     def _disconnect(self) -> None:
         self._connected = False
+        self._keys_held.clear()
         for s in (self._cmd_sock, self._video_sock):
             try:
                 if s:
@@ -383,7 +530,6 @@ class AIViewer(QMainWindow):
     # ── Network threads ────────────────────────────────────────────────────────
 
     def _recv_loop(self) -> None:
-        """Read CMD_AISTATUS messages from the server command socket."""
         buf = ""
         while self._connected and self._cmd_sock:
             try:
@@ -401,7 +547,6 @@ class AIViewer(QMainWindow):
         self._disconnect()
 
     def _video_loop(self) -> None:
-        """Receive length-prefixed JPEG frames from the server video socket."""
         while self._connected and self._video_sock:
             try:
                 header = self._recv_exact(4)
@@ -445,11 +590,9 @@ class AIViewer(QMainWindow):
             return
         _, action, risk_pct, wm_label, pattern, sonic = parts[:6]
 
-        # Action label
         self._action_label.setText(action)
         self._action_label.setStyleSheet(ACTION_CSS.get(action, ACTION_CSS["---"]))
 
-        # Risk progress bar (colour: green→yellow→red)
         try:
             pct = int(risk_pct)
             self._risk_bar.setValue(pct)
@@ -461,14 +604,11 @@ class AIViewer(QMainWindow):
         except ValueError:
             pass
 
-        # V-JEPA 2 world model label
         self._wm_val.setText(wm_label)
         self._wm_val.setStyleSheet(WM_CSS.get(wm_label, WM_CSS["UNKNOWN"]))
 
-        # Motion pattern
         self._pat_val.setText(pattern)
 
-        # Ultrasonic distance (red if close)
         sonic = sonic.strip()
         try:
             cm = float(sonic)
@@ -481,11 +621,13 @@ class AIViewer(QMainWindow):
 
     def _update_status_bar(self) -> None:
         if self._connected:
+            mode_hint = "AUTO" if self._control_mode == "AUTO" else "MANUAL (↑↓←→)"
             self._status_bar.setText(
-                "Connected  |  Space/Esc = emergency stop   Ctrl+Q = shutdown server"
+                f"Connected  [{mode_hint}]  |  "
+                "Space/Esc = emergency stop   Ctrl+Q = shutdown   Ctrl+M/A = mode"
             )
 
-    # ── Mode command helpers ───────────────────────────────────────────────────
+    # ── Command helpers ────────────────────────────────────────────────────────
 
     def _send_ai_mode(self, mode: int) -> None:
         """Send CMD_AIMODE#<mode> to the server."""
@@ -496,6 +638,15 @@ class AIViewer(QMainWindow):
             self._cmd_sock.sendall(f"CMD_AIMODE#{mode}\n".encode("utf-8"))
         except Exception as exc:
             self._status_bar.setText(f"Send error: {exc}")
+
+    def _send_motor(self, left: int, right: int) -> None:
+        """Send CMD_MOTOR#<L>#<R> to the server (relayed to robot in manual mode)."""
+        if not (self._cmd_sock and self._connected):
+            return
+        try:
+            self._cmd_sock.sendall(f"CMD_MOTOR#{left}#{right}\n".encode("utf-8"))
+        except Exception as exc:
+            self._status_bar.setText(f"Motor cmd error: {exc}")
 
     # ── Window close ──────────────────────────────────────────────────────────
 
@@ -509,7 +660,6 @@ class AIViewer(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    # Dark palette
     palette = QtGui.QPalette()
     palette.setColor(QtGui.QPalette.Window,          QColor(45,  45,  45))
     palette.setColor(QtGui.QPalette.WindowText,      QColor(220, 220, 220))

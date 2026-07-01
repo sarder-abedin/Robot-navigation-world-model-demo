@@ -1,12 +1,18 @@
 """
-main_robot.py – Raspberry Pi robot client entry point.
+main_robot.py – Raspberry Pi robot client entry point (split-inference arch).
 
-In this split-inference architecture the robot is the TCP CLIENT:
-  - Connects outbound to the PC AI server (ports 5004/8004)
-  - Streams JPEG camera frames to the PC
-  - Sends ultrasonic readings to the PC
-  - Receives CMD_MOTOR / CMD_STOP commands from the PC
-  - Executes motor commands via tankMotor
+Split-inference responsibilities
+─────────────────────────────────
+  Pi (this machine):
+    • Streams JPEG camera frames to PC (port 8004) for V-JEPA 2 inference
+    • Runs YOLOv8n locally, sends CMD_DETECTION (fused detection + sonic) to PC
+    • Executes CMD_AIMOVE (AI-computed actions) and CMD_MOTOR (manual) commands
+    • Reads the ultrasonic sensor; distance is included in CMD_DETECTION
+
+  PC server (main_server.py):
+    • Receives CMD_DETECTION → runs V-JEPA 2 + SSv2 + decision fusion
+    • Sends CMD_AIMOVE#<FORWARD|SLOW|STOP|REROUTE> (AI mode)
+    • Sends CMD_MOTOR#<L>#<R> (manual mode from operator UI)
 
 Usage:
   # Live mode (physical robot):
@@ -69,11 +75,13 @@ def main() -> None:
     camera = None
     motor = None
     ultrasonic = None
+    detector = None
 
     if mode == "live":
         from camera import Camera
         from motor import tankMotor
         from ultrasonic import Ultrasonic
+        from detector_robot import DetectorRobot
 
         cam_cfg = cfg.get("camera", {})
         camera = Camera(
@@ -85,6 +93,15 @@ def main() -> None:
         camera.start_stream()
         motor = tankMotor()
         ultrasonic = Ultrasonic()
+
+        detector = DetectorRobot(cfg)
+        try:
+            detector.load()
+            logger.info("YOLOv8n loaded on Pi")
+        except Exception as exc:
+            logger.warning("YOLOv8n load failed (%s) – detection disabled", exc)
+            detector = None
+
         logger.info("Hardware initialised in live mode")
     else:
         logger.info("Demo mode – stub hardware (no GPIO/camera)")
@@ -109,6 +126,7 @@ def main() -> None:
 
     # ── Camera streaming thread ──────────────────────────────────────────────
     def camera_loop():
+        """Continuously stream JPEG frames to the PC for V-JEPA 2 inference."""
         while not _shutdown and client.is_connected:
             if mode == "live" and camera:
                 try:
@@ -116,7 +134,7 @@ def main() -> None:
                     if jpg:
                         client.send_frame(jpg)
                 except Exception as exc:
-                    logger.warning("Camera error: %s", exc)
+                    logger.warning("Camera stream error: %s", exc)
                     time.sleep(0.05)
             else:
                 import cv2
@@ -131,28 +149,58 @@ def main() -> None:
     cam_thread = threading.Thread(target=camera_loop, daemon=True, name="CameraStream")
     cam_thread.start()
 
-    # ── Ultrasonic broadcast thread ──────────────────────────────────────────
+    # ── Detection + sonic broadcast thread ──────────────────────────────────
     sonic_interval = cfg.get("ultrasonic", {}).get("read_interval", 0.1)
 
-    def sonic_loop():
+    def detection_loop():
+        """
+        Runs YOLOv8n on the latest camera frame and reads the ultrasonic sensor,
+        then sends a single CMD_DETECTION message per cycle to the PC.
+        """
+        from detector_robot import DetectionPacket
+        last_packet = DetectionPacket()
+
         while not _shutdown and client.is_connected:
+            # ── 1. YOLOv8n on latest frame (live mode only) ──────────────────
+            if mode == "live" and camera and detector:
+                try:
+                    jpg = camera.get_frame()
+                    if jpg:
+                        import cv2
+                        import numpy as np
+                        arr = np.frombuffer(jpg, dtype=np.uint8)
+                        frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                        if frame_bgr is not None:
+                            last_packet = detector.detect(frame_bgr)
+                except Exception as exc:
+                    logger.warning("YOLO detection error: %s", exc)
+
+            # ── 2. Ultrasonic distance ────────────────────────────────────────
+            sonic_cm = -1.0
             if mode == "live" and ultrasonic:
                 try:
-                    cm = ultrasonic.get_distance()
-                    client.send_sonic(cm)
+                    sonic_cm = ultrasonic.get_distance()
                 except Exception as exc:
                     logger.warning("Ultrasonic error: %s", exc)
-            else:
-                client.send_sonic(-1.0)
+
+            # ── 3. Send fused CMD_DETECTION to PC ────────────────────────────
+            client.send_detection(
+                risk_pct=last_packet.yolo_risk_pct,
+                obs_in_center=last_packet.obs_in_center,
+                area_frac_pct=last_packet.area_frac_pct,
+                centroid_x_pct=last_packet.centroid_x_pct,
+                sonic_cm=sonic_cm,
+            )
             time.sleep(sonic_interval)
 
-    sonic_thread = threading.Thread(target=sonic_loop, daemon=True, name="SonicBroadcast")
-    sonic_thread.start()
+    det_thread = threading.Thread(target=detection_loop, daemon=True, name="DetectionBroadcast")
+    det_thread.start()
 
     # ── Command receive loop (main thread) ───────────────────────────────────
     robot_cfg = cfg.get("robot", {})
     speed_full = robot_cfg.get("speed_full", 1500)
     speed_slow = robot_cfg.get("speed_slow", 800)
+    reroute_secs = robot_cfg.get("reroute_turn_seconds", 1.2)
 
     while not _shutdown and client.is_connected:
         cmd = client.get_command(timeout=0.5)
@@ -162,14 +210,20 @@ def main() -> None:
         parts = cmd.split("#")
         command = parts[0].strip()
 
-        if command == "CMD_MOTOR" and len(parts) >= 3:
+        if command == "CMD_AIMOVE" and len(parts) >= 2:
+            # AI-computed navigation action from the PC decision fuser
+            action = parts[1].strip()
+            _execute_aimove(action, motor, speed_full, speed_slow, reroute_secs)
+
+        elif command == "CMD_MOTOR" and len(parts) >= 3:
+            # Manual motor command from the operator UI (relayed by PC)
             try:
                 left = int(parts[1])
                 right = int(parts[2])
                 if motor:
                     motor.setMotorModel(left, right)
                 else:
-                    logger.info("[MockMotor] L=%d  R=%d", left, right)
+                    logger.info("[MockMotor] CMD_MOTOR L=%d R=%d", left, right)
             except (ValueError, IndexError) as exc:
                 logger.warning("Bad CMD_MOTOR: %s (%s)", cmd, exc)
 
@@ -179,7 +233,7 @@ def main() -> None:
             logger.info("Motors stopped (CMD_STOP)")
 
         elif command == "CMD_AIMODE":
-            # AI stopped by operator – halt motors for safety
+            # AI mode change – stop motors for safety on mode transition
             if motor:
                 motor.setMotorModel(0, 0)
             logger.info("AI mode change: %s", cmd)
@@ -190,6 +244,42 @@ def main() -> None:
 
     # ── Shutdown ─────────────────────────────────────────────────────────────
     _cleanup(motor, camera, ultrasonic, client)
+
+
+def _execute_aimove(action: str, motor, speed_full: int, speed_slow: int,
+                    reroute_secs: float) -> None:
+    """Map an AI navigation action string to tankMotor calls."""
+    if action == "FORWARD":
+        if motor:
+            motor.setMotorModel(speed_full, speed_full)
+        else:
+            logger.info("[MockMotor] FORWARD L=%d R=%d", speed_full, speed_full)
+
+    elif action == "SLOW":
+        if motor:
+            motor.setMotorModel(speed_slow, speed_slow)
+        else:
+            logger.info("[MockMotor] SLOW L=%d R=%d", speed_slow, speed_slow)
+
+    elif action == "STOP":
+        if motor:
+            motor.setMotorModel(0, 0)
+        else:
+            logger.info("[MockMotor] STOP")
+
+    elif action == "REROUTE":
+        # Back up briefly then spin — the timed maneuver runs here on the Pi
+        if motor:
+            motor.setMotorModel(-speed_slow, -speed_slow)   # back up
+            time.sleep(0.3)
+            motor.setMotorModel(-speed_slow, speed_slow)    # spin left
+            time.sleep(reroute_secs)
+            motor.setMotorModel(0, 0)
+        else:
+            logger.info("[MockMotor] REROUTE (%.1f s)", reroute_secs)
+
+    else:
+        logger.warning("Unknown CMD_AIMOVE action: %s", action)
 
 
 def _cleanup(motor, camera, ultrasonic, client) -> None:

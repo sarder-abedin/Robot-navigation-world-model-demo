@@ -13,6 +13,13 @@ server_ip: "192.168.1.100"
 robot_cmd_port: 5004
 robot_video_port: 8004
 
+# ── YOLOv8n detector (runs locally on Pi) ────────────────────────────────────
+detector:
+  model: yolov8n.pt           # nano model – fits comfortably on Pi 4/5
+  conf: 0.35                  # confidence threshold
+  run_every_n_frames: 2       # inference every 2nd frame (reduce CPU load)
+  center_zone_width: 0.40     # fraction of frame width = "danger zone"
+
 # ── Camera (Pi camera settings) ───────────────────────────────────────────────
 camera:
   stream_width: 400
