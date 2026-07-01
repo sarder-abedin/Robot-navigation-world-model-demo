@@ -1,17 +1,28 @@
-# ── AI / ML  (PC / Laptop server) ────────────────────────────────────────────
+# ── PC / Laptop server dependencies ───────────────────────────────────────────
+# Install with:  pip install -r requirements_server.txt
+#
+# This file covers both the AI server (Code/Server/) and the operator UI
+# viewer (Code/Client/ai_viewer.py).  Both run on the same PC/laptop.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Deep learning (V-JEPA 2 world model) ──────────────────────────────────────
 torch>=2.1.0
-torchvision>=0.16.0
-transformers>=4.40.0
-accelerate>=0.27.0
+torchvision>=0.16.0          # required by ultralytics; V-JEPA 2 uses torch only
+transformers>=4.40.0         # HuggingFace AutoModel for V-JEPA 2 weights
+accelerate>=0.27.0           # fast model loading for transformers
+
+# ── Object detection (demo mode only) ─────────────────────────────────────────
+# In live mode YOLOv8n runs on the Pi; the server receives CMD_DETECTION.
+# In demo mode (no robot) the server runs YOLOv8n locally for comparison.
 ultralytics>=8.1.0
 
-# ── Computer Vision ───────────────────────────────────────────────────────────
-opencv-python>=4.8.0      # headless variant also works: opencv-python-headless
-Pillow>=10.0.0
+# ── Computer vision ───────────────────────────────────────────────────────────
+opencv-python>=4.8.0         # headless variant also works: opencv-python-headless
+Pillow>=10.0.0               # required by ultralytics and transformers
 numpy>=1.24.0
 
-# ── UI viewer ─────────────────────────────────────────────────────────────────
+# ── Operator UI viewer (Code/Client/ai_viewer.py) ─────────────────────────────
 PyQt5>=5.15.0
 
-# ── Config / Utilities ────────────────────────────────────────────────────────
+# ── Config / utilities ────────────────────────────────────────────────────────
 PyYAML>=6.0

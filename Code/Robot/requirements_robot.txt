@@ -1,19 +1,32 @@
-# ── Robot (Raspberry Pi) dependencies ────────────────────────────────────────
-# Install system packages first:
-#   sudo apt-get install -y python3-picamera2 python3-libcamera python3-kms++
-#   sudo apt-get install -y python3-gpiozero python3-prctl libatlas-base-dev
+# ── Raspberry Pi robot client dependencies ────────────────────────────────────
+# Install with:  pip3 install -r requirements_robot.txt
+#
+# System packages must be installed first (run once on the Pi):
+#   sudo apt-get update
+#   sudo apt-get install -y \
+#     python3-picamera2 python3-libcamera python3-kms++ \
+#     python3-gpiozero python3-prctl libatlas-base-dev \
+#     libopenblas-dev                     # speeds up numpy / torch on arm64
+# ─────────────────────────────────────────────────────────────────────────────
 
-# Pi camera (install via apt preferably; pip works if libcamera is installed)
-picamera2>=0.3.12
-
-# GPIO / hardware
-lgpio>=0.2.2.0
-gpiozero>=2.0
-
-# AI – YOLOv8n runs locally on the Pi
+# ── AI – YOLOv8n (runs locally on the Pi) ────────────────────────────────────
+# ultralytics pulls in torch for arm64 automatically on Pi OS (Bookworm).
+# If pip cannot find a torch wheel for your platform, install it manually:
+#   pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ultralytics>=8.0.0
 
-# Utilities
+# ── Pi camera ─────────────────────────────────────────────────────────────────
+# Prefer the apt package (python3-picamera2) which bundles libcamera bindings.
+# This pip entry is a fallback for environments where apt is unavailable.
+picamera2>=0.3.12
+
+# ── GPIO / hardware ───────────────────────────────────────────────────────────
+lgpio>=0.2.2.0               # GPIO backend used by gpiozero on Pi 4/5
+gpiozero>=2.0                # tankMotor high-level motor control
+
+# ── Computer vision ───────────────────────────────────────────────────────────
+opencv-python-headless>=4.8.0  # cv2 for JPEG encode/decode; headless = no GUI
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
 numpy>=1.24.0
 PyYAML>=6.0.0
-opencv-python-headless>=4.8.0
