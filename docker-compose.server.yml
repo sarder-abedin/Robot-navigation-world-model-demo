@@ -1,0 +1,45 @@
+# docker-compose.server.yml – Run the PC AI server
+#
+# Usage:
+#   # Demo mode (no robot hardware):
+#   docker compose -f docker-compose.server.yml up
+#
+#   # Live mode (robot must connect on 5004/8004):
+#   NAV_MODE=live docker compose -f docker-compose.server.yml up
+#
+# Allow the container to open the OpenCV window (run once on host):
+#   xhost +local:docker
+
+services:
+  nav-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    image: nav-server:latest
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - NAV_MODE=${NAV_MODE:-demo}
+      - NAV_STRATEGY=${NAV_STRATEGY:-predictive}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw   # X11 for OpenCV window
+      - ./logs_rpi:/app/logs_rpi            # persist run logs
+      - ./assets:/app/assets:ro             # demo video clips
+    ports:
+      - "5003:5003"   # UI viewer (cmd)
+      - "8003:8003"   # UI viewer (video)
+      - "5004:5004"   # Robot cmd
+      - "8004:8004"   # Robot video
+    # GPU support (requires nvidia-container-toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    command: >
+      python main_server.py
+        --mode ${NAV_MODE:-demo}
+        --nav ${NAV_STRATEGY:-predictive}
+        --no-display
+    restart: unless-stopped

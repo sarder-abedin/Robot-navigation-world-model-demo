@@ -1,0 +1,16 @@
+# ── Robot (Raspberry Pi) dependencies ────────────────────────────────────────
+# Install system packages first:
+#   sudo apt-get install -y python3-picamera2 python3-libcamera python3-kms++
+#   sudo apt-get install -y python3-gpiozero python3-prctl libatlas-base-dev
+
+# Pi camera (install via apt preferably; pip works if libcamera is installed)
+picamera2>=0.3.12
+
+# GPIO / hardware
+lgpio>=0.2.2.0
+gpiozero>=2.0
+
+# Utilities
+numpy>=1.24.0
+PyYAML>=6.0.0
+opencv-python-headless>=4.8.0

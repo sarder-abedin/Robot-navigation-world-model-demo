@@ -1,9 +1,9 @@
 """
-ai_viewer.py – Lightweight AI status viewer for the Freenove tank robot.
+ai_viewer.py – Operator UI for the Freenove predictive navigation system.
 
-What this client does
+What this viewer does
 ─────────────────────
-1. Connects to the predictive navigation server (CMD port 5003).
+1. Connects to the PC navigation server (CMD port 5003, Video port 8003).
 2. Shows live AI state: current action, fused risk bar, V-JEPA 2 prediction
    label, motion pattern, and ultrasonic distance.
 3. Lets the operator switch navigation modes at runtime.
@@ -11,14 +11,18 @@ What this client does
 5. Provides an EMERGENCY STOP kill switch – button AND keyboard shortcuts –
    that immediately halts the robot motors and disables AI on the server.
 
+Architecture
+────────────
+  PC (server)   → runs all AI (YOLOv8 + V-JEPA 2 + SSv2 + decision)
+                  listens on 5003 (cmd) and 8003 (video)
+  Pi (robot)    → connects to PC on 5004/8004, streams camera, drives motors
+  This viewer   → connects to PC on 5003/8003, shows AI state + video
+
 Kill switch controls
 ────────────────────
   Space / Escape           → EMERGENCY STOP  (motors stop, AI disabled)
   Ctrl+Q or the button     → SHUTDOWN SERVER (stops the entire demo process)
   "STOP AI / MANUAL" btn   → same as Space (motor stop, server stays alive)
-
-All heavy AI workload stays on the server (Raspberry Pi).
-This client loads no ML models.
 
 TCP protocol
 ────────────
@@ -26,7 +30,7 @@ TCP protocol
     CMD_AIMODE#0          → stop AI, halt motors (keep server alive)
     CMD_AIMODE#1          → switch to baseline reactive mode
     CMD_AIMODE#2          → switch to predictive mode
-    CMD_KILL#0            → stop AI, halt motors, shut down server process
+    CMD_KILL#0            → stop AI + robot, shut down server process
   RECV:
     CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>
 """
@@ -114,8 +118,8 @@ class AIViewer(QMainWindow):
 
         # ── Connection row ────────────────────────────────────────────────────
         conn_row = QHBoxLayout()
-        conn_row.addWidget(QLabel("Robot IP:"))
-        self._ip_edit = QLineEdit("192.168.0.100")
+        conn_row.addWidget(QLabel("PC Server IP:"))
+        self._ip_edit = QLineEdit("127.0.0.1")
         self._ip_edit.setFixedWidth(145)
         conn_row.addWidget(self._ip_edit)
         self._btn_connect = QPushButton("Connect")
@@ -170,7 +174,7 @@ class AIViewer(QMainWindow):
         self._btn_predictive.setStyleSheet(
             "background:#1a5f1a; color:white; font-weight:bold; padding:6px;"
         )
-        self._btn_predictive.setToolTip("Switch server to predictive mode (V-JEPA 2 active)")
+        self._btn_predictive.setToolTip("Switch to predictive mode (V-JEPA 2 active on PC)")
         self._btn_predictive.clicked.connect(lambda: self._send_ai_mode(2))
         mode_row.addWidget(self._btn_predictive)
 
@@ -178,7 +182,7 @@ class AIViewer(QMainWindow):
         self._btn_baseline.setStyleSheet(
             "background:#7a5500; color:white; font-weight:bold; padding:6px;"
         )
-        self._btn_baseline.setToolTip("Switch server to baseline reactive mode (no V-JEPA 2)")
+        self._btn_baseline.setToolTip("Switch to baseline reactive mode (no V-JEPA 2)")
         self._btn_baseline.clicked.connect(lambda: self._send_ai_mode(1))
         mode_row.addWidget(self._btn_baseline)
 
@@ -235,7 +239,7 @@ class AIViewer(QMainWindow):
         root.addWidget(kill_box)
 
         # ── Status bar ────────────────────────────────────────────────────────
-        self._status_bar = QLabel("Not connected – enter the Raspberry Pi IP and click Connect")
+        self._status_bar = QLabel("Not connected – enter the PC server IP and click Connect")
         self._status_bar.setStyleSheet("color:#888; font-size:10px;")
         root.addWidget(self._status_bar)
 

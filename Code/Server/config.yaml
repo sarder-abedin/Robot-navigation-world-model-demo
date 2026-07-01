@@ -95,8 +95,12 @@ logging:
 
 # ── TCP / Server ───────────────────────────────────────────────────────────────
 server:
+  # UI viewer ports (ai_viewer.py connects here)
   cmd_port: 5003
   video_port: 8003
+  # Robot (Pi) ports – robot connects here as TCP client
+  robot_cmd_port: 5004
+  robot_video_port: 8004
   # How often (seconds) to broadcast AI status to connected clients
   status_broadcast_interval: 0.5
 

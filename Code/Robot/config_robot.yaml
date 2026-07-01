@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Robot Client Configuration  (Raspberry Pi side)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Mode ──────────────────────────────────────────────────────────────────────
+mode: live          # "live" (hardware) | "demo" (no hardware, for testing)
+
+# ── PC Server address ─────────────────────────────────────────────────────────
+# Set this to the IP address of the PC running main_server.py
+server_ip: "192.168.1.100"
+
+# Robot-specific TCP ports (different from the UI viewer ports 5003/8003)
+robot_cmd_port: 5004
+robot_video_port: 8004
+
+# ── Camera (Pi camera settings) ───────────────────────────────────────────────
+camera:
+  stream_width: 400
+  stream_height: 300
+
+# ── Motor control ─────────────────────────────────────────────────────────────
+robot:
+  speed_full: 1500
+  speed_slow: 800
+
+# ── Ultrasonic sensor ─────────────────────────────────────────────────────────
+ultrasonic:
+  trigger_pin: 27
+  echo_pin: 22
+  read_interval: 0.1   # seconds between readings sent to PC

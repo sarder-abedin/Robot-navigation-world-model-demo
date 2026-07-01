@@ -1,4 +1,4 @@
-# ── AI / ML ───────────────────────────────────────────────────────────────────
+# ── AI / ML  (PC / Laptop server) ────────────────────────────────────────────
 torch>=2.1.0
 torchvision>=0.16.0
 transformers>=4.40.0
@@ -6,17 +6,12 @@ accelerate>=0.27.0
 ultralytics>=8.1.0
 
 # ── Computer Vision ───────────────────────────────────────────────────────────
-opencv-python-headless>=4.8.0    # headless on Pi (no GTK dependency)
+opencv-python>=4.8.0      # headless variant also works: opencv-python-headless
 Pillow>=10.0.0
 numpy>=1.24.0
 
-# ── Freenove Pi dependencies ──────────────────────────────────────────────────
-# Install gpiozero and picamera2 via apt on the Raspberry Pi:
-#   sudo apt-get install -y python3-gpiozero python3-picamera2
-# pip-installable extras:
-pyserial>=3.5
-RPi.GPIO>=0.7.0; platform_machine=="aarch64"   # Pi only
-rpi-hardware-pwm>=0.2.0; platform_machine=="aarch64"
+# ── UI viewer ─────────────────────────────────────────────────────────────────
+PyQt5>=5.15.0
 
 # ── Config / Utilities ────────────────────────────────────────────────────────
 PyYAML>=6.0

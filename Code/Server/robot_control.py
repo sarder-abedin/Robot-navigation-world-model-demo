@@ -152,11 +152,88 @@ class MockRobotController:
         return 0.0
 
 
-def build_robot_controller(cfg: dict, car=None):
-    """Factory: real controller in live mode, mock in demo mode."""
+class TCPRobotController:
+    """
+    Sends motor commands to the robot via a RobotConnectionServer TCP link.
+
+    Used in split-inference mode where the PC runs all AI and the Pi executes
+    motor commands received over the network.
+    """
+
+    def __init__(self, cfg: dict, robot_conn):
+        r = cfg["robot"]
+        self._speed_full = r["speed_full"]
+        self._speed_slow = r["speed_slow"]
+        self._reroute_secs = r["reroute_turn_seconds"]
+        self._reroute_dir = r["reroute_direction"]
+        self._sonic_stop_cm = r["ultrasonic_stop_cm"]
+        self._use_sonic_guard = r.get("use_ultrasonic_guard", True)
+        self._conn = robot_conn
+
+    def forward(self) -> None:
+        if self._sonic_blocked():
+            logger.info("Sonic guard: forward blocked – stopping instead")
+            self.stop()
+            return
+        self._conn.send_motor_command(self._speed_full, self._speed_full)
+
+    def slow_forward(self) -> None:
+        if self._sonic_blocked():
+            self.stop()
+            return
+        self._conn.send_motor_command(self._speed_slow, self._speed_slow)
+
+    def stop(self) -> None:
+        self._conn.send_motor_command(0, 0)
+
+    def reroute(self) -> None:
+        self.stop()
+        time.sleep(0.2)
+        if self._reroute_dir == "left":
+            self._conn.send_motor_command(-self._speed_slow, self._speed_slow)
+        else:
+            self._conn.send_motor_command(self._speed_slow, -self._speed_slow)
+        time.sleep(self._reroute_secs)
+        self.stop()
+
+    def safe_stop(self) -> None:
+        self._conn.send_stop()
+        logger.warning("SAFE STOP – TCP motor halt sent")
+
+    def get_ultrasonic_risk(self) -> float:
+        if not self._use_sonic_guard:
+            return 0.0
+        try:
+            d = self._conn.get_sonic_cm()
+            if d <= 0:
+                return 0.0
+            stop = self._sonic_stop_cm
+            if d <= stop:
+                return 1.0
+            warn = stop * 3
+            if d >= warn:
+                return 0.0
+            return float((warn - d) / (warn - stop))
+        except Exception as exc:
+            logger.debug("TCP sonic error: %s", exc)
+            return 0.0
+
+    def _sonic_blocked(self) -> bool:
+        return self._use_sonic_guard and self.get_ultrasonic_risk() >= 1.0
+
+
+def build_robot_controller(cfg: dict, car=None, robot_conn=None):
+    """
+    Factory – returns the appropriate robot controller:
+      tcp mode:  TCPRobotController  (PC sends motor commands over network)
+      live mode: RobotController     (direct gpiozero / car.py interface)
+      demo mode: MockRobotController (no hardware)
+    """
+    if robot_conn is not None:
+        return TCPRobotController(cfg, robot_conn)
     if cfg.get("mode") == "live":
         if car is None:
-            raise ValueError("car object required in live mode")
+            raise ValueError("car object required in live mode without robot_conn")
         return RobotController(cfg, car)
     return MockRobotController(cfg)
 

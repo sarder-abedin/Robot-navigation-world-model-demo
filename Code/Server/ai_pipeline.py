@@ -82,18 +82,31 @@ class AIPipeline:
         self._nav_logger = None
         self._visualizer = None
 
-        # Freenove objects passed in from the server
+        # Freenove objects (live-Pi mode)
         self._freenove_camera = None
         self._freenove_car = None
         self._tcp_server = None
 
+        # Split-inference mode objects
+        self._robot_connection = None   # RobotConnectionServer (TCP to Pi)
+        self._ext_cam_buf = None        # pre-built CameraBuffer (shared with robot_connection)
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    def attach(self, freenove_camera=None, freenove_car=None, tcp_server=None) -> None:
-        """Attach the Freenove hardware objects before calling start()."""
+    def attach(self, freenove_camera=None, freenove_car=None, tcp_server=None,
+               robot_connection=None, camera_buffer=None) -> None:
+        """
+        Attach hardware / connection objects before calling start().
+
+        In classic live mode pass freenove_camera, freenove_car, tcp_server.
+        In split-inference mode pass robot_connection and (optionally) a
+        pre-built camera_buffer shared with robot_connection.
+        """
         self._freenove_camera = freenove_camera
         self._freenove_car = freenove_car
         self._tcp_server = tcp_server
+        self._robot_connection = robot_connection
+        self._ext_cam_buf = camera_buffer
 
     def start(self) -> None:
         self._build_components()
@@ -190,7 +203,9 @@ class AIPipeline:
             # ── 5. Ultrasonic guard (hard safety) ─────────────────────────────
             sonic_risk = self._robot.get_ultrasonic_risk()
             sonic_cm = -1.0
-            if self._freenove_car:
+            if self._robot_connection:
+                sonic_cm = self._robot_connection.get_sonic_cm()
+            elif self._freenove_car:
                 try:
                     sonic_cm = self._freenove_car.sonic.get_distance()
                 except Exception:
@@ -256,8 +271,12 @@ class AIPipeline:
 
         cfg = self._cfg
 
-        self._cam_buf = CameraBuffer(cfg, freenove_camera=self._freenove_camera)
-        self._cam_buf.start()
+        # Use pre-built CameraBuffer (split-inference / tcp mode) or create one
+        if self._ext_cam_buf is not None:
+            self._cam_buf = self._ext_cam_buf
+        else:
+            self._cam_buf = CameraBuffer(cfg, freenove_camera=self._freenove_camera)
+            self._cam_buf.start()
 
         self._detector = Detector(cfg)
         self._detector.load()
@@ -267,7 +286,8 @@ class AIPipeline:
 
         self._temporal = TemporalActionRecognizer(cfg)
         self._fuser = DecisionFuser(cfg, self._nav_mode)
-        self._robot = build_robot_controller(cfg, self._freenove_car)
+        # Use TCP controller when robot_connection available, else real/mock
+        self._robot = build_robot_controller(cfg, self._freenove_car, self._robot_connection)
         self._nav_logger = NavigationLogger(cfg, self._nav_mode)
         self._visualizer = Visualizer(cfg, self._nav_mode)
         self._last_annotated_bgr: np.ndarray | None = None
