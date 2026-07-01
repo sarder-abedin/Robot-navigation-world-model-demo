@@ -31,8 +31,11 @@ logger = logging.getLogger(__name__)
 
 class CameraBuffer:
     """
-    In live mode: wraps the Freenove Camera's StreamingOutput.
-    In demo mode: reads from a recorded video file via OpenCV.
+    Frame buffer supporting three source modes:
+
+    demo  – reads from a recorded video file (OpenCV)
+    live  – reads from Freenove picamera2 StreamingOutput
+    tcp   – frames are pushed externally via push_frame() (robot TCP stream)
     """
 
     def __init__(self, cfg: dict, freenove_camera=None):
@@ -53,6 +56,10 @@ class CameraBuffer:
                 raise ValueError("freenove_camera is required in live mode")
             self._stream_output = freenove_camera.streaming_output
             self._cap = None
+        elif self._mode == "tcp":
+            # Frames are pushed via push_frame(); no background thread needed
+            self._stream_output = None
+            self._cap = None
         else:
             self._stream_output = None
             self._video_path = cam_cfg["demo_video_path"]
@@ -66,6 +73,10 @@ class CameraBuffer:
             self._thread = threading.Thread(
                 target=self._live_loop, daemon=True, name="CameraBufferLive"
             )
+            self._thread.start()
+        elif self._mode == "tcp":
+            # No capture thread – frames arrive via push_frame()
+            pass
         else:
             self._cap = cv2.VideoCapture(self._video_path)
             if not self._cap.isOpened():
@@ -73,7 +84,7 @@ class CameraBuffer:
             self._thread = threading.Thread(
                 target=self._demo_loop, daemon=True, name="CameraBufferDemo"
             )
-        self._thread.start()
+            self._thread.start()
         logger.info("CameraBuffer started in %s mode", self._mode)
 
     def stop(self) -> None:
@@ -102,6 +113,15 @@ class CameraBuffer:
     def __len__(self) -> int:
         with self._lock:
             return len(self._buf)
+
+    # ── External push (TCP mode) ──────────────────────────────────────────────
+
+    def push_frame(self, jpg: bytes) -> None:
+        """Push a JPEG frame from an external source (TCP robot stream)."""
+        frame = _decode_jpeg(jpg, self._ai_size)
+        if frame is not None:
+            with self._lock:
+                self._buf.append(frame)
 
     # ── Background capture loops ──────────────────────────────────────────────
 

@@ -6,148 +6,89 @@ future obstacles — not just react to what is currently visible.
 
 ---
 
-## What each AI model does
-
-### YOLOv8n — "The Photographer" (runs on Raspberry Pi 5)
-
-Looks at one camera frame and draws boxes around anything in the path.
-
-- **Anchor-free**: predicts object centres directly, no predefined box templates
-- Runs every 2 frames to save Pi CPU
-- Output: bounding boxes, labels, confidence scores, raw risk score 0–1
-- **Limitation**: only sees what is already in front of the camera. A person
-  entering at the edge produces a small, off-centre box → low risk score.
-  By the time YOLO raises the alarm the obstacle is already blocking the path.
-
-### V-JEPA 2 — "The Fortune Teller" (runs on operator laptop / PC)
-
-Watches the last 16 frames and predicts what the scene will **feel like**
-half a second from now — without drawing pixels.
-
-- Compresses each frame into a high-dimensional "scene vibe" vector
-- Masks the last 4 frames and asks: *"given frames 1–12, what should
-  frames 13–16 look like?"*
-- Compares the predicted future embedding to two reference prototypes:
-  - `obstacle_anchor` — average embedding of corridor-blocked scenes
-  - `clear_anchor` — average embedding of empty-corridor scenes
-- Cosine similarity difference → `predicted_risk ∈ [0, 1]`
-
-> **Note:** "anchor" here means *reference prototype in embedding space*,
-> completely unrelated to YOLOv8's anchor-free detection head. Two
-> different uses of the same word.
-
-**Why this matters:** a person entering at the frame edge produces a tiny YOLO
-box (low risk) but shifts the predicted future embedding toward the blocked
-prototype. V-JEPA 2 raises the alarm several frames before YOLO does.
-
-### SSv2 Temporal Recogniser — "The Behaviour Analyst" (runs on laptop / PC)
-
-Watches the history of YOLO detections over 10 frames and classifies what
-the obstacle is *doing* — no neural network, pure maths (linear regression
-on bbox size and position).
-
-| Pattern | What it sees | Risk |
-|---|---|---|
-| `STATIC_CLEAR` | No detection for most frames | 0.00 |
-| `CLEARING` | Was there, now gone | 0.10 |
-| `UNCERTAIN` | Not enough data | 0.25 |
-| `CROSSING` | Moving sideways, stable size | 0.45 |
-| `APPROACHING` | Growing area + centred | 0.70 |
-| `BLOCKING` | Large, centred, stationary | 0.85 |
-
-Inspired by the Something-Something V2 dataset philosophy: classify
-*motion*, not objects.
-
-### Decision Fuser — "The Judge" (runs on laptop / PC)
-
-Combines all three risk signals into one action:
-
-```
-YOLO risk    × 0.35
-V-JEPA 2     × 0.45   ← zeroed in baseline mode
-Temporal     × 0.20
-─────────────────────
-Fused risk   → FORWARD (<0.30) / SLOW (<0.60) / STOP / REROUTE
-```
-
-A hysteresis filter (0.05 margin) prevents oscillation near thresholds.
-V-JEPA 2 early-warning: if world model says `BLOCKED` but fused risk is
-still in the FORWARD zone → proactively downgrade to SLOW.
-
-**Baseline mode** zeroes V-JEPA 2's weight and halves temporal weight so
-the comparison isolates exactly the V-JEPA 2 contribution.
-
----
-
-## Project overview
-
-The robot drives through a small indoor corridor (chairs, boxes, tape lines,
-temporary occlusions, people crossing). Three AI layers run in parallel:
-
-| Layer | Model | Role | Where it runs |
-|---|---|---|---|
-| Instantaneous detection | **YOLOv8n** | What is blocking the path *right now*? | **Server (Pi 5)** |
-| Predictive world model | **V-JEPA 2** | What will the scene look like in ~0.5 s? | **Client (laptop/PC)** |
-| Temporal motion pattern | **SSv2-style rules** | Is the obstacle approaching, crossing, or clearing? | **Client (laptop/PC)** |
-| Decision fusion | Weighted risk fuser | Combine all three signals → action | **Client (laptop/PC)** |
-| Motor execution | **Freenove tankMotor** | `setMotorModel(L, R)` | **Server (Pi 5)** |
-
-The Pi handles fast reactive tasks (YOLOv8, ultrasonic, motors). The client
-PC handles the heavy transformer inference (V-JEPA 2) where GPU headroom is
-available and sends navigation commands back to the Pi.
-
----
-
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│  Raspberry Pi 5  (Server)                                            │
-│                                                                      │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │  Freenove existing stack (UNCHANGED)                        │    │
-│  │  camera.py · car.py · motor.py · ultrasonic.py             │    │
-│  │  server.py · tcp_server.py · command.py · message.py       │    │
-│  └─────────────────────────────────────────────────────────────┘    │
-│                           │ wraps / extends                          │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │  Pi-side AI (detection + hardware only)                     │    │
-│  │                                                             │    │
-│  │  main_predictive.py  ← entry point + TCP command handler   │    │
-│  │  ai_pipeline.py      ← YOLOv8 loop + CMD_DETECTION bcast  │    │
-│  │  camera_buffer.py    ← rolling JPEG→numpy frame buffer     │    │
-│  │  detector.py         ← YOLOv8 obstacle detection           │    │
-│  │  robot_control.py    ← wraps car.motor.setMotorModel()     │    │
-│  │  ai_logger.py        ← CSV + annotated JPEG archive        │    │
-│  │  visualization.py    ← OpenCV HUD (YOLO boxes + sonic)     │    │
-│  │  config.yaml         ← Pi-side thresholds and settings     │    │
-│  └─────────────────────────────────────────────────────────────┘    │
-│                                                                      │
-│  TCP 5003  CMD_DETECTION ──►  ◄── CMD_AIMOVE / CMD_AIMODE / KILL    │
-│  TCP 8003  video JPEG stream ──►                                    │
-└──────────────────────────────────────────────────────────────────────┘
-        CMD_DETECTION ──►                    ◄── CMD_AIMOVE
-        (YOLOv8 results + sonic)             (FORWARD/SLOW/STOP/REROUTE)
-┌──────────────────────────────────────────────────────────────────────┐
-│  Client  (operator laptop / PC — GPU recommended)                    │
-│                                                                      │
-│  ai_viewer.py         ← full AI client (V-JEPA 2 + SSv2 + decision) │
-│  world_model.py       ← V-JEPA 2 future-latent prediction           │
-│  temporal_action.py   ← SSv2-style motion pattern recognition       │
-│  decision.py          ← weighted risk fusion + hysteresis           │
-│  config_client.yaml   ← client AI thresholds (device, weights …)   │
-│  Main.py              ← original Freenove client (unchanged)        │
-└──────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  PC / Laptop  (TCP SERVER – runs all AI)                        │
+│                                                                 │
+│  main_server.py              ← entry point                      │
+│  ├── YOLOv8n                 ← instantaneous obstacle detection │
+│  ├── V-JEPA 2                ← future-scene prediction          │
+│  ├── SSv2 temporal rules     ← motion pattern classification    │
+│  ├── Decision fuser          ← weighted risk fusion + hysteresis│
+│  ├── Visualization (OpenCV)  ← annotated HUD overlay            │
+│  └── TCP servers                                                │
+│      ├── ports 5003/8003     ← operator UI viewer (ai_viewer)   │
+│      └── ports 5004/8004     ← robot (Pi) connection            │
+└───────────────────┬──────────────────────────────────────────── ┘
+                    │  CMD_MOTOR / CMD_STOP ↓  ↑ JPEG frames
+                    │  CMD_SONIC (ultrasonic) ↑
+┌───────────────────┴──────────────────────────────────────────── ┐
+│  Raspberry Pi  (TCP CLIENT – hardware only)                     │
+│                                                                 │
+│  main_robot.py               ← connects to PC server            │
+│  ├── picamera2               ← JPEG camera stream → port 8004   │
+│  ├── tankMotor (gpiozero)    ← executes CMD_MOTOR commands      │
+│  └── Ultrasonic sensor       ← sends CMD_SONIC to PC            │
+└─────────────────────────────────────────────────────────────────┘
+                    ▲
+                    │  CMD_AISTATUS (live AI state)
+                    │  annotated JPEG frames
+┌───────────────────┴──────────────────────────────────────────── ┐
+│  Operator laptop  (UI viewer)                                   │
+│                                                                 │
+│  Code/Client/ai_viewer.py    ← connects to PC server 5003/8003  │
+│  Shows: action, risk bars, V-JEPA 2 label, motion pattern       │
+│  Controls: mode switch, emergency stop, server shutdown          │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Why split this way?
+**Key design decision:** The PC is the TCP *server* (binds and listens); the
+robot and the UI viewer are both TCP *clients* (connect outbound to the PC).
+This is the opposite of the original Freenove arrangement.
 
-| Concern | Pi 5 | Laptop / PC |
-|---|---|---|
-| V-JEPA 2 (ViT-L, ~300 MB) | slow on CPU-only | GPU or fast CPU |
-| YOLOv8n (4 MB, runs every 2 frames) | sufficient | unnecessary round-trip |
-| Ultrasonic safety stop | must be local (hard real-time) | network latency risk |
-| Motor command latency | <1 ms local | ~5–20 ms LAN (acceptable for navigation) |
+---
+
+## What each AI model does
+
+| Model | Nickname | What it does | Where it runs |
+|---|---|---|---|
+| **YOLOv8n** | "The Photographer" | Spots obstacles in the current camera frame by drawing bounding boxes | PC |
+| **V-JEPA 2** | "The Fortune Teller" | Predicts what the scene will look like 0.5 s from now in latent space | PC |
+| **SSv2 temporal rules** | "The Behaviour Analyst" | Classifies the obstacle's motion pattern (APPROACHING / CROSSING / BLOCKING …) | PC |
+| **Decision fuser** | "The Judge" | Combines all three risk signals into one action (FORWARD / SLOW / STOP / REROUTE) | PC |
+
+### V-JEPA 2 anchor embeddings
+
+V-JEPA 2 works by predicting **future latent embeddings** (not pixels). To turn
+those embeddings into a risk score the system compares them to two reference
+points in embedding space:
+
+- `obstacle_anchor` — average embedding of corridor frames that contain a
+  centred blocker
+- `clear_anchor`    — average embedding of obstacle-free corridor frames
+
+The cosine similarity difference becomes `predicted_risk ∈ [0, 1]`.
+
+> These "anchors" are completely different from the "anchor boxes" in anchor-
+> based object detectors (YOLOv8n is anchor-free and uses neither). The word
+> "anchor" here means a reference prototype in latent space.
+
+---
+
+## How V-JEPA 2 improves navigation
+
+A person entering at the frame edge has **low** current detection risk (small
+bounding box, off-centre) but produces a **predicted** embedding much closer to
+the obstacle anchor than the clear anchor.  The robot begins decelerating several
+frames before the baseline (YOLO-only) system reacts.
+
+Predictive early-warning path in `Code/Server/decision.py`:
+```python
+if self._mode == "predictive" and world_model_label == "BLOCKED" and action == Action.FORWARD:
+    action = Action.SLOW   # decelerate proactively
+```
 
 ---
 
@@ -157,253 +98,283 @@ available and sends navigation commands back to the Pi.
 |---|---|---|
 | YOLOv8 detection | ✓ | ✓ |
 | V-JEPA 2 future prediction | ✗ (weight = 0) | ✓ (weight = 0.45) |
-| SSv2-style temporal patterns | ½ weight | full weight |
+| SSv2 temporal patterns | ½ weight | full weight |
 | Ultrasonic guard | ✓ | ✓ |
 | V-JEPA 2 early-warning deceleration | ✗ | ✓ |
 
-Both modes use the **same code path**. The only difference is the weight
-vector in `Code/Client/config_client.yaml` under `decision.weights`.
-Switching is instant — click PREDICTIVE or BASELINE in the client UI and
-the `DecisionFuser` is rebuilt with the new weights on the client.
+Both modes run on the **same code path** — only the weight vector changes.
+
+---
+
+## Project structure
+
+```
+Robot-navigation-world-model-demo/
+├── Code/
+│   ├── Server/          ← PC AI server (all AI + TCP servers)
+│   │   ├── main_server.py        ← NEW: PC entry point
+│   │   ├── main_predictive.py    ← original Pi entry point (kept for reference)
+│   │   ├── robot_connection.py   ← NEW: accepts robot TCP connection
+│   │   ├── ai_pipeline.py        ← AI orchestration loop
+│   │   ├── camera_buffer.py      ← rolling frame buffer (demo / live / tcp modes)
+│   │   ├── detector.py           ← YOLOv8n
+│   │   ├── world_model.py        ← V-JEPA 2
+│   │   ├── temporal_action.py    ← SSv2-style motion patterns
+│   │   ├── decision.py           ← risk fusion + hysteresis
+│   │   ├── robot_control.py      ← motor controller (real / mock / TCP)
+│   │   ├── visualization.py      ← OpenCV HUD overlay
+│   │   ├── ai_logger.py          ← CSV + annotated JPEG archive
+│   │   ├── config.yaml           ← PC-side configuration
+│   │   └── (original Freenove files – camera.py, motor.py, car.py, …)
+│   ├── Robot/           ← Raspberry Pi client (hardware only)
+│   │   ├── main_robot.py         ← Pi entry point
+│   │   ├── tcp_robot_client.py   ← outbound TCP client to PC
+│   │   ├── camera.py             ← picamera2 streaming
+│   │   ├── motor.py              ← tankMotor (gpiozero)
+│   │   ├── ultrasonic.py         ← distance sensor
+│   │   ├── parameter.py          ← Pi hardware version detection
+│   │   └── config_robot.yaml     ← Pi-side configuration
+│   └── Client/          ← UI viewer (connects to PC)
+│       └── ai_viewer.py          ← PyQt5 operator display
+├── tests_rpi/           ← unit tests (no GPU / hardware required)
+├── Dockerfile.server    ← PC Docker image
+├── Dockerfile.robot     ← Pi Docker image (arm64)
+├── docker-compose.server.yml
+├── docker-compose.robot.yml
+├── requirements_server.txt  ← PC Python deps
+└── assets/demo_clips/       ← corridor video for demo mode
+```
+
+---
+
+## TCP protocol
+
+| Command | Direction | Format | Meaning |
+|---|---|---|---|
+| `CMD_MOTOR` | PC → Robot | `CMD_MOTOR#<L>#<R>` | Motor PWM (−4095 … +4095) |
+| `CMD_STOP` | PC → Robot | `CMD_STOP` | Emergency halt |
+| `CMD_KILL` | PC → Robot | `CMD_KILL` | Shutdown robot process |
+| `CMD_AIMODE` | PC → Robot | `CMD_AIMODE#<0/1/2>` | Stop AI / Baseline / Predictive |
+| `CMD_SONIC` | Robot → PC | `CMD_SONIC#<cm>` | Ultrasonic distance (cm) |
+| `CMD_AIMODE` | Viewer → PC | `CMD_AIMODE#<0/1/2>` | Mode change from operator |
+| `CMD_KILL` | Viewer → PC | `CMD_KILL#0` | Shutdown from operator |
+| `CMD_AISTATUS` | PC → Viewer | `CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>` | Live AI state |
+| Video frames | Robot → PC | 4-byte LE uint32 length + JPEG | Camera stream (port 8004) |
+| Video frames | PC → Viewer | 4-byte LE uint32 length + JPEG | Annotated frames (port 8003) |
 
 ---
 
 ## Setup
 
-### Raspberry Pi 5 (server)
+### PC / Laptop (server + all AI)
 
 ```bash
-# 1. Clone this repo onto the Pi
+# Clone the repo
 git clone https://github.com/sarder-abedin/robot-navigation-world-model-demo
 cd robot-navigation-world-model-demo
 
-# 2. Install Pi system packages
+# Install Python packages
+pip install -r requirements_server.txt
+
+# V-JEPA 2 weights (~300 MB) are downloaded from HuggingFace on first run.
+# If offline, the system falls back to a lightweight stub encoder.
+```
+
+### Raspberry Pi (robot client)
+
+```bash
+# System packages (run once)
 sudo apt-get update
-sudo apt-get install -y python3-picamera2 python3-gpiozero python3-opencv
+sudo apt-get install -y python3-picamera2 python3-libcamera \
+  python3-gpiozero python3-kms++ python3-prctl
 
-# 3. Install Python packages (YOLOv8 + Freenove deps; no torch needed here)
-pip3 install -r requirements_server.txt
+# Python packages
+pip3 install -r Code/Robot/requirements_robot.txt
 
-# 4. (First run only) Create hardware params file
-cd Code/Server
-python3 parameter.py
-```
-
-The Pi runs **YOLOv8 only** — no torch or transformers needed on the Pi.
-
-### Client (operator laptop / PC)
-
-```bash
-pip install -r requirements_client.txt
-```
-
-`requirements_client.txt` includes `torch` and `transformers`.
-**V-JEPA 2 weights (~300 MB) are downloaded from HuggingFace on the first
-client run.** If the client has no internet access, a lightweight
-`_StubEncoder` (fixed random projection of pixel statistics) is used
-automatically — enough to exercise the full pipeline and show the
-predictive vs baseline difference.
-
-To use a GPU (strongly recommended):
-
-```bash
-# CUDA 12.x
-pip install torch --index-url https://download.pytorch.org/whl/cu121
-
-# Apple Silicon (MPS)
-pip install torch   # standard install already includes MPS
-
-# Then set in Code/Client/config_client.yaml:
-#   world_model:
-#     device: "cuda"   # or "mps"
+# One-time: create hardware parameters file
+cd Code/Server && python3 parameter.py
 ```
 
 ---
 
 ## How to run
 
-### Prerequisites
-
-| Machine | Required packages |
-|---|---|
-| Raspberry Pi 5 (server) | `python3-picamera2 python3-gpiozero python3-opencv` (apt) + `requirements_server.txt` |
-| Laptop / PC (client) | `requirements_client.txt` (includes torch + transformers) |
-
----
-
 ### Option A – Demo mode (no robot hardware needed)
 
-The fastest way to see predictive vs baseline. Everything runs on a single
-machine — the server and client on the same laptop.
-
-**Step 1** – Provide a corridor video clip:
-
+**Step 1** – Place a corridor video clip at:
 ```
 assets/demo_clips/corridor.mp4
 ```
+Any short indoor walkway video works (30 s is plenty).
 
-Any short indoor walkway video works (30 s is plenty). The clip loops.
-
-**Step 2** – Start the server in demo mode (one terminal):
+**Step 2** – Start the PC server in demo mode:
 
 ```bash
 cd Code/Server
 
-# Predictive navigation (V-JEPA 2 active on client)
-python main_predictive.py --mode demo --nav predictive
+# Predictive mode (V-JEPA 2 active)
+python main_server.py --mode demo --nav predictive
 
-# Baseline reactive (YOLOv8 + temporal only, no world model)
-python main_predictive.py --mode demo --nav baseline
+# Baseline reactive mode (for comparison)
+python main_server.py --mode demo --nav baseline
 
-# Custom video path
-python main_predictive.py --mode demo --video /path/to/my_video.mp4
+# Custom video file
+python main_server.py --mode demo --video /path/to/my_video.mp4
 
-# Headless (no OpenCV window on the server side)
-python main_predictive.py --mode demo --no-display
+# Headless (no OpenCV window)
+python main_server.py --mode demo --no-display
 ```
 
-The server window shows **YOLO bounding boxes, sonic distance, and the
-last action received from the client**. V-JEPA 2 label and motion pattern
-are displayed in the client UI, not the server window.
+An annotated OpenCV window opens showing detections, the risk bar, V-JEPA 2
+label, motion pattern, and current action.
 
-**Step 3** – Start the client viewer (second terminal):
+**Step 3 (optional)** – Connect the UI viewer while the server runs:
 
 ```bash
 cd Code/Client
 python ai_viewer.py
-# Type 127.0.0.1 in the IP field and click Connect
+# Type 127.0.0.1 (localhost) in the IP field and click Connect
 ```
-
-The client UI shows four risk bars (fused, YOLO from Pi, V-JEPA 2 from PC,
-temporal from PC), the world model label, motion pattern, and sonic
-distance. V-JEPA 2 loads in the background — the "AI: loading models…"
-indicator turns green when inference is ready.
 
 ---
 
 ### Option B – Live mode (physical Freenove Tank Robot)
 
-**Step 1** – One-time hardware parameter file (run once on the Pi):
-
+**Step 1** – Find the PC's IP address:
 ```bash
-cd Code/Server
-python3 parameter.py
+ip route get 1 | awk '{print $7; exit}'
 ```
 
-**Step 2** – Start the server on the Pi:
-
+**Step 2** – Edit the robot config to point at your PC:
 ```bash
-cd Code/Server
-python main_predictive.py --mode live --nav predictive
+# Code/Robot/config_robot.yaml
+server_ip: "192.168.1.42"   # ← your PC IP here
 ```
 
-The server binds on:
-- TCP port **5003** — commands (`CMD_DETECTION` out, `CMD_AIMOVE` / `CMD_AIMODE` in)
-- TCP port **8003** — video JPEG stream
+**Step 3** – Start the PC server:
+```bash
+cd Code/Server
+python main_server.py --mode live --nav predictive
+```
+The server prints the port it is listening on and waits for the robot.
 
-**Step 3** – Start the client viewer on your laptop:
+**Step 4** – On the Raspberry Pi, connect the robot client:
+```bash
+cd Code/Robot
+python main_robot.py --server-ip 192.168.1.42
+```
+The robot connects, streams camera frames to the PC, and begins receiving motor
+commands.
 
+**Step 5 (optional)** – Connect the UI viewer from any machine on the network:
 ```bash
 cd Code/Client
 python ai_viewer.py
-# Enter the Pi's IP address and click Connect
+# Enter the PC's IP address (192.168.1.42) and click Connect
 ```
-
-The client loads V-JEPA 2, connects to the Pi, and begins the
-`CMD_DETECTION → decision → CMD_AIMOVE` control loop automatically.
 
 ---
 
-### Client viewer controls
+### Option C – Docker (recommended for reproducibility)
+
+**PC server:**
+```bash
+# Build
+docker build -f Dockerfile.server -t nav-server .
+
+# Run (demo mode, headless)
+docker run --rm \
+  -p 5003:5003 -p 8003:8003 \
+  -p 5004:5004 -p 8004:8004 \
+  -v $(pwd)/assets:/app/assets:ro \
+  -v $(pwd)/logs_rpi:/app/logs_rpi \
+  nav-server
+
+# With GPU (requires nvidia-container-toolkit)
+docker run --rm --gpus all \
+  -p 5003:5003 -p 8003:8003 \
+  -p 5004:5004 -p 8004:8004 \
+  nav-server python main_server.py --mode demo --nav predictive
+
+# Via docker compose
+NAV_MODE=demo docker compose -f docker-compose.server.yml up
+```
+
+**Raspberry Pi robot:**
+```bash
+# Build on Pi (arm64) or via cross-compilation
+docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
+
+# Run (replace with PC's actual IP)
+docker run --rm --privileged \
+  --device /dev/gpiochip4 \
+  -e SERVER_IP=192.168.1.42 \
+  nav-robot
+
+# Via docker compose
+SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
+```
+
+---
+
+## Operator UI controls
 
 | Control | Action |
 |---|---|
-| **PREDICTIVE** button / `Ctrl+P` | Rebuild DecisionFuser with V-JEPA 2 weight = 0.45 |
-| **BASELINE** button / `Ctrl+B` | Rebuild DecisionFuser with V-JEPA 2 weight = 0 |
-| **STOP AI / MANUAL** button | Pause AI; no CMD_AIMOVE sent; manual CMD_MOTOR honoured |
-| **EMERGENCY STOP** / `Space` / `Esc` | Send CMD_AIMODE#0 — motors halt, AI paused |
-| **SHUTDOWN SERVER** / `Ctrl+Q` | Send CMD_KILL#0 — server process exits cleanly |
-
-EMERGENCY STOP shows a confirmation message for 4 seconds then resets.
-Click PREDICTIVE or BASELINE to resume after any stop.
+| **PREDICTIVE MODE** / `Ctrl+P` | Switch to V-JEPA 2 predictive mode |
+| **BASELINE MODE** / `Ctrl+B` | Switch to reactive-only baseline mode |
+| **STOP AI / MANUAL** | Halt motors; AI disabled; server stays alive |
+| **EMERGENCY STOP** / `Space` / `Esc` | Immediately cut motor power and disable AI |
+| **SHUTDOWN SERVER** / `Ctrl+Q` | Send `CMD_KILL` – stop motors, shut down server |
 
 ---
 
-### Baseline vs predictive comparison walkthrough
+## Calibrate V-JEPA 2 anchors for your corridor
 
-1. Place the robot at the corridor start.
-2. Run `python main_predictive.py --mode live --nav baseline` on the Pi.
-3. In the client, click **BASELINE** to confirm baseline weights.
-4. Walk into the camera view from the side. Watch the **YOLO risk bar** in
-   the client — note the frame at which it crosses the SLOW threshold. This
-   is the **baseline reaction point**.
-5. Click **PREDICTIVE** (no restart needed). Repeat the approach.
-6. Watch the **V-JEPA 2 bar** and **world model label** in the client UI.
-   The label should flip to `BLOCKED` and the fused risk bar should cross
-   the SLOW threshold **earlier** than in baseline mode — before the person
-   fills the camera frame.
-7. The logged CSV in `logs_rpi/` records `detector_risk` per frame from the
-   Pi. Compare across runs to see the reaction point difference.
-
----
-
-### Calibrate V-JEPA 2 reference prototypes
-
-The default synthetic prototypes (grey wall vs bright open corridor) work
-for most environments. To calibrate for your specific corridor, run the
-anchor builder on the **client machine** (since V-JEPA 2 runs there):
+The default anchors work for most indoor corridors.  To recalibrate:
 
 ```bash
-# Future: interactive anchor builder for the client
-# For now, synthetic prototypes are used automatically on first run.
-# They are recalibrated by collecting frames via --build-anchors on the
-# server and manually passing embeddings to the client WorldModel instance.
+cd Code/Server
+python main_server.py --build-anchors
+# 'o' → label frame as obstacle
+# 'c' → label frame as clear
+# 'q' → save and exit
 ```
 
-For a demo the synthetic defaults are sufficient.
+At least 10 frames per class is recommended.
 
 ---
 
-## Extended TCP protocol
+## Configuration
 
-New commands added on top of the standard Freenove protocol:
+### PC server (`Code/Server/config.yaml`)
 
-| Command | Direction | Format | Meaning |
-|---|---|---|---|
-| `CMD_DETECTION` | Pi → Client | `CMD_DETECTION#<yolo_risk_pct>#<obs_in_center>#<area_frac_pct>#<centroid_x_pct>#<sonic_cm>` | Per-frame YOLOv8 results + sonic |
-| `CMD_AIMOVE` | Client → Pi | `CMD_AIMOVE#FORWARD` / `#SLOW` / `#STOP` / `#REROUTE` | Navigation action from client AI |
-| `CMD_AIMODE` | Client → Pi | `CMD_AIMODE#0` / `#1` / `#2` | Stop AI / Baseline / Predictive |
-| `CMD_KILL` | Client → Pi | `CMD_KILL#0` | Stop motors + shut down server process |
-
-The `CMD_DETECTION → CMD_AIMOVE` pair is the AI control loop:
-
-```
-Pi:     detect → CMD_DETECTION (every frame, ~8 fps)
-Client: V-JEPA 2 + SSv2 + decision → CMD_AIMOVE (~10 Hz)
-Pi:     setMotorModel(left, right)
-```
-
-All existing Freenove commands (`CMD_MOTOR`, `CMD_SERVO`, `CMD_LED`, etc.)
-continue to work. Manual `CMD_MOTOR` passes through when `CMD_AIMODE#0`
-(stop AI) is active.
-
----
-
-## Something-Something V2 motion patterns
-
-The temporal recogniser classifies the **trajectory** of detections over the
-last `window_size` (default 10) frames using linear regression on bounding
-box area and centroid position — no neural network, runs every frame at
-negligible CPU cost.
-
-| Pattern | What the recogniser sees | Risk |
+| Setting | Default | Effect |
 |---|---|---|
-| `STATIC_CLEAR` | No detection for most frames | 0.00 |
-| `CLEARING` | Detection present early, absent recently | 0.10 |
-| `UNCERTAIN` | Not enough history | 0.25 |
-| `CROSSING` | Centroid moving sideways, stable area | 0.45 |
-| `APPROACHING` | Area growing + obstacle centred | 0.70 |
-| `BLOCKING` | Large, centred, stationary | 0.85 |
+| `navigation_mode` | `predictive` | Starting navigation mode |
+| `world_model.risk_similarity_threshold` | `0.55` | V-JEPA 2 BLOCKED sensitivity |
+| `decision.weights.world_model` | `0.45` | V-JEPA 2 contribution to fused risk |
+| `decision.low_risk_max` | `0.30` | Below this → FORWARD |
+| `decision.medium_risk_max` | `0.60` | Below this → SLOW, above → STOP/REROUTE |
+| `robot.ultrasonic_stop_cm` | `15.0` | Hard stop distance (cm) from robot |
+| `detector.run_every_n_frames` | `2` | YOLOv8 cadence (CPU saving) |
+| `world_model.run_every_n_frames` | `8` | V-JEPA 2 cadence (CPU saving) |
+| `server.cmd_port` | `5003` | UI viewer command port |
+| `server.video_port` | `8003` | UI viewer video port |
+| `server.robot_cmd_port` | `5004` | Robot command port |
+| `server.robot_video_port` | `8004` | Robot video port |
+
+### Pi robot (`Code/Robot/config_robot.yaml`)
+
+| Setting | Default | Effect |
+|---|---|---|
+| `server_ip` | `192.168.1.100` | PC server IP address |
+| `robot_cmd_port` | `5004` | PC server command port |
+| `robot_video_port` | `8004` | PC server video port |
+| `camera.stream_width/height` | `400 × 300` | Camera JPEG resolution |
+| `robot.speed_full` | `1500` | Full-speed PWM |
+| `robot.speed_slow` | `800` | Reduced-speed PWM |
+| `ultrasonic.read_interval` | `0.1` | Seconds between ultrasonic reads |
 
 ---
 
@@ -413,43 +384,17 @@ negligible CPU cost.
 # Tests that need no GPU or hardware (run on any machine)
 pytest tests_rpi/ -v
 
-# Original ESP32-targeted tests
+# Original Freenove tests
 pytest tests/ -v
 ```
 
-24 tests run across 4 test files covering decision fusion, temporal
-patterns, world model mathematics, and camera buffer behaviour.
-
----
-
-## Configuration
-
-### Server — `Code/Server/config.yaml`
-
-| Setting | Default | Effect |
-|---|---|---|
-| `mode` | `demo` | `demo` (video file) or `live` (Pi camera) |
-| `detector.model` | `yolov8n.pt` | YOLOv8 model size (n/s/m) |
-| `detector.run_every_n_frames` | `2` | YOLOv8 cadence (CPU saving on Pi) |
-| `robot.speed_full` | `1500` | Full-speed PWM (max 4095) |
-| `robot.speed_slow` | `800` | Reduced-speed PWM |
-| `robot.ultrasonic_stop_cm` | `15.0` | Hard stop distance (cm) — safety override on Pi |
-| `camera.clip_length` | `16` | Frame buffer depth (must match client) |
-
-### Client — `Code/Client/config_client.yaml`
-
-| Setting | Default | Effect |
-|---|---|---|
-| `navigation_mode` | `predictive` | Starting mode on launch |
-| `world_model.device` | `cpu` | `cuda` / `mps` / `cpu` for V-JEPA 2 |
-| `world_model.risk_similarity_threshold` | `0.55` | V-JEPA 2 BLOCKED sensitivity |
-| `world_model.run_every_n_frames` | `8` | V-JEPA 2 inference cadence |
-| `decision.weights.world_model` | `0.45` | V-JEPA 2 contribution to fused risk |
-| `decision.weights.detector` | `0.35` | YOLOv8 contribution |
-| `decision.weights.temporal` | `0.20` | SSv2 temporal contribution |
-| `decision.low_risk_max` | `0.30` | Below this → FORWARD |
-| `decision.medium_risk_max` | `0.60` | Below this → SLOW, above → STOP/REROUTE |
-| `camera.clip_length` | `16` | Must match server `camera.clip_length` |
+39 tests across 6 test files, covering:
+- Decision fusion and hysteresis
+- SSv2 temporal motion patterns
+- V-JEPA 2 mathematics (no GPU needed)
+- Camera buffer (demo + tcp modes)
+- Robot TCP client protocol
+- Robot connection server protocol
 
 ---
 
@@ -460,14 +405,14 @@ Each run creates a timestamped directory under `logs_rpi/`:
 ```
 logs_rpi/
 └── run_20240515_143022_predictive/
-    ├── navigation_log.csv   # one row per frame: YOLO risk, action, sonic
+    ├── navigation_log.csv   # one row per frame
     ├── system.log           # Python logging output
     └── frames/              # annotated JPEGs (every 5th frame)
 ```
 
-The Pi-side CSV records `detector_risk` (YOLOv8) per frame. World model
-and temporal risk are computed on the client and are not in the Pi CSV.
-To capture all three signals, add logging to `ai_viewer.py`'s AI loop.
+The CSV captures all three risk signals separately (`detector_risk`,
+`world_model_risk`, `temporal_risk`) so you can plot predictive vs baseline risk
+trajectories from the same scenario.
 
 ---
 
@@ -475,9 +420,7 @@ To capture all three signals, add logging to `ai_viewer.py`'s AI loop.
 
 - Robot reaches the goal point reliably in both modes
 - Predictive mode visibly begins decelerating **earlier** than baseline mode
-- The V-JEPA 2 label in the **client UI** shows `BLOCKED` before the YOLO
-  bar crosses the SLOW threshold
+- The V-JEPA 2 label shows `BLOCKED` before the YOLOv8 detector fills the risk bar
 - Motion is smoother in predictive mode (fewer full stops from a cold start)
-- Pi side runs stably at ≥ 8 FPS on a Raspberry Pi 5 (YOLOv8 only)
-- Client AI loop runs at ≥ 10 Hz on a modern laptop (CPU or GPU)
-- All YOLO signals are logged to CSV on the Pi for post-run analysis
+- System runs stably at ≥ 8 FPS in demo mode
+- All signals are logged to CSV for post-run analysis

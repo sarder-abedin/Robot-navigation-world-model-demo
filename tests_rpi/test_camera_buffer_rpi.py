@@ -72,3 +72,56 @@ def test_get_clip_after_fill(cfg_demo):
     assert clip is not None
     assert len(clip) == cfg_demo["camera"]["clip_length"]
     buf.stop()
+
+
+@pytest.fixture
+def cfg_tcp(tmp_path):
+    path = os.path.join(os.path.dirname(__file__), "..", "Code", "Server", "config.yaml")
+    with open(path) as f:
+        cfg = yaml.safe_load(f)
+    cfg["mode"] = "tcp"
+    cfg["camera"]["ai_frame_size"] = 64
+    cfg["camera"]["clip_length"] = 4
+    return cfg
+
+
+def test_tcp_mode_starts_without_thread(cfg_tcp):
+    """In tcp mode start() should not launch a capture thread."""
+    from camera_buffer import CameraBuffer
+    buf = CameraBuffer(cfg_tcp)
+    buf.start()
+    # No thread started; buffer starts empty
+    assert len(buf) == 0
+    buf.stop()
+
+
+def test_push_frame_fills_buffer(cfg_tcp):
+    """push_frame() with valid JPEG bytes appends frames to the buffer."""
+    import cv2
+    from camera_buffer import CameraBuffer
+    buf = CameraBuffer(cfg_tcp)
+    buf.start()
+
+    # Encode a small synthetic JPEG
+    img = np.zeros((64, 64, 3), dtype=np.uint8)
+    _, jpg_buf = cv2.imencode(".jpg", img)
+    jpg_bytes = jpg_buf.tobytes()
+
+    assert len(buf) == 0
+    buf.push_frame(jpg_bytes)
+    assert len(buf) == 1
+    frame = buf.get_latest_frame()
+    assert frame is not None
+    assert frame.shape == (64, 64, 3)
+    buf.stop()
+
+
+def test_push_frame_invalid_bytes_ignored(cfg_tcp):
+    """push_frame() with non-JPEG bytes should not raise and not append."""
+    from camera_buffer import CameraBuffer
+    buf = CameraBuffer(cfg_tcp)
+    buf.start()
+
+    buf.push_frame(b"not_a_jpeg")
+    assert len(buf) == 0
+    buf.stop()

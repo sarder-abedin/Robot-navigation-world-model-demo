@@ -1,0 +1,45 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Dockerfile.server – PC/Laptop AI server
+#
+# Runs all AI (YOLOv8 + V-JEPA 2 + SSv2 + decision) and serves the UI viewer
+# on ports 5003/8003 and the robot on ports 5004/8004.
+#
+# GPU support (NVIDIA):
+#   docker build -f Dockerfile.server -t nav-server .
+#   docker run --gpus all -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
+#     -p 5003:5003 -p 5004:5004 -p 8003:8003 -p 8004:8004 nav-server
+#
+# CPU-only (no NVIDIA GPU):
+#   docker run -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
+#     -p 5003:5003 -p 5004:5004 -p 8003:8003 -p 8004:8004 nav-server
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
+
+# System dependencies for OpenCV + PyQt5 display
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    python3-pyqt5 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy server code and config
+COPY Code/Server/ ./Code/Server/
+COPY requirements_server.txt .
+COPY assets/ ./assets/
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements_server.txt
+
+WORKDIR /app/Code/Server
+
+# Expose UI viewer ports and robot connection ports
+EXPOSE 5003 8003 5004 8004
+
+CMD ["python", "main_server.py", "--mode", "demo", "--nav", "predictive"]
