@@ -98,8 +98,27 @@ class RobotTCPClient:
             return False
 
     def send_sonic(self, cm: float) -> bool:
-        """Send CMD_SONIC reading to PC."""
+        """Send CMD_SONIC reading to PC (legacy; prefer send_detection)."""
         return self._send_cmd(f"CMD_SONIC#{cm:.1f}\r\n")
+
+    def send_detection(
+        self,
+        risk_pct: int,
+        obs_in_center: bool,
+        area_frac_pct: int,
+        centroid_x_pct: int,
+        sonic_cm: float,
+    ) -> bool:
+        """
+        Send fused detection + ultrasonic result to PC.
+
+        Format: CMD_DETECTION#<risk_pct>#<in_center 0|1>#<area_pct>#<cx_pct>#<sonic_cm>
+        """
+        in_center_val = 1 if obs_in_center else 0
+        return self._send_cmd(
+            f"CMD_DETECTION#{risk_pct}#{in_center_val}"
+            f"#{area_frac_pct}#{centroid_x_pct}#{sonic_cm:.1f}\r\n"
+        )
 
     # ── Receive ───────────────────────────────────────────────────────────────
 

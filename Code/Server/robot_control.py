@@ -154,51 +154,45 @@ class MockRobotController:
 
 class TCPRobotController:
     """
-    Sends motor commands to the robot via a RobotConnectionServer TCP link.
+    Sends AI navigation actions to the robot via RobotConnectionServer.
 
-    Used in split-inference mode where the PC runs all AI and the Pi executes
-    motor commands received over the network.
+    In split-inference mode the PC computes the action (FORWARD/SLOW/STOP/REROUTE)
+    and sends it as CMD_AIMOVE.  The Pi executes the actual motor PWM mapping
+    locally, keeping real-time timing (e.g. reroute manoeuvres) on the hardware.
+
+    Manual CMD_MOTOR commands from the UI are relayed separately by main_server.py
+    and do NOT go through this controller.
     """
 
     def __init__(self, cfg: dict, robot_conn):
         r = cfg["robot"]
-        self._speed_full = r["speed_full"]
-        self._speed_slow = r["speed_slow"]
-        self._reroute_secs = r["reroute_turn_seconds"]
-        self._reroute_dir = r["reroute_direction"]
         self._sonic_stop_cm = r["ultrasonic_stop_cm"]
         self._use_sonic_guard = r.get("use_ultrasonic_guard", True)
         self._conn = robot_conn
 
     def forward(self) -> None:
         if self._sonic_blocked():
-            logger.info("Sonic guard: forward blocked – stopping instead")
+            logger.info("Sonic guard: forward blocked – sending STOP")
             self.stop()
             return
-        self._conn.send_motor_command(self._speed_full, self._speed_full)
+        self._conn.send_aimove("FORWARD")
 
     def slow_forward(self) -> None:
         if self._sonic_blocked():
             self.stop()
             return
-        self._conn.send_motor_command(self._speed_slow, self._speed_slow)
+        self._conn.send_aimove("SLOW")
 
     def stop(self) -> None:
-        self._conn.send_motor_command(0, 0)
+        self._conn.send_aimove("STOP")
 
     def reroute(self) -> None:
-        self.stop()
-        time.sleep(0.2)
-        if self._reroute_dir == "left":
-            self._conn.send_motor_command(-self._speed_slow, self._speed_slow)
-        else:
-            self._conn.send_motor_command(self._speed_slow, -self._speed_slow)
-        time.sleep(self._reroute_secs)
-        self.stop()
+        # Timed manoeuvre executes on the Pi; we just send the action
+        self._conn.send_aimove("REROUTE")
 
     def safe_stop(self) -> None:
         self._conn.send_stop()
-        logger.warning("SAFE STOP – TCP motor halt sent")
+        logger.warning("SAFE STOP – CMD_STOP sent to robot")
 
     def get_ultrasonic_risk(self) -> float:
         if not self._use_sonic_guard:

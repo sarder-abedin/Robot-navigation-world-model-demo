@@ -175,12 +175,19 @@ class AIPipeline:
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
             frame_idx += 1
 
-            # ── 2. YOLOv8 detection ───────────────────────────────────────────
-            try:
-                det_result = self._detector.detect(frame_rgb)
-            except Exception as exc:
-                logger.warning("Detector error: %s", exc)
-                continue
+            # ── 2. Detection (local YOLO in demo mode; CMD_DETECTION in live mode)
+            if self._robot_connection is not None and self._robot_connection.is_connected:
+                # Pi ran YOLOv8n and sent CMD_DETECTION – use that result
+                det_result = self._robot_connection.get_latest_detection()
+            elif self._detector is not None:
+                try:
+                    det_result = self._detector.detect(frame_rgb)
+                except Exception as exc:
+                    logger.warning("Detector error: %s", exc)
+                    continue
+            else:
+                from detector import DetectionResult
+                det_result = DetectionResult()  # empty – no detection source
 
             # ── 3. V-JEPA 2 world model prediction ───────────────────────────
             clip = self._cam_buf.get_clip()
@@ -278,8 +285,13 @@ class AIPipeline:
             self._cam_buf = CameraBuffer(cfg, freenove_camera=self._freenove_camera)
             self._cam_buf.start()
 
-        self._detector = Detector(cfg)
-        self._detector.load()
+        # Only load local YOLO in demo mode; live mode uses CMD_DETECTION from Pi
+        if self._robot_connection is None:
+            self._detector = Detector(cfg)
+            self._detector.load()
+        else:
+            self._detector = None
+            logger.info("Local YOLOv8 skipped – using CMD_DETECTION from Pi")
 
         self._world_model = WorldModel(cfg)
         self._world_model.load()

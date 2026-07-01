@@ -152,6 +152,65 @@ class TestRobotTCPClientSendFrame:
             except Exception:
                 pass
 
+    def test_send_detection_format(self):
+        """send_detection() sends a correctly-formatted CMD_DETECTION line."""
+        client, conns = self._setup_connected_client()
+        cmd_conn = conns[0]
+        cmd_conn.settimeout(2.0)
+
+        client.send_detection(
+            risk_pct=55,
+            obs_in_center=True,
+            area_frac_pct=12,
+            centroid_x_pct=48,
+            sonic_cm=33.5,
+        )
+
+        data = b""
+        while b"\n" not in data:
+            data += cmd_conn.recv(256)
+
+        assert b"CMD_DETECTION" in data
+        assert b"#55#" in data     # risk_pct
+        assert b"#1#" in data      # obs_in_center = True → 1
+        assert b"#12#" in data     # area_frac_pct
+        assert b"#48#" in data     # centroid_x_pct
+        assert b"33.5" in data     # sonic_cm
+
+        client.disconnect()
+        for s in conns:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+    def test_send_detection_not_in_center(self):
+        """send_detection() encodes obs_in_center=False as 0."""
+        client, conns = self._setup_connected_client()
+        cmd_conn = conns[0]
+        cmd_conn.settimeout(2.0)
+
+        client.send_detection(
+            risk_pct=10,
+            obs_in_center=False,
+            area_frac_pct=3,
+            centroid_x_pct=80,
+            sonic_cm=-1.0,
+        )
+
+        data = b""
+        while b"\n" not in data:
+            data += cmd_conn.recv(256)
+
+        assert b"CMD_DETECTION#10#0#" in data
+
+        client.disconnect()
+        for s in conns:
+            try:
+                s.close()
+            except Exception:
+                pass
+
 
 class TestRobotTCPClientRecv:
     def test_received_commands_queued(self):

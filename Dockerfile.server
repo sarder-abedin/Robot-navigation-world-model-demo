@@ -1,22 +1,35 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Dockerfile.server – PC/Laptop AI server
+# Dockerfile.server – PC/Laptop AI server (split-inference architecture)
 #
-# Runs all AI (YOLOv8 + V-JEPA 2 + SSv2 + decision) and serves the UI viewer
-# on ports 5003/8003 and the robot on ports 5004/8004.
+# This image runs the HEAVY AI on the PC:
+#   • V-JEPA 2 world model (predictive future-scene embedding)
+#   • SSv2-style temporal motion pattern recogniser
+#   • Decision fusion  (weighted risk → FORWARD / SLOW / STOP / REROUTE)
+#   • OpenCV HUD overlay + TCP servers for UI viewer and robot connection
 #
-# GPU support (NVIDIA):
+# NOTE: YOLOv8n is NOT loaded in live/tcp mode – the Pi runs it locally and
+#       sends CMD_DETECTION.  YOLOv8 is only used in demo mode (no robot).
+#
+# UI viewer ports: 5003 (cmd) / 8003 (video)
+# Robot ports:     5004 (cmd) / 8004 (video)
+#
+# GPU build (NVIDIA):
 #   docker build -f Dockerfile.server -t nav-server .
-#   docker run --gpus all -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
-#     -p 5003:5003 -p 5004:5004 -p 8003:8003 -p 8004:8004 nav-server
+#   docker run --gpus all \
+#     -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
+#     -v $(pwd)/assets:/app/assets:ro \
+#     -v $(pwd)/logs_rpi:/app/logs_rpi \
+#     nav-server
 #
-# CPU-only (no NVIDIA GPU):
-#   docker run -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
-#     -p 5003:5003 -p 5004:5004 -p 8003:8003 -p 8004:8004 nav-server
+# CPU-only / demo mode:
+#   docker run -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
+#     -v $(pwd)/assets:/app/assets:ro \
+#     nav-server python main_server.py --mode demo --nav predictive --no-display
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
 
-# System dependencies for OpenCV + PyQt5 display
+# System dependencies for OpenCV headless + PyQt5
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libglib2.0-0 \
@@ -29,17 +42,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy server code and config
+# Copy server code, config, and demo assets
 COPY Code/Server/ ./Code/Server/
 COPY requirements_server.txt .
 COPY assets/ ./assets/
 
-# Install Python dependencies
+# Install Python dependencies (V-JEPA 2 weights download on first run)
 RUN pip install --no-cache-dir -r requirements_server.txt
 
 WORKDIR /app/Code/Server
 
-# Expose UI viewer ports and robot connection ports
+# UI viewer ports and robot connection ports
 EXPOSE 5003 8003 5004 8004
 
-CMD ["python", "main_server.py", "--mode", "demo", "--nav", "predictive"]
+# Default: demo mode with predictive navigation, no display window
+CMD ["python", "main_server.py", "--mode", "demo", "--nav", "predictive", "--no-display"]

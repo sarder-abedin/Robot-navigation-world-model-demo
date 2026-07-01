@@ -172,3 +172,74 @@ class TestRobotConnectionServer:
         assert server.is_connected is False
         assert server.send_motor_command(0, 0) is False
         assert server.send_stop() is False
+
+    def test_detection_message_stored(self, cfg):
+        """CMD_DETECTION updates latest detection and sonic reading."""
+        from robot_connection import RobotConnectionServer
+
+        buf = MockCameraBuffer()
+        server = RobotConnectionServer(cfg, buf)
+        server.start()
+
+        cmd_s, vid_s = _connect_robot(cfg)
+        time.sleep(0.3)
+
+        cmd_s.sendall(b"CMD_DETECTION#72#1#15#45#28.3\r\n")
+        time.sleep(0.15)
+
+        det = server.get_latest_detection()
+        assert abs(det.raw_risk - 0.72) < 0.02
+        assert det.obstacle_in_center is True
+        assert abs(det.closest_area - 0.15) < 0.01
+        assert abs(server.get_sonic_cm() - 28.3) < 0.1
+
+        server.stop()
+        cmd_s.close()
+        vid_s.close()
+
+    def test_detection_no_obstacle(self, cfg):
+        """CMD_DETECTION with zero risk produces an empty-boxes DetectionResult."""
+        from robot_connection import RobotConnectionServer
+
+        buf = MockCameraBuffer()
+        server = RobotConnectionServer(cfg, buf)
+        server.start()
+
+        cmd_s, vid_s = _connect_robot(cfg)
+        time.sleep(0.3)
+
+        cmd_s.sendall(b"CMD_DETECTION#0#0#0#50#120.0\r\n")
+        time.sleep(0.15)
+
+        det = server.get_latest_detection()
+        assert det.raw_risk == 0.0
+        assert det.obstacle_in_center is False
+        assert det.boxes == []
+
+        server.stop()
+        cmd_s.close()
+        vid_s.close()
+
+    def test_send_aimove_sent_to_robot(self, cfg):
+        """send_aimove() sends CMD_AIMOVE#<action> over the command socket."""
+        from robot_connection import RobotConnectionServer
+
+        buf = MockCameraBuffer()
+        server = RobotConnectionServer(cfg, buf)
+        server.start()
+
+        cmd_s, vid_s = _connect_robot(cfg)
+        time.sleep(0.3)
+        cmd_s.settimeout(2.0)
+
+        server.send_aimove("FORWARD")
+
+        data = b""
+        while b"\n" not in data:
+            data += cmd_s.recv(128)
+
+        assert b"CMD_AIMOVE#FORWARD" in data
+
+        server.stop()
+        cmd_s.close()
+        vid_s.close()
