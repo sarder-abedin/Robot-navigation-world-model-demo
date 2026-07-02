@@ -29,14 +29,15 @@
 
 FROM python:3.11-slim-bookworm
 
-# System libraries for libcamera / picamera2 and OpenCV headless
+# System libraries available in standard Debian Bookworm.
+# Pi-specific camera packages (python3-picamera2, python3-libcamera, python3-kms++,
+# libcamera-apps-lite) are NOT in standard Debian repos — they live in the
+# Raspberry Pi Foundation's repo and must be pre-installed on the Pi host:
+#   sudo apt-get install -y python3-picamera2 python3-libcamera python3-kms++
+# The container accesses them at runtime via --privileged + device passthrough.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcamera-dev \
-    libcamera-apps-lite \
-    python3-libcamera \
-    python3-kms++ \
     python3-prctl \
-    python3-picamera2 \
     libatlas-base-dev \
     libglib2.0-0 \
     libgl1-mesa-glx \
@@ -48,11 +49,15 @@ WORKDIR /app
 COPY Code/Robot/ .
 COPY Code/Server/parameter.py .
 
-# Install Python dependencies including YOLOv8n
+# Install Python dependencies including YOLOv8n.
+# picamera2 pip wheel installs the Python layer; the required C libcamera bindings
+# must be installed on the Pi host (python3-picamera2 via apt) and are accessible
+# through the --privileged device passthrough at runtime.
 RUN pip install --no-cache-dir \
     "lgpio>=0.2.2.0" \
     "gpiozero>=2.0" \
     "ultralytics>=8.0.0" \
+    "picamera2>=0.3.12" \
     "numpy>=1.24.0" \
     "PyYAML>=6.0.0" \
     "opencv-python-headless>=4.8.0"
