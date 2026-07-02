@@ -35,12 +35,16 @@ FROM python:3.11-slim-bookworm
 # Raspberry Pi Foundation's repo and must be pre-installed on the Pi host:
 #   sudo apt-get install -y python3-picamera2 python3-libcamera python3-kms++
 # The container accesses them at runtime via --privileged + device passthrough.
+#
+# gcc/python3-dev/libcap-dev are needed to compile python-prctl (a picamera2 dep).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcamera-dev \
-    python3-prctl \
     libatlas-base-dev \
     libglib2.0-0 \
     libgl1-mesa-glx \
+    gcc \
+    python3-dev \
+    libcap-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
