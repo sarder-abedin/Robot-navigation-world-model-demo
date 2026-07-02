@@ -6,6 +6,53 @@ future obstacles — not just react to what is currently visible.
 
 ---
 
+## Quick Start
+
+### Fastest path — Docker on Mac / Linux (no robot needed)
+
+```bash
+git clone https://github.com/sarder-abedin/robot-navigation-world-model-demo
+cd robot-navigation-world-model-demo
+
+# Build the server image (arm64 Mac Apple Silicon + amd64 Linux both work)
+docker build -f Dockerfile.server -t nav-server .
+
+# Live mode — server waits for Pi to connect on ports 5004/8004
+docker run --rm \
+  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
+  nav-server python main_server.py --mode live --nav predictive --no-display
+
+# Demo mode — no robot needed; supply any corridor video first:
+#   mkdir -p assets/demo_clips && cp /path/to/corridor.mp4 assets/demo_clips/
+docker run --rm \
+  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
+  -v "$(pwd)/assets:/app/assets:ro" \
+  -v "$(pwd)/logs_rpi:/app/logs_rpi" \
+  nav-server
+```
+
+> **V-JEPA 2 weights** (~300 MB) are downloaded from HuggingFace automatically
+> on first run.  No GPU required — CPU-only inference works out of the box.
+
+### Fastest path — Raspberry Pi robot (Docker)
+
+```bash
+# On the Pi: install camera/GPIO host libs once
+sudo apt-get install -y python3-picamera2 python3-libcamera python3-kms++
+
+# Build the robot image (cross-compile on Mac/Linux or build directly on Pi)
+docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
+
+# Run (replace 192.168.1.42 with your PC's IP)
+docker run --rm --privileged \
+  --device /dev/video0 \
+  --device /dev/gpiochip4 \
+  -e SERVER_IP=192.168.1.42 \
+  nav-robot
+```
+
+---
+
 ## Architecture
 
 ```
@@ -284,53 +331,74 @@ python ai_viewer.py
 
 ### Option C – Docker (recommended for reproducibility)
 
-**PC server:**
+**PC server (`Dockerfile.server`):**
+
+The server image is built on `python:3.11-slim` (multi-platform: arm64 + amd64).
+No CUDA required. `opencv-python-headless` is used so no GL/X11 display libraries
+are needed — the server always runs headless (`--no-display`).
+
 ```bash
-# Build
+# Build (Mac Apple Silicon, Linux amd64, Linux arm64 — all work)
 docker build -f Dockerfile.server -t nav-server .
 
-# Run – demo mode, headless (no display needed)
+# Demo mode — place a video at assets/demo_clips/corridor.mp4 first
 docker run --rm \
   -p 5003:5003 -p 8003:8003 \
   -p 5004:5004 -p 8004:8004 \
-  -v $(pwd)/assets:/app/assets:ro \
-  -v $(pwd)/logs_rpi:/app/logs_rpi \
+  -v "$(pwd)/assets:/app/assets:ro" \
+  -v "$(pwd)/logs_rpi:/app/logs_rpi" \
   nav-server
 
-# Run – demo mode with OpenCV window (Linux host with X11)
-docker run --rm \
-  -p 5003:5003 -p 8003:8003 \
-  -p 5004:5004 -p 8004:8004 \
-  -v $(pwd)/assets:/app/assets:ro \
-  -e DISPLAY=$DISPLAY \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
-  nav-server python main_server.py --mode demo --nav predictive
-
-# Run – live mode (wait for Pi to connect)
+# Live mode — server waits for Pi to connect
 docker run --rm \
   -p 5003:5003 -p 8003:8003 \
   -p 5004:5004 -p 8004:8004 \
   nav-server python main_server.py --mode live --nav predictive --no-display
 
-# With GPU (requires nvidia-container-toolkit)
-docker run --rm --gpus all \
+# Baseline comparison
+docker run --rm \
   -p 5003:5003 -p 8003:8003 \
   -p 5004:5004 -p 8004:8004 \
-  -v $(pwd)/assets:/app/assets:ro \
-  nav-server python main_server.py --mode demo --nav predictive --no-display
+  -v "$(pwd)/assets:/app/assets:ro" \
+  nav-server python main_server.py --mode demo --nav baseline --no-display
 
-# Via docker compose
-NAV_MODE=demo docker compose -f docker-compose.server.yml up
+# Via docker compose (sets NAV_MODE and NAV_STRATEGY env vars)
+NAV_MODE=live NAV_STRATEGY=predictive docker compose -f docker-compose.server.yml up
+
+# NVIDIA GPU (Linux only — requires nvidia-container-toolkit)
+docker build \
+  --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 \
+  -f Dockerfile.server -t nav-server-gpu .
+docker run --rm --gpus all \
+  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
+  nav-server-gpu python main_server.py --mode live --nav predictive --no-display
 ```
 
-**Raspberry Pi robot (arm64):**
+**Raspberry Pi robot (`Dockerfile.robot`, arm64):**
+
+The robot image uses `python:3.11-slim-bookworm`.  Camera/GPIO packages
+(`python3-picamera2`, `python3-libcamera`, `python3-kms++`) are Raspberry Pi OS
+specific and **must be installed on the Pi host** before running the container —
+the container accesses them via device passthrough:
+
 ```bash
-# Build on Pi or via cross-compilation
+# One-time Pi host setup (run directly on the Pi, not in Docker)
+sudo apt-get install -y python3-picamera2 python3-libcamera python3-kms++
+
+# Build (cross-compile on Mac/Linux, or build directly on the Pi)
 docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
 
-# Run (replace with PC's actual IP)
+# Run on Pi — replace 192.168.1.42 with your PC's IP
 docker run --rm --privileged \
-  --device /dev/gpiochip4 \
+  --device /dev/video0:/dev/video0 \
+  --device /dev/gpiochip4:/dev/gpiochip4 \
+  -e SERVER_IP=192.168.1.42 \
+  nav-robot
+
+# Pi 4 uses /dev/gpiochip0 instead of /dev/gpiochip4
+docker run --rm --privileged \
+  --device /dev/video0:/dev/video0 \
+  --device /dev/gpiochip0:/dev/gpiochip0 \
   -e SERVER_IP=192.168.1.42 \
   nav-robot
 
@@ -338,8 +406,8 @@ docker run --rm --privileged \
 SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
 ```
 
-> **Note:** YOLOv8n weights are pre-downloaded during `docker build` for the
-> robot image so the container starts without a network call.
+> **YOLOv8n weights** (~6 MB) are pre-downloaded during `docker build` so the
+> container starts immediately without a network call.
 
 ---
 
