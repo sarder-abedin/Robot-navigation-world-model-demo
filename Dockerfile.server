@@ -1,35 +1,50 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Dockerfile.server – PC/Laptop AI server (split-inference architecture)
 #
-# This image runs the HEAVY AI on the PC:
+# This image runs the HEAVY AI on the PC/laptop:
 #   • V-JEPA 2 world model (predictive future-scene embedding)
 #   • SSv2-style temporal motion pattern recogniser
 #   • Decision fusion  (weighted risk → FORWARD / SLOW / STOP / REROUTE)
 #   • OpenCV HUD overlay + TCP servers for UI viewer and robot connection
 #
-# NOTE: YOLOv8n is NOT loaded in live/tcp mode – the Pi runs it locally and
-#       sends CMD_DETECTION.  YOLOv8 is only used in demo mode (no robot).
+# In LIVE mode YOLOv8n is NOT loaded here — the Pi runs it and sends
+# CMD_DETECTION.  YOLOv8 is only used in DEMO mode (no robot connected).
 #
-# UI viewer ports: 5003 (cmd) / 8003 (video)
-# Robot ports:     5004 (cmd) / 8004 (video)
+# ── Platform support ──────────────────────────────────────────────────────────
+# This Dockerfile uses python:3.11-slim and installs CPU-only PyTorch, so it
+# builds and runs natively on:
+#   • Mac Apple Silicon (arm64/M1/M2/M3)  ← recommended for Mac users
+#   • Linux amd64 (CPU-only)
+#   • Linux arm64
 #
-# GPU build (NVIDIA):
+# For NVIDIA GPU acceleration on Linux, replace the base image and use the
+# GPU variant of torch:
+#   docker build --build-arg USE_GPU=1 -f Dockerfile.server -t nav-server .
+# (see GPU variant comment at the RUN pip install step below)
+#
+# ── Quick start ───────────────────────────────────────────────────────────────
+# Build:
 #   docker build -f Dockerfile.server -t nav-server .
-#   docker run --gpus all \
+#
+# Demo mode (no robot, no display):
+#   docker run --rm \
 #     -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
 #     -v $(pwd)/assets:/app/assets:ro \
 #     -v $(pwd)/logs_rpi:/app/logs_rpi \
 #     nav-server
 #
-# CPU-only / demo mode:
-#   docker run -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
-#     -v $(pwd)/assets:/app/assets:ro \
-#     nav-server python main_server.py --mode demo --nav predictive --no-display
+# Live mode (wait for Pi to connect):
+#   docker run --rm \
+#     -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
+#     nav-server python main_server.py --mode live --nav predictive --no-display
+#
+# Via docker compose:
+#   docker compose -f docker-compose.server.yml up
 # ─────────────────────────────────────────────────────────────────────────────
 
-FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
+FROM python:3.11-slim
 
-# System dependencies for OpenCV headless + PyQt5
+# System dependencies for OpenCV + PyQt5
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libglib2.0-0 \
@@ -47,8 +62,21 @@ COPY Code/Server/ ./Code/Server/
 COPY requirements_server.txt .
 COPY assets/ ./assets/
 
-# Install Python dependencies (V-JEPA 2 weights download on first run)
-RUN pip install --no-cache-dir -r requirements_server.txt
+# Install Python dependencies.
+# pip resolves the correct torch wheel automatically for the build platform:
+#   arm64 (Mac M-series, Pi) → torch MPS/CPU wheels from PyPI
+#   amd64 Linux CPU          → torch CPU wheels from PyPI
+#
+# For NVIDIA GPU on Linux, build with:
+#   docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 \
+#                -f Dockerfile.server -t nav-server-gpu .
+ARG TORCH_INDEX=""
+RUN if [ -n "$TORCH_INDEX" ]; then \
+        pip install --no-cache-dir torch torchvision --index-url "$TORCH_INDEX" && \
+        pip install --no-cache-dir -r requirements_server.txt --no-deps; \
+    else \
+        pip install --no-cache-dir -r requirements_server.txt; \
+    fi
 
 WORKDIR /app/Code/Server
 

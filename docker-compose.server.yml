@@ -1,14 +1,22 @@
-# docker-compose.server.yml – Run the PC AI server
+# docker-compose.server.yml – Run the PC/Mac AI server
+#
+# Builds a multi-platform image (amd64 + arm64 / Mac Apple Silicon).
+# No CUDA required; uses CPU-only PyTorch by default.
 #
 # Usage:
-#   # Demo mode (no robot hardware):
+#   # Demo mode (no robot hardware, no display):
 #   docker compose -f docker-compose.server.yml up
 #
-#   # Live mode (robot must connect on 5004/8004):
+#   # Live mode (robot Pi must connect on 5004/8004):
 #   NAV_MODE=live docker compose -f docker-compose.server.yml up
 #
-# Allow the container to open the OpenCV window (run once on host):
-#   xhost +local:docker
+#   # Predictive vs baseline comparison run:
+#   NAV_STRATEGY=baseline docker compose -f docker-compose.server.yml up
+#
+# GPU variant (Linux + NVIDIA only):
+#   docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 \
+#                -f Dockerfile.server -t nav-server-gpu .
+#   # then change image: below to nav-server-gpu and uncomment the deploy block
 
 services:
   nav-server:
@@ -21,7 +29,7 @@ services:
       - NAV_MODE=${NAV_MODE:-demo}
       - NAV_STRATEGY=${NAV_STRATEGY:-predictive}
     volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw   # X11 for OpenCV window
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw   # X11 for OpenCV window (Linux only)
       - ./logs_rpi:/app/logs_rpi            # persist run logs
       - ./assets:/app/assets:ro             # demo video clips
     ports:
@@ -29,7 +37,7 @@ services:
       - "8003:8003"   # UI viewer (video)
       - "5004:5004"   # Robot cmd
       - "8004:8004"   # Robot video
-    # GPU support (requires nvidia-container-toolkit):
+    # Uncomment for NVIDIA GPU on Linux (requires nvidia-container-toolkit):
     # deploy:
     #   resources:
     #     reservations:
