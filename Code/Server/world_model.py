@@ -197,7 +197,7 @@ class WorldModel:
             mask[0, mask_start:] = True
 
             outputs = self._model(
-                pixel_values=pixel_values,
+                pixel_values_videos=pixel_values,
                 bool_masked_pos=mask,
             )
             # Mean-pool sequence dim → (D,)
