@@ -44,15 +44,11 @@
 
 FROM python:3.11-slim
 
-# System dependencies for OpenCV + PyQt5
+# libgomp1: OpenMP runtime required by PyTorch.
+# No X11/GL packages needed — the server always runs headless (--no-display)
+# and opencv-python-headless is force-installed below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
     libgomp1 \
-    python3-pyqt5 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -64,19 +60,24 @@ COPY assets/ ./assets/
 
 # Install Python dependencies.
 # pip resolves the correct torch wheel automatically for the build platform:
-#   arm64 (Mac M-series, Pi) → torch MPS/CPU wheels from PyPI
-#   amd64 Linux CPU          → torch CPU wheels from PyPI
+#   arm64 (Mac M-series) → torch CPU/MPS wheels from PyPI
+#   amd64 Linux CPU      → torch CPU wheels from PyPI
 #
 # For NVIDIA GPU on Linux, build with:
 #   docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 \
 #                -f Dockerfile.server -t nav-server-gpu .
+#
+# After installing requirements, force-reinstall opencv-python-headless so the
+# container never needs libGL/X11 display libraries regardless of the Debian
+# version (libgl1-mesa-glx was removed in Debian Trixie).
 ARG TORCH_INDEX=""
 RUN if [ -n "$TORCH_INDEX" ]; then \
         pip install --no-cache-dir torch torchvision --index-url "$TORCH_INDEX" && \
         pip install --no-cache-dir -r requirements_server.txt --no-deps; \
     else \
         pip install --no-cache-dir -r requirements_server.txt; \
-    fi
+    fi && \
+    pip install --no-cache-dir --force-reinstall opencv-python-headless
 
 WORKDIR /app/Code/Server
 
