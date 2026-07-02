@@ -13,9 +13,13 @@ class TankServer:
         self.videoServerIsBusy = False  # Flag to indicate whether the video server is busy
 
     def get_interface_ip(self):
-        # Get the IP address of the wlan0 interface
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # Create a UDP socket
-        return socket.inet_ntoa(fcntl.ioctl(s.fileno(), 0x8915, struct.pack('256s', b'wlan0'[:15]))[20:24])  # Get the IP address of the wlan0 interface
+        # Attempt to get the IP of wlan0; fall back to 0.0.0.0 (bind all interfaces)
+        # when running in Docker, on macOS, or on an Ethernet-only host.
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            return socket.inet_ntoa(fcntl.ioctl(s.fileno(), 0x8915, struct.pack('256s', b'wlan0'[:15]))[20:24])
+        except OSError:
+            return "0.0.0.0"
 
     def startTcpServer(self, port1=5003, port2=8003, max_clients=1, listen_count=1):
         # Start the TCP servers on specified ports
