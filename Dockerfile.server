@@ -67,15 +67,17 @@ COPY assets/ ./assets/
 #   docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 \
 #                -f Dockerfile.server -t nav-server-gpu .
 #
-# After installing requirements, force-reinstall opencv-python-headless so the
-# container never needs libGL/X11 display libraries regardless of the Debian
-# version (libgl1-mesa-glx was removed in Debian Trixie).
+# PyQt5 is stripped before install: it is viewer-only and has no pre-built
+# arm64 wheel, so pip would try to compile from source (needs qmake / Qt dev).
+# opencv-python-headless is force-reinstalled so the image never needs libGL/X11
+# (libgl1-mesa-glx was removed in Debian Trixie; server always runs --no-display).
 ARG TORCH_INDEX=""
-RUN if [ -n "$TORCH_INDEX" ]; then \
+RUN grep -v '^PyQt5' requirements_server.txt > /tmp/req_server.txt && \
+    if [ -n "$TORCH_INDEX" ]; then \
         pip install --no-cache-dir torch torchvision --index-url "$TORCH_INDEX" && \
-        pip install --no-cache-dir -r requirements_server.txt --no-deps; \
+        pip install --no-cache-dir -r /tmp/req_server.txt --no-deps; \
     else \
-        pip install --no-cache-dir -r requirements_server.txt; \
+        pip install --no-cache-dir -r /tmp/req_server.txt; \
     fi && \
     pip install --no-cache-dir --force-reinstall opencv-python-headless
 
