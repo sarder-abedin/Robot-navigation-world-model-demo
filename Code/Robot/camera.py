@@ -9,9 +9,6 @@ from __future__ import annotations
 import logging
 import threading
 
-import cv2
-import numpy as np
-
 logger = logging.getLogger(__name__)
 
 
@@ -34,6 +31,7 @@ class Camera:
     def get_frame(self) -> bytes | None:
         if self._picam is None:
             return None
+        import cv2
         with self._lock:
             frame_rgb = self._picam.capture_array()
         if frame_rgb is None:

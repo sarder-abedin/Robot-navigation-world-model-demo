@@ -18,8 +18,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-import numpy as np
-
 logger = logging.getLogger(__name__)
 
 
@@ -50,7 +48,7 @@ class DetectorRobot:
         self._model = YOLO(self._model_name)
         logger.info("DetectorRobot loaded: %s", self._model_name)
 
-    def detect(self, frame_bgr: np.ndarray) -> DetectionPacket:
+    def detect(self, frame_bgr) -> DetectionPacket:
         """
         Run YOLOv8n on a BGR numpy frame.
         Returns cached result on skipped frames to avoid stale data.
