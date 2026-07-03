@@ -241,18 +241,27 @@ class RobotConnectionServer:
                 rx_cmd.start()
                 rx_vid.start()
 
-                # Block until both recv threads exit (robot disconnected)
-                rx_cmd.join()
-                rx_vid.join()
+                # Wait until EITHER recv thread exits. If only one channel drops
+                # (e.g. the command socket errors while video keeps streaming),
+                # tearing down both prevents a half-connected state where the UI
+                # shows live video but send_aimove() silently fails because
+                # _connected is False and the robot never moves.
+                while self._running and rx_cmd.is_alive() and rx_vid.is_alive():
+                    rx_cmd.join(timeout=0.5)
 
                 self._connected = False
-                logger.info("Robot disconnected; ready to re-accept")
+                # Force the still-alive channel to unblock by closing its socket,
+                # then wait for both threads to finish before re-accepting.
                 for s in (self._cmd_client, self._video_client):
                     try:
                         if s:
                             s.close()
                     except Exception:
                         pass
+                rx_cmd.join(timeout=2.0)
+                rx_vid.join(timeout=2.0)
+
+                logger.info("Robot disconnected; ready to re-accept")
                 self._cmd_client = None
                 self._video_client = None
 
