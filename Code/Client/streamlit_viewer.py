@@ -147,7 +147,7 @@ class _Backend:
                                     "pattern":  p[4],
                                     "sonic":    p[5].strip(),
                                 }
-                            self.cmd_msgs += 1
+                                self.cmd_msgs += 1
             except Exception:
                 break
         self.running = False
@@ -178,7 +178,7 @@ class _Backend:
                     break
                 with self._lock:
                     self._jpg = jpg
-                self.vid_frames += 1
+                    self.vid_frames += 1
             except Exception:
                 break
 

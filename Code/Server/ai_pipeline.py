@@ -145,7 +145,8 @@ class AIPipeline:
 
     def set_motor_enabled(self, enabled: bool) -> None:
         """Enable or disable motor output without stopping the AI pipeline."""
-        self._motor_enabled = enabled
+        with self._state_lock:
+            self._motor_enabled = enabled
         logger.info("Motor output %s", "enabled" if enabled else "disabled (manual/off mode)")
 
     def set_navigation_mode(self, mode: str) -> None:
@@ -248,7 +249,9 @@ class AIPipeline:
             )
 
             # ── 7. Execute motor command ──────────────────────────────────────
-            if self._motor_enabled:
+            with self._state_lock:
+                motor_enabled = self._motor_enabled
+            if motor_enabled:
                 self._execute_action(self._robot, decision.action)
 
             # ── 8. Visualise ──────────────────────────────────────────────────

@@ -110,7 +110,12 @@ def main() -> None:
         try:
             motor = tankMotor(gpiochip=gpio_chip)
         except Exception as exc:
-            logger.warning("Motor init failed (%s) – motor disabled", exc)
+            logger.warning(
+                "Motor init failed (%s) – motor disabled. "
+                "If this says 'cannot open gpiochip', check --device /dev/gpiochip%d "
+                "and set -e GPIO_CHIP=%d in docker run.",
+                exc, gpio_chip, gpio_chip,
+            )
             motor = None
 
         try:
