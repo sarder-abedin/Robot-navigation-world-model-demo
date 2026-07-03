@@ -163,12 +163,27 @@ def main() -> None:
     # ── Camera streaming thread ──────────────────────────────────────────────
     def camera_loop():
         """Continuously stream JPEG frames to the PC for V-JEPA 2 inference."""
+        frames_sent = 0
+        none_ticks = 0
         while not _shutdown and client.is_connected:
             if mode == "live" and camera:
                 try:
                     jpg = camera.get_frame()
                     if jpg:
                         client.send_frame(jpg)
+                        frames_sent += 1
+                        if frames_sent == 1:
+                            logger.info("Camera streaming to PC – first frame sent (%d bytes)", len(jpg))
+                        none_ticks = 0
+                    else:
+                        none_ticks += 1
+                        # Warn ~once/5s if the camera keeps returning no frame
+                        if none_ticks % 150 == 1:
+                            logger.warning(
+                                "Camera get_frame() returned no frame – camera opened but "
+                                "not producing images (check CSI ribbon / /dev/video0)."
+                            )
+                        time.sleep(0.03)
                 except Exception as exc:
                     logger.warning("Camera stream error: %s", exc)
                     time.sleep(0.05)
