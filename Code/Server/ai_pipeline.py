@@ -59,15 +59,20 @@ class AIPipeline:
     objects without replacing them.
     """
 
-    def __init__(self, cfg_path: str = "config.yaml"):
-        with open(cfg_path) as f:
-            self._cfg = yaml.safe_load(f)
+    def __init__(self, cfg: dict | None = None, cfg_path: str = "config.yaml"):
+        if cfg is not None:
+            self._cfg = cfg
+        else:
+            with open(cfg_path) as f:
+                self._cfg = yaml.safe_load(f)
 
-        self._mode = cfg_path  # keep path for reloads
         self._nav_mode = self._cfg.get("navigation_mode", "predictive")
 
         self._state = AIState(navigation_mode=self._nav_mode)
         self._state_lock = threading.Lock()
+
+        self._last_annotated_bgr: np.ndarray | None = None
+        self._annotated_lock = threading.Lock()
 
         self._thread: threading.Thread | None = None
         self._running = False
@@ -125,7 +130,7 @@ class AIPipeline:
             self._state.running = False
         if self._robot:
             self._robot.safe_stop()
-        if self._cam_buf:
+        if self._cam_buf and self._ext_cam_buf is None:
             self._cam_buf.stop()
         if self._nav_logger:
             self._nav_logger.close()
@@ -157,9 +162,11 @@ class AIPipeline:
 
     def get_annotated_jpeg(self) -> bytes | None:
         """Return the latest annotated frame as JPEG bytes for TCP streaming."""
-        if self._last_annotated_bgr is None:
+        with self._annotated_lock:
+            bgr = self._last_annotated_bgr
+        if bgr is None:
             return None
-        return self._visualizer.encode_jpeg(self._last_annotated_bgr)
+        return self._visualizer.encode_jpeg(bgr)
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
@@ -202,8 +209,7 @@ class AIPipeline:
                        if wm_result.buffer_ready else det_result.raw_risk)
 
             # ── 4. Temporal motion pattern ────────────────────────────────────
-            from temporal_action import detection_to_state
-            obs_state = detection_to_state(det_result)
+            obs_state = self._detection_to_state(det_result)
             self._temporal.push(obs_state)
             temporal_result = self._temporal.classify()
 
@@ -236,14 +242,14 @@ class AIPipeline:
             )
 
             # ── 7. Execute motor command ──────────────────────────────────────
-            from robot_control import execute_action
-            execute_action(self._robot, decision.action)
+            self._execute_action(self._robot, decision.action)
 
             # ── 8. Visualise ──────────────────────────────────────────────────
             annotated = self._visualizer.annotate(
                 frame_bgr, det_result, decision, temporal_result, sonic_cm
             )
-            self._last_annotated_bgr = annotated
+            with self._annotated_lock:
+                self._last_annotated_bgr = annotated
             self._visualizer.show(annotated)
 
             # ── 9. Log ────────────────────────────────────────────────────────
@@ -300,9 +306,12 @@ class AIPipeline:
         self._fuser = DecisionFuser(cfg, self._nav_mode)
         # Use TCP controller when robot_connection available, else real/mock
         self._robot = build_robot_controller(cfg, self._freenove_car, self._robot_connection)
+        from temporal_action import detection_to_state
+        from robot_control import execute_action
+        self._detection_to_state = detection_to_state
+        self._execute_action = execute_action
         self._nav_logger = NavigationLogger(cfg, self._nav_mode)
         self._visualizer = Visualizer(cfg, self._nav_mode)
-        self._last_annotated_bgr: np.ndarray | None = None
 
     # ── TCP status broadcast ──────────────────────────────────────────────────
 

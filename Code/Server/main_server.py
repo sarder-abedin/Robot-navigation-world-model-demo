@@ -109,7 +109,7 @@ class PCNavigationServer:
             self._robot_conn = RobotConnectionServer(cfg, self._cam_buf)
 
         # AI pipeline
-        self._ai = AIPipeline(cfg_path=args.config if "args" in dir() else "config.yaml")
+        self._ai = AIPipeline(cfg=self._cfg)
 
         # UI TCP server (ports 5003/8003 – same as original Freenove protocol)
         self._tcp = TankServer()
@@ -270,6 +270,8 @@ def main() -> None:
         cfg["camera"]["demo_video_path"] = args.video
     if args.no_display:
         cfg["visualization"]["show_window"] = False
+    if args.nav:
+        cfg["navigation_mode"] = args.nav
 
     nav_mode = args.nav or cfg.get("navigation_mode", "predictive")
 
