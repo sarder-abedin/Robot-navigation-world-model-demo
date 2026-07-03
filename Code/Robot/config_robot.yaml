@@ -39,9 +39,12 @@ gpio:
   chip: 0
 
 # ── Motor control ─────────────────────────────────────────────────────────────
+# PWM duty is signed and maxes at 4095 (see motor.py _MAX_DUTY). 1500 is only
+# ~37% duty, which often just twitches the robot without sustaining motion on the
+# floor. 3000 (~73%) / 1800 (~44%) move it reliably. Lower these if it's too fast.
 robot:
-  speed_full: 1500
-  speed_slow: 800
+  speed_full: 3000
+  speed_slow: 1800
 
 # ── Ultrasonic sensor ─────────────────────────────────────────────────────────
 ultrasonic:

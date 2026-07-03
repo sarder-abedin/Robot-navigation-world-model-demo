@@ -127,19 +127,20 @@ class Camera:
         return buf.tobytes() if ok else None
 
     def close(self) -> None:
-        if self._picam:
+        # Take the capture lock so close() can't run mid-capture_array()/read()
+        # in the streaming thread (which would hang or crash picamera2 on stop).
+        with self._lock:
+            picam, self._picam = self._picam, None
+            cap, self._cap = self._cap, None
+        if picam:
             try:
-                self._picam.stop()
-                self._picam.close()
+                picam.stop()
+                picam.close()
             except Exception as exc:
                 logger.warning("Camera close error: %s", exc)
-            finally:
-                self._picam = None
-        if self._cap:
+        if cap:
             try:
-                self._cap.release()
+                cap.release()
             except Exception as exc:
                 logger.warning("Camera release error: %s", exc)
-            finally:
-                self._cap = None
         logger.info("Camera closed")

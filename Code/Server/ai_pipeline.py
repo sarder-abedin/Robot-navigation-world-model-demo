@@ -179,11 +179,12 @@ class AIPipeline:
 
     def _run_loop(self) -> None:
         frame_idx = 0
+        last_seq = -1
         no_frame_ticks = 0
         while self._running:
-            # ── 1. Grab latest frame ──────────────────────────────────────────
-            frame_rgb = self._cam_buf.get_latest_frame()
-            if frame_rgb is None:
+            # ── 1. Grab latest frame (only if it's a NEW one) ─────────────────
+            latest = self._cam_buf.get_latest()
+            if latest is None:
                 no_frame_ticks += 1
                 # Log once per ~5 s so the operator can see frames are missing
                 if no_frame_ticks % 250 == 1:
@@ -194,6 +195,14 @@ class AIPipeline:
                 time.sleep(0.02)
                 continue
             no_frame_ticks = 0
+
+            seq, frame_rgb = latest
+            if seq == last_seq:
+                # No new frame yet — don't reprocess the same one at thousands of
+                # fps (that floods CMD_AIMOVE/CMD_AISTATUS and starves the UI).
+                time.sleep(0.005)
+                continue
+            last_seq = seq
 
             try:
                 self._process_frame(frame_rgb, frame_idx + 1)

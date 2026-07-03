@@ -73,6 +73,14 @@ def _start_reroute(motor, speed_slow: int, reroute_secs: float) -> None:
     _reroute_thread.start()
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Read a truthy/falsy env var (1/0/true/false/yes/no); fall back to default."""
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
 def _signal_handler(sig, frame):
     global _shutdown
     _shutdown = True
@@ -121,13 +129,17 @@ def main() -> None:
         from detector_robot import DetectorRobot
 
         cam_cfg = cfg.get("camera", {})
+        # Orientation: default from config, but allow -e CAMERA_HFLIP / CAMERA_VFLIP
+        # to correct an upside-down feed at runtime without rebuilding the image.
+        hflip = _env_bool("CAMERA_HFLIP", cam_cfg.get("hflip", True))
+        vflip = _env_bool("CAMERA_VFLIP", cam_cfg.get("vflip", True))
         camera = Camera(
             stream_size=(
                 cam_cfg.get("stream_width", 400),
                 cam_cfg.get("stream_height", 300),
             ),
-            hflip=cam_cfg.get("hflip", True),
-            vflip=cam_cfg.get("vflip", True),
+            hflip=hflip,
+            vflip=vflip,
         )
         try:
             camera.start_stream()
