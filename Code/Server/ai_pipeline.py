@@ -351,11 +351,17 @@ class AIPipeline:
         if self._tcp_server is None:
             return
         try:
+            # Action / MotionPattern are (str, Enum) members; on Python 3.11+
+            # f"{member}" renders "Action.FORWARD" not "FORWARD", which breaks the
+            # wire protocol and the UI colour lookups. Emit the plain .value.
+            action = getattr(decision.action, "value", decision.action)
+            wm_label = getattr(decision.world_model_label, "value", decision.world_model_label)
+            pattern = getattr(temporal_result.pattern, "value", temporal_result.pattern)
             msg = (
-                f"CMD_AISTATUS#{decision.action}"
+                f"CMD_AISTATUS#{action}"
                 f"#{int(decision.risk_score * 100)}"
-                f"#{decision.world_model_label}"
-                f"#{temporal_result.pattern}"
+                f"#{wm_label}"
+                f"#{pattern}"
                 f"#{sonic_cm:.1f}\r\n"
             )
             if self._tcp_server.isCmdServerConnected():

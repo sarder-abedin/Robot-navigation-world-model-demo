@@ -73,7 +73,7 @@ class NavigationLogger:
                 "timestamp":       f"{ts:.4f}",
                 "frame_idx":       self._frame_idx,
                 "nav_mode":        self._nav_mode,
-                "action":          decision_result.action,
+                "action":          getattr(decision_result.action, "value", decision_result.action),
                 "risk_score":      f"{decision_result.risk_score:.4f}",
                 "detector_risk":   f"{decision_result.detector_risk:.4f}",
                 "world_model_risk":f"{decision_result.world_model_risk:.4f}",
@@ -138,6 +138,13 @@ class NavigationLogger:
     def close(self) -> None:
         if self._csv_file:
             self._csv_file.close()
+        # Detach the per-run FileHandler so repeated NavigationLogger instances
+        # (tests, pipeline restarts) don't accumulate handlers / leak fds and
+        # tee every record into every prior run's system.log.
+        if getattr(self, "_file_handler", None) is not None:
+            logging.getLogger().removeHandler(self._file_handler)
+            self._file_handler.close()
+            self._file_handler = None
         logger.info("Logger closed → %s", self._run_dir)
 
     # ── Private ───────────────────────────────────────────────────────────────
@@ -172,4 +179,5 @@ class NavigationLogger:
             "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
         ))
         root.addHandler(fh)
+        self._file_handler = fh  # kept so close() can detach it
         root.setLevel(level)

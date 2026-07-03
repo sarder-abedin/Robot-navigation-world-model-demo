@@ -38,7 +38,9 @@ class DetectorRobot:
         self._model_name = det.get("model", "yolov8n.pt")
         self._conf = det.get("conf", 0.35)
         self._center_zone_width = det.get("center_zone_width", 0.40)
-        self._run_every = det.get("run_every_n_frames", 2)
+        # max(1, …) so a misconfigured run_every_n_frames: 0 can't cause a
+        # ZeroDivisionError in the frame-count modulo every detect() call.
+        self._run_every = max(1, int(det.get("run_every_n_frames", 2)))
         self._model = None
         self._frame_count = 0
         self._last = DetectionPacket()
