@@ -58,6 +58,8 @@ class _Backend:
         self._vid:  socket.socket | None = None
         self.log   = "Not connected – enter the server IP and click Connect"
         self.mode  = "AUTO"
+        self.vid_frames = 0   # frames received from video socket
+        self.cmd_msgs   = 0   # CMD_AISTATUS messages received
 
     # ── Thread-safe reads (called from the Streamlit main thread) ──────────────
 
@@ -143,6 +145,7 @@ class _Backend:
                                     "pattern":  p[4],
                                     "sonic":    p[5].strip(),
                                 }
+                            self.cmd_msgs += 1
             except Exception:
                 break
         self.running = False
@@ -168,6 +171,7 @@ class _Backend:
                     break
                 with self._lock:
                     self._jpg = jpg
+                self.vid_frames += 1
             except Exception:
                 break
 
@@ -198,6 +202,7 @@ with c_ip:
         "PC / Server IP",
         value=st.session_state.get("server_ip", "localhost"),
         key="_ip_input",
+        help="Use 'localhost' when the AI server and this viewer run in the same Docker container.",
     )
     st.session_state.server_ip = ip
 
@@ -225,8 +230,9 @@ st.divider()
 
 @st.fragment(run_every=0.1)
 def _live_panel() -> None:
-    jpg = be.get_jpg()
-    s   = be.get_status()
+    be_ = _backend()
+    jpg = be_.get_jpg()
+    s   = be_.get_status()
 
     v_col, s_col = st.columns([3, 2])
 
@@ -234,8 +240,15 @@ def _live_panel() -> None:
         st.subheader("Live Video")
         if jpg:
             st.image(jpg, use_container_width=True)
+            st.caption(f"Frames received: {be_.vid_frames}")
         else:
-            st.info("No video – connect to the server to see the camera feed")
+            if be_.running:
+                st.warning(
+                    "Waiting for video… If this persists, ensure the server IP is `localhost` "
+                    "when viewer and AI server are in the same Docker container."
+                )
+            else:
+                st.info("No video – connect to the server to see the camera feed")
 
     with s_col:
         st.subheader("AI State")
@@ -282,6 +295,7 @@ def _live_panel() -> None:
             f"</div>",
             unsafe_allow_html=True,
         )
+        st.caption(f"Status messages received: {be_.cmd_msgs}")
 
 
 _live_panel()
