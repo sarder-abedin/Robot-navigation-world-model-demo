@@ -52,8 +52,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # dist-packages (/usr/lib/python3/dist-packages).  The python:3.11-bookworm base
 # image runs /usr/local/bin/python3, whose sys.path does NOT include that dir, so
 # `import picamera2` fails and the code silently falls back to OpenCV V4L2 — which
-# cannot read the Pi CSI camera.  Add dist-packages to the path so picamera2 works.
-ENV PYTHONPATH=/usr/lib/python3/dist-packages
+# cannot read the Pi CSI camera.
+#
+# We add dist-packages via a .pth file (site.addsitedir APPENDS it) rather than
+# PYTHONPATH (which PREPENDS).  Appending keeps the pip-installed numpy/OpenCV in
+# /usr/local ahead of the apt numpy in dist-packages, avoiding a numpy ABI clash
+# that would otherwise break `import cv2`, while still making picamera2 + libcamera
+# importable.
+RUN echo "import site; site.addsitedir('/usr/lib/python3/dist-packages')" \
+    > /usr/local/lib/python3.11/site-packages/zzz_dist_packages.pth
 
 WORKDIR /app
 
@@ -75,6 +82,18 @@ RUN pip install --no-cache-dir \
     "numpy>=1.24.0" \
     "PyYAML>=6.0.0" \
     "opencv-python-headless>=4.8.0"
+
+# ---------------------------------------------------------------------------
+# Verify the camera stack imports (fail the build if it does not).
+# This proves picamera2 + libcamera (apt, in /usr/lib/python3/dist-packages via
+# the .pth above) coexist with numpy + OpenCV (pip, in /usr/local site-packages)
+# in the SAME interpreter — catching both the "No module named picamera2" fallback
+# and any numpy/OpenCV ABI conflict at build time instead of silently at runtime.
+# Runs on the Pi (arm64) where this image is built; importing does not need the
+# camera hardware (only Picamera2() instantiation does).
+# ---------------------------------------------------------------------------
+
+RUN python3 -c "import numpy, cv2, picamera2, libcamera; print('camera stack import OK: numpy', numpy.__version__, '| cv2', cv2.__version__, '| picamera2 + libcamera present')"
 
 # ---------------------------------------------------------------------------
 # Download YOLO weights during build
