@@ -179,15 +179,31 @@ class AIPipeline:
 
     def _run_loop(self) -> None:
         frame_idx = 0
+        no_frame_ticks = 0
         while self._running:
             # ── 1. Grab latest frame ──────────────────────────────────────────
             frame_rgb = self._cam_buf.get_latest_frame()
             if frame_rgb is None:
+                no_frame_ticks += 1
+                # Log once per ~5 s so the operator can see frames are missing
+                if no_frame_ticks % 250 == 1:
+                    logger.warning(
+                        "AI pipeline waiting for camera frames – none in buffer yet. "
+                        "Check the robot camera stream (port 8004)."
+                    )
                 time.sleep(0.02)
                 continue
+            no_frame_ticks = 0
 
+            try:
+                self._process_frame(frame_rgb, frame_idx + 1)
+                frame_idx += 1
+            except Exception as exc:
+                logger.exception("AI pipeline frame error (continuing): %s", exc)
+                time.sleep(0.02)
+
+    def _process_frame(self, frame_rgb, frame_idx: int) -> None:
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-            frame_idx += 1
 
             # ── 2. Detection (local YOLO in demo mode; CMD_DETECTION in live mode)
             if self._robot_connection is not None and self._robot_connection.is_connected:
@@ -198,7 +214,7 @@ class AIPipeline:
                     det_result = self._detector.detect(frame_rgb)
                 except Exception as exc:
                     logger.warning("Detector error: %s", exc)
-                    continue
+                    return
             else:
                 from detector import DetectionResult
                 det_result = DetectionResult()  # empty – no detection source
