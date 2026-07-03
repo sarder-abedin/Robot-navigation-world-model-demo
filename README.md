@@ -214,7 +214,7 @@ Robot-navigation-world-model-demo/
 
 ## Setup
 
-### PC / Laptop (server + heavy AI)
+### PC / Laptop (TCP server – binds ports 5003/5004/8003/8004)
 
 ```bash
 # Clone the repo
@@ -228,23 +228,23 @@ pip install -r requirements_server.txt
 # If offline, the system falls back to a lightweight stub encoder.
 ```
 
-### Raspberry Pi (robot client + YOLOv8n)
+### Raspberry Pi (TCP client – robot hardware + YOLOv8n)
+
+The Pi connects **outbound** to the PC server; it does not bind any ports.
 
 ```bash
-# System packages (run once)
+# System packages (run once on the Pi)
 sudo apt-get update
 sudo apt-get install -y python3-picamera2 python3-libcamera \
   python3-gpiozero python3-kms++ python3-prctl libatlas-base-dev
 
 # Python packages (includes ultralytics for YOLOv8n)
+cd /path/to/robot-navigation-world-model-demo
 pip3 install -r Code/Robot/requirements_robot.txt
 
 # YOLOv8n weights (~6 MB) download automatically on first run.
 # To pre-download:
 python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
-
-# One-time: create hardware parameters file
-cd Code/Server && python3 parameter.py
 ```
 
 ---
