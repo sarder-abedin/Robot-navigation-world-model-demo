@@ -193,7 +193,23 @@ def main() -> None:
                 except Exception as exc:
                     logger.warning("Camera stream error: %s", exc)
                     time.sleep(0.05)
+            elif mode == "live":
+                # Live mode but the camera failed to initialise (camera is None).
+                # Do NOT stream a fake black frame: V-JEPA 2 reads it as an
+                # obstacle ("BLOCKED"), so the robot lurches forward then stops.
+                # Idle instead — the PC reports "waiting for camera frames" and
+                # the robot stays put until the camera is fixed (see the
+                # "Camera init failed" error logged at startup).
+                none_ticks += 1
+                if none_ticks % 100 == 1:
+                    logger.warning(
+                        "Live mode but camera is unavailable – not streaming video. "
+                        "Fix the camera (see 'Camera init failed' at startup; usually "
+                        "a missing '-v /run/udev:/run/udev:ro' mount) and restart."
+                    )
+                time.sleep(0.1)
             else:
+                # Demo mode (no hardware) – send a labelled placeholder frame.
                 import cv2
                 import numpy as np
                 blank = np.zeros((300, 400, 3), dtype=np.uint8)
