@@ -17,11 +17,6 @@ cd robot-navigation-world-model-demo
 # Build the server image (arm64 Mac Apple Silicon + amd64 Linux both work)
 docker build -f Dockerfile.server -t nav-server .
 
-# Live mode — server waits for Pi to connect on ports 5004/8004
-docker run --rm \
-  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
-  nav-server python main_server.py --mode live --nav predictive --no-display
-
 # Demo mode — no robot needed; supply any corridor video first:
 #   mkdir -p assets/demo_clips && cp /path/to/corridor.mp4 assets/demo_clips/
 docker run --rm \
@@ -29,7 +24,15 @@ docker run --rm \
   -v "$(pwd)/assets:/app/assets:ro" \
   -v "$(pwd)/logs_rpi:/app/logs_rpi" \
   nav-server
-# Then open http://localhost:8501 in your browser — the Streamlit UI starts automatically.
+# Wait for: "[start_server] Starting Streamlit on http://0.0.0.0:8501"
+# Then open http://localhost:8501 → enter "localhost" as server IP → Connect
+
+# Live mode — server + Streamlit UI, waits for Pi to connect on ports 5004/8004
+docker run --rm \
+  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
+  -e NAV_MODE=live \
+  nav-server
+# Then open http://localhost:8501 → enter "localhost" as server IP → Connect
 ```
 
 > **V-JEPA 2 weights** (~300 MB) are downloaded from HuggingFace automatically
@@ -47,11 +50,19 @@ docker run --rm --privileged \
   --device /dev/gpiochip0:/dev/gpiochip0 \
   -e SERVER_IP=192.168.1.42 \
   nav-robot
+
+# If gpiodetect shows your GPIO chip is gpiochip4 (older Pi 5 kernel):
+docker run --rm --privileged \
+  --device /dev/video0:/dev/video0 \
+  --device /dev/gpiochip4:/dev/gpiochip4 \
+  -e SERVER_IP=192.168.1.42 \
+  -e GPIO_CHIP=4 \
+  nav-robot
 ```
 
 > **Camera** — if `python3-picamera2` is installed on the Pi host the container uses it automatically; otherwise it falls back to OpenCV V4L2 via `/dev/video0` with no extra setup required.
 >
-> **GPIO chip** — Pi 5 kernel ≥ 6.6 uses `/dev/gpiochip0` (`pinctrl-rp1`). Run `gpiodetect` on the Pi to confirm which chip is labelled `pinctrl-rp1`. Set `gpio.chip` in `Code/Robot/config_robot.yaml` to match.
+> **GPIO chip** — Pi 5 kernel ≥ 6.6 uses `/dev/gpiochip0` (`pinctrl-rp1`). Run `gpiodetect` on the Pi to find the right chip. Pass `-e GPIO_CHIP=<N>` and `--device /dev/gpiochip<N>:/dev/gpiochip<N>` to match your kernel.
 
 ---
 
@@ -413,19 +424,26 @@ docker run --rm --gpus all \
 The robot image uses `python:3.11-slim-bookworm`.
 
 - **Camera** — tries `picamera2` first; falls back to OpenCV V4L2 via `/dev/video0` automatically if `libcamera` is not present. No host setup required for the fallback.
-- **GPIO chip** — Pi 5 kernel ≥ 6.6 uses `/dev/gpiochip0` (`pinctrl-rp1`). Run `gpiodetect` to confirm and set `gpio.chip` in `config_robot.yaml` accordingly.
+- **GPIO chip** — Pi 5 kernel ≥ 6.6 uses `/dev/gpiochip0` (`pinctrl-rp1`). Run `gpiodetect` on the Pi to find the right chip number. Pass `-e GPIO_CHIP=<N>` and `--device /dev/gpiochip<N>:/dev/gpiochip<N>` to match; no need to edit `config_robot.yaml`.
 
 ```bash
 # Build (cross-compile on Mac/Linux, or build directly on the Pi)
 docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
 
-# Run on Pi 5 (kernel ≥ 6.6) — replace 192.168.1.42 with your PC's IP
-#docker run --rm --privileged \
-#  --device /dev/video0:/dev/video0 \
-#  --device /dev/gpiochip0:/dev/gpiochip0 \
-#  -e SERVER_IP=192.168.1.42 \
-#  nav-robot
-docker run --rm --privileged   --device /dev/video0:/dev/video0   --device /dev/gpiochip0:/dev/gpiochip0   --device /dev/gpiochip0:/dev/gpiochip4   -e SERVER_IP=192.168.68.107   nav-robot
+# Run on Pi 5 (kernel ≥ 6.6, gpiochip0) — replace 192.168.1.42 with your PC's IP
+docker run --rm --privileged \
+  --device /dev/video0:/dev/video0 \
+  --device /dev/gpiochip0:/dev/gpiochip0 \
+  -e SERVER_IP=192.168.1.42 \
+  nav-robot
+
+# If gpiodetect shows gpiochip4 (older Pi 5 kernel):
+docker run --rm --privileged \
+  --device /dev/video0:/dev/video0 \
+  --device /dev/gpiochip4:/dev/gpiochip4 \
+  -e SERVER_IP=192.168.1.42 \
+  -e GPIO_CHIP=4 \
+  nav-robot
 
 # Via docker compose
 SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up

@@ -70,6 +70,7 @@ class AIPipeline:
 
         self._state = AIState(navigation_mode=self._nav_mode)
         self._state_lock = threading.Lock()
+        self._motor_enabled = True  # False when UI disables AI (CMD_AIMODE#0)
 
         self._last_annotated_bgr: np.ndarray | None = None
         self._annotated_lock = threading.Lock()
@@ -141,6 +142,11 @@ class AIPipeline:
         logger.info("AI pipeline stopped")
 
     # ── Runtime controls ──────────────────────────────────────────────────────
+
+    def set_motor_enabled(self, enabled: bool) -> None:
+        """Enable or disable motor output without stopping the AI pipeline."""
+        self._motor_enabled = enabled
+        logger.info("Motor output %s", "enabled" if enabled else "disabled (manual/off mode)")
 
     def set_navigation_mode(self, mode: str) -> None:
         """Switch between 'predictive' and 'baseline' at runtime."""
@@ -242,7 +248,8 @@ class AIPipeline:
             )
 
             # ── 7. Execute motor command ──────────────────────────────────────
-            self._execute_action(self._robot, decision.action)
+            if self._motor_enabled:
+                self._execute_action(self._robot, decision.action)
 
             # ── 8. Visualise ──────────────────────────────────────────────────
             annotated = self._visualizer.annotate(
