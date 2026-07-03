@@ -40,6 +40,9 @@ docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
 # Recommended: use compose — it already wires up the camera (video0 + media0/1),
 # both gpiochip nodes, and the udev mount. Just set your PC's IP:
 SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
+# If you get "unknown shorthand flag: 'f' in -f", the Compose V2 plugin is not
+# installed; use the hyphenated V1 binary instead, or the plain `docker run` below:
+#   SERVER_IP=192.168.1.42 docker-compose -f docker-compose.robot.yml up
 
 # Or the equivalent single docker run (Pi 5) — replace 192.168.1.42 with your PC's IP.
 # Note BOTH gpiochip mappings: on Pi 5 the lgpio pin factory needs the RP1
