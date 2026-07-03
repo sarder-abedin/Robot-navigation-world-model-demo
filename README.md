@@ -17,11 +17,6 @@ cd robot-navigation-world-model-demo
 # Build the server image (arm64 Mac Apple Silicon + amd64 Linux both work)
 docker build -f Dockerfile.server -t nav-server .
 
-# Live mode — server waits for Pi to connect on ports 5004/8004
-docker run --rm \
-  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
-  nav-server python main_server.py --mode live --nav predictive --no-display
-
 # Demo mode — no robot needed; supply any corridor video first:
 #   mkdir -p assets/demo_clips && cp /path/to/corridor.mp4 assets/demo_clips/
 docker run --rm \
@@ -29,7 +24,15 @@ docker run --rm \
   -v "$(pwd)/assets:/app/assets:ro" \
   -v "$(pwd)/logs_rpi:/app/logs_rpi" \
   nav-server
-# Then open http://localhost:8501 in your browser — the Streamlit UI starts automatically.
+# Wait for: "[start_server] Starting Streamlit on http://0.0.0.0:8501"
+# Then open http://localhost:8501 → enter "localhost" as server IP → Connect
+
+# Live mode — server + Streamlit UI, waits for Pi to connect on ports 5004/8004
+docker run --rm \
+  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
+  -e NAV_MODE=live \
+  nav-server
+# Then open http://localhost:8501 → enter "localhost" as server IP → Connect
 ```
 
 > **V-JEPA 2 weights** (~300 MB) are downloaded from HuggingFace automatically
