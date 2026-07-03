@@ -48,6 +48,7 @@ docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
 docker run --rm --privileged \
   --device /dev/video0:/dev/video0 \
   --device /dev/gpiochip0:/dev/gpiochip0 \
+  -v /run/udev:/run/udev:ro \
   -e SERVER_IP=192.168.1.42 \
   nav-robot
 
@@ -55,12 +56,13 @@ docker run --rm --privileged \
 docker run --rm --privileged \
   --device /dev/video0:/dev/video0 \
   --device /dev/gpiochip4:/dev/gpiochip4 \
+  -v /run/udev:/run/udev:ro \
   -e SERVER_IP=192.168.1.42 \
   -e GPIO_CHIP=4 \
   nav-robot
 ```
 
-> **Camera** — if `python3-picamera2` is installed on the Pi host the container uses it automatically; otherwise it falls back to OpenCV V4L2 via `/dev/video0` with no extra setup required.
+> **Camera (CSI)** — the container uses **picamera2/libcamera** to drive the Pi CSI camera (same stack as Freenove). `-v /run/udev:/run/udev:ro` is **required** so libcamera can enumerate the camera inside the container; with `--privileged` the camera device nodes under `/dev` are already available. If picamera2 cannot be imported the code falls back to OpenCV V4L2 on `/dev/video0`, but the CSI camera generally does **not** produce frames through that path — so if the PC log says *"waiting for camera frames"*, confirm the udev mount is present.
 >
 > **GPIO chip** — Pi 5 kernel ≥ 6.6 uses `/dev/gpiochip0` (`pinctrl-rp1`). Run `gpiodetect` on the Pi to find the right chip. Pass `-e GPIO_CHIP=<N>` and `--device /dev/gpiochip<N>:/dev/gpiochip<N>` to match your kernel.
 
@@ -423,7 +425,7 @@ docker run --rm --gpus all \
 
 The robot image uses `python:3.11-slim-bookworm`.
 
-- **Camera** — tries `picamera2` first; falls back to OpenCV V4L2 via `/dev/video0` automatically if `libcamera` is not present. No host setup required for the fallback.
+- **Camera (CSI)** — uses `picamera2`/`libcamera` (the same stack Freenove uses). Mount `-v /run/udev:/run/udev:ro` so libcamera can enumerate the camera inside the container. It falls back to OpenCV V4L2 on `/dev/video0` only if picamera2 cannot be imported, but the CSI camera generally will not stream through that fallback.
 - **GPIO chip** — Pi 5 kernel ≥ 6.6 uses `/dev/gpiochip0` (`pinctrl-rp1`). Run `gpiodetect` on the Pi to find the right chip number. Pass `-e GPIO_CHIP=<N>` and `--device /dev/gpiochip<N>:/dev/gpiochip<N>` to match; no need to edit `config_robot.yaml`.
 
 ```bash
@@ -434,6 +436,7 @@ docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
 docker run --rm --privileged \
   --device /dev/video0:/dev/video0 \
   --device /dev/gpiochip0:/dev/gpiochip0 \
+  -v /run/udev:/run/udev:ro \
   -e SERVER_IP=192.168.1.42 \
   nav-robot
 
@@ -441,6 +444,7 @@ docker run --rm --privileged \
 docker run --rm --privileged \
   --device /dev/video0:/dev/video0 \
   --device /dev/gpiochip4:/dev/gpiochip4 \
+  -v /run/udev:/run/udev:ro \
   -e SERVER_IP=192.168.1.42 \
   -e GPIO_CHIP=4 \
   nav-robot

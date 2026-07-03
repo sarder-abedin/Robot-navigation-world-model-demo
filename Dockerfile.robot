@@ -47,6 +47,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-prctl \
     && rm -rf /var/lib/apt/lists/*
 
+# ---------------------------------------------------------------------------
+# picamera2 / libcamera are apt packages that install into the *system* Python
+# dist-packages (/usr/lib/python3/dist-packages).  The python:3.11-bookworm base
+# image runs /usr/local/bin/python3, whose sys.path does NOT include that dir, so
+# `import picamera2` fails and the code silently falls back to OpenCV V4L2 — which
+# cannot read the Pi CSI camera.  Add dist-packages to the path so picamera2 works.
+ENV PYTHONPATH=/usr/lib/python3/dist-packages
+
 WORKDIR /app
 
 # ---------------------------------------------------------------------------
