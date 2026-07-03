@@ -93,7 +93,13 @@ def main() -> None:
             hflip=cam_cfg.get("hflip", True),
             vflip=cam_cfg.get("vflip", True),
         )
-        camera.start_stream()
+        try:
+            camera.start_stream()
+        except Exception as exc:
+            # A camera failure must not take down the whole robot – manual driving
+            # and the command channel still work without it.
+            logger.error("Camera init failed (%s) – continuing without camera stream", exc)
+            camera = None
 
         _gpio_env = os.environ.get("GPIO_CHIP")
         if _gpio_env is not None:
