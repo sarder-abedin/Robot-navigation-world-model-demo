@@ -93,6 +93,35 @@ class TCPServer:
         # Send a byte to the stop pipe to signal the server to stop
         self.stop_pipe_w.send(b'\x00')
 
+    def _send_all(self, client_socket, data, timeout=5.0):
+        """
+        Reliably send all bytes on a NON-BLOCKING socket.
+
+        Client sockets are non-blocking (see accept_connections). A plain
+        sendall() then raises BlockingIOError as soon as the kernel send buffer
+        fills — which happens the moment the robot starts moving and the
+        annotated JPEG frames get larger. The old code treated that transient
+        condition as a fatal error and dropped the client, so the UI video went
+        black and the connection "disconnected abruptly".
+
+        Here we send in a loop and, when the buffer is full (BlockingIOError),
+        wait for the socket to become writable again instead of giving up. We
+        only raise (→ remove the client) on a genuinely broken or stuck peer.
+        """
+        view = memoryview(data)
+        total = 0
+        n = len(data)
+        while total < n:
+            try:
+                sent = client_socket.send(view[total:])
+                if sent == 0:
+                    raise socket.error("connection broken during send")
+                total += sent
+            except BlockingIOError:
+                _, writable, _ = select.select([], [client_socket], [], timeout)
+                if not writable:
+                    raise socket.error("send timed out (client not draining)")
+
     def send_to_all_client(self, message):
         # Send a message to all connected clients
         for client_socket in list(self.client_sockets.keys()):
@@ -101,22 +130,22 @@ class TCPServer:
                     encoded_message = message.encode('utf-8')
                 else:
                     encoded_message = message
-                client_socket.sendall(encoded_message)
-            except socket.error as e:
-                print(f"Error sending data to {self.client_sockets[client_socket]}: {e}")
+                self._send_all(client_socket, encoded_message)
+            except (socket.error, OSError) as e:
+                print(f"Error sending data to {self.client_sockets.get(client_socket)}: {e}")
                 self.remove_client(client_socket)
 
     def send_to_client(self, client_address, message):
         # Send a message to a specific client
-        for client_socket, addr in self.client_sockets.items():
+        for client_socket, addr in list(self.client_sockets.items()):
             if addr == client_address:
                 try:
                     if isinstance(message, str):
                         encoded_message = message.encode('utf-8')
                     else:
                         encoded_message = message
-                    client_socket.sendall(encoded_message)
-                except socket.error as e:
+                    self._send_all(client_socket, encoded_message)
+                except (socket.error, OSError) as e:
                     print(f"Error sending data to {client_address}: {e}")
                     self.remove_client(client_socket)
                 return
