@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 import sys
 import threading
@@ -92,7 +93,7 @@ def main() -> None:
         )
         camera.start_stream()
 
-        gpio_chip = cfg.get("gpio", {}).get("chip", 4)
+        gpio_chip = int(os.environ.get("GPIO_CHIP", cfg.get("gpio", {}).get("chip", 0)))
         sonic_cfg = cfg.get("ultrasonic", {})
 
         try:

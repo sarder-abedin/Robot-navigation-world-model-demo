@@ -205,14 +205,17 @@ class PCNavigationServer:
             val = self._parser.intParameter[0] if self._parser.intParameter else -1
             if val == 0:
                 self._ai_active = False
+                self._ai.set_motor_enabled(False)
                 if self._robot_conn:
                     self._robot_conn.send_stop()
                 logger.info("AI control disabled by UI viewer")
             elif val == 1:
                 self._ai_active = True
+                self._ai.set_motor_enabled(True)
                 self._ai.set_navigation_mode("baseline")
             elif val == 2:
                 self._ai_active = True
+                self._ai.set_motor_enabled(True)
                 self._ai.set_navigation_mode("predictive")
             # Forward mode change to robot
             if self._robot_conn:
