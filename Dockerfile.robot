@@ -14,16 +14,19 @@
 # Run (on Raspberry Pi – replace <PC_IP> with your laptop/PC IP):
 #   docker run --privileged \
 #     --device /dev/video0:/dev/video0 \
-#     --device /dev/gpiochip4:/dev/gpiochip4 \
+#     --device /dev/gpiochip0:/dev/gpiochip0 \
 #     -e SERVER_IP=<PC_IP> \
 #     nav-robot
+#   Note: Pi 5 kernel ≥ 6.6 uses gpiochip0 (pinctrl-rp1); older Pi 5 kernels
+#   used gpiochip4. Run `gpiodetect` on the Pi to confirm the chip label.
 #
 # Via docker compose (recommended):
 #   SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
 #
 # Notes:
 #   --privileged   simplest for dev; replace with --device flags for production
-#   /dev/gpiochip4 is the GPIO chip on Pi 5 (Pi 4 uses /dev/gpiochip0)
+#   GPIO chip: Pi 5 kernel ≥ 6.6 → gpiochip0 (pinctrl-rp1)
+#              Pi 5 kernel < 6.6 → gpiochip4; Pi 4 → gpiochip0
 #   Camera: picamera2 pip pkg is installed; if libcamera is absent the robot
 #           falls back to OpenCV VideoCapture via /dev/video0 automatically
 # ─────────────────────────────────────────────────────────────────────────────
