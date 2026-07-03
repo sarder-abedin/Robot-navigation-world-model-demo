@@ -26,9 +26,12 @@ camera:
   stream_height: 300
 
 # ── GPIO chip ─────────────────────────────────────────────────────────────────
-# Pi 5 uses /dev/gpiochip4; Pi 4 and earlier use /dev/gpiochip0
+# Pi 5 kernel ≥ 6.6 (pinctrl-rp1): /dev/gpiochip0   ← current default
+# Pi 5 kernel  < 6.6               /dev/gpiochip4
+# Pi 4 and earlier                 /dev/gpiochip0
+# Run `gpiodetect` to confirm – look for the chip labelled "pinctrl-rp1" or "pinctrl-bcm2711"
 gpio:
-  chip: 4
+  chip: 0
 
 # ── Motor control ─────────────────────────────────────────────────────────────
 robot:
