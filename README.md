@@ -25,10 +25,11 @@ docker run --rm \
 # Demo mode — no robot needed; supply any corridor video first:
 #   mkdir -p assets/demo_clips && cp /path/to/corridor.mp4 assets/demo_clips/
 docker run --rm \
-  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
+  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
   -v "$(pwd)/assets:/app/assets:ro" \
   -v "$(pwd)/logs_rpi:/app/logs_rpi" \
   nav-server
+# Then open http://localhost:8501 in your browser — the Streamlit UI starts automatically.
 ```
 
 > **V-JEPA 2 weights** (~300 MB) are downloaded from HuggingFace automatically
@@ -84,12 +85,14 @@ docker run --rm --privileged \
                     │  CMD_AISTATUS (live AI state)
                     │  annotated JPEG frames
 ┌───────────────────┴──────────────────────────────────────────── ┐
-│  Operator laptop  (UI viewer)                                   │
+│  Operator browser  (Streamlit UI viewer)                        │
 │                                                                 │
-│  Code/Client/ai_viewer.py    ← connects to PC server 5003/8003  │
+│  Code/Client/streamlit_viewer.py  ← served on port 8501        │
+│    Open http://localhost:8501 — no install needed on Mac/Linux  │
+│  Code/Client/ai_viewer.py         ← PyQt5 alternative (native) │
 │  Shows: action, risk bars, V-JEPA 2 label, motion pattern       │
 │  AUTO mode:   AI decision fuser drives the robot                │
-│  MANUAL mode: operator drives via buttons / arrow keys          │
+│  MANUAL mode: operator drives via on-screen buttons             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -183,8 +186,9 @@ Robot-navigation-world-model-demo/
 │   │   ├── parameter.py          ← Pi hardware version detection
 │   │   ├── requirements_robot.txt← Pi Python deps (includes ultralytics)
 │   │   └── config_robot.yaml     ← Pi-side configuration
-│   └── Client/          ← UI viewer (connects to PC)
-│       └── ai_viewer.py          ← PyQt5 operator display (AUTO + MANUAL modes)
+│   └── Client/          ← UI viewers (connect to PC)
+│       ├── streamlit_viewer.py   ← browser UI (port 8501, bundled in Docker)
+│       └── ai_viewer.py          ← PyQt5 desktop UI (run natively if preferred)
 ├── tests_rpi/           ← unit tests (no GPU / hardware required)
 ├── Dockerfile.server    ← PC Docker image (V-JEPA 2 + SSv2 + decision)
 ├── Dockerfile.robot     ← Pi Docker image (arm64; YOLOv8n + hardware)
@@ -280,7 +284,18 @@ python main_server.py --mode demo --no-display
 
 In demo mode the server runs local YOLOv8n (no Pi needed).
 
-**Step 3 (optional)** – Connect the UI viewer while the server runs:
+**Step 3 (optional)** – Open the browser UI viewer:
+
+The Streamlit viewer only starts automatically inside Docker.  When running the server natively, launch it separately:
+
+```bash
+# Terminal 2 (while main_server.py is running in Terminal 1)
+pip install streamlit   # one-time
+streamlit run Code/Client/streamlit_viewer.py
+# Opens http://localhost:8501 — enter 127.0.0.1 as the server IP and click Connect
+```
+
+Alternatively, use the PyQt5 desktop viewer:
 
 ```bash
 pip install PyQt5 opencv-python numpy   # one-time
@@ -288,8 +303,6 @@ cd Code/Client
 python ai_viewer.py
 # Enter 127.0.0.1 (localhost) in the IP field and click Connect
 ```
-
-> **Docker server on Mac** — Docker Desktop maps container ports to localhost automatically, so enter `localhost` or `127.0.0.1` as the server IP.
 
 ---
 
@@ -324,9 +337,15 @@ The robot:
 3. Sends `CMD_DETECTION` (YOLO result + ultrasonic) to PC every 100 ms
 4. Awaits `CMD_AIMOVE` (AI actions) and `CMD_MOTOR` (manual commands)
 
-**Step 5 (optional)** – Connect the UI viewer from any machine on the network:
+**Step 5 (optional)** – Open the browser UI viewer from any machine on the network:
 
 ```bash
+# Option A – Streamlit (browser, recommended)
+pip install streamlit   # one-time
+streamlit run Code/Client/streamlit_viewer.py
+# Opens http://localhost:8501 — enter the PC server IP and click Connect
+
+# Option B – PyQt5 desktop viewer
 pip install PyQt5 opencv-python numpy   # one-time
 cd Code/Client
 python ai_viewer.py
@@ -354,27 +373,30 @@ are needed — the server always runs headless (`--no-display`).
 docker build -f Dockerfile.server -t nav-server .
 
 # Demo mode — place a video at assets/demo_clips/corridor.mp4 first
+# The container starts BOTH the AI server AND the Streamlit browser UI.
 docker run --rm \
   -p 5003:5003 -p 8003:8003 \
   -p 5004:5004 -p 8004:8004 \
+  -p 8501:8501 \
   -v "$(pwd)/assets:/app/assets:ro" \
   -v "$(pwd)/logs_rpi:/app/logs_rpi" \
   nav-server
+# Then open http://localhost:8501 — enter "localhost" as the server IP.
 
-# Live mode — server waits for Pi to connect
+# Live mode — server + viewer, waiting for Pi to connect
 docker run --rm \
   -p 5003:5003 -p 8003:8003 \
   -p 5004:5004 -p 8004:8004 \
-  nav-server python main_server.py --mode live --nav predictive --no-display
+  -p 8501:8501 \
+  -e NAV_MODE=live \
+  nav-server
 
-# Baseline comparison
+# Server only (no Streamlit viewer)
 docker run --rm \
-  -p 5003:5003 -p 8003:8003 \
-  -p 5004:5004 -p 8004:8004 \
-  -v "$(pwd)/assets:/app/assets:ro" \
-  nav-server python main_server.py --mode demo --nav baseline --no-display
+  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
+  nav-server python main_server.py --mode demo --nav predictive --no-display
 
-# Via docker compose (sets NAV_MODE and NAV_STRATEGY env vars)
+# Via docker compose (recommended — sets NAV_MODE and NAV_STRATEGY env vars)
 NAV_MODE=live NAV_STRATEGY=predictive docker compose -f docker-compose.server.yml up
 
 # NVIDIA GPU (Linux only — requires nvidia-container-toolkit)
@@ -382,8 +404,8 @@ docker build \
   --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 \
   -f Dockerfile.server -t nav-server-gpu .
 docker run --rm --gpus all \
-  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
-  nav-server-gpu python main_server.py --mode live --nav predictive --no-display
+  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
+  nav-server-gpu
 ```
 
 **Raspberry Pi robot (`Dockerfile.robot`, arm64):**
@@ -411,10 +433,24 @@ SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
 > **YOLOv8n weights** (~6 MB) are pre-downloaded during `docker build` so the
 > container starts immediately without a network call.
 
-**Operator UI viewer (`Code/Client/ai_viewer.py`):**
+**Operator UI viewer — Streamlit (browser-based, recommended):**
 
-The viewer is a lightweight PyQt5 app that connects to the PC server over TCP.
-It is **not** part of the server Docker image's runtime — run it natively:
+The Streamlit viewer is bundled in the server Docker image and starts automatically via `start_server.sh`.  No installation needed on the client machine.
+
+```
+Open http://localhost:8501 in any browser after starting the container.
+Enter the server IP (use "localhost" when the viewer runs on the same machine).
+```
+
+| Scenario | URL to open | Server IP to enter |
+|---|---|---|
+| Docker on Mac / Linux same machine | `http://localhost:8501` | `localhost` |
+| Server in Docker Desktop on Mac | `http://localhost:8501` | `localhost` |
+| Server on a remote LAN machine | `http://<server-LAN-IP>:8501` | `localhost` |
+
+**Operator UI viewer — PyQt5 (native desktop, optional):**
+
+Run natively when you prefer a desktop window or need keyboard controls:
 
 ```bash
 # Install once (on Mac, Linux, or Windows)
@@ -425,28 +461,22 @@ cd Code/Client
 python ai_viewer.py
 ```
 
-| Scenario | Server IP to enter in viewer |
-|---|---|
-| Server running natively on the same machine | `localhost` |
-| Server in Docker Desktop on Mac | `localhost` (Docker Desktop maps ports) |
-| Server in Docker on a remote Linux machine | that machine's LAN IP |
-| Server and viewer on different LAN machines | PC server's LAN IP |
-
 ---
 
 ## Operator UI controls
 
-| Control | Action |
-|---|---|
-| **AUTO MODE** / `Ctrl+A` | AI decision fuser drives the robot (predictive mode) |
-| **MANUAL MODE** / `Ctrl+M` | Operator controls motors directly; AI is paused |
-| **PREDICTIVE** / `Ctrl+P` | Switch to V-JEPA 2 predictive mode (AUTO only) |
-| **BASELINE** / `Ctrl+B` | Switch to reactive-only baseline mode (AUTO only) |
-| **Arrow keys** ↑↓←→ | Drive in MANUAL mode (hold = move, release = stop) |
-| **On-screen drive buttons** | Same as arrow keys; tap-and-hold |
-| **Speed: Full / Slow** | Toggle between full PWM and slow PWM in MANUAL mode |
-| **EMERGENCY STOP** / `Space` / `Esc` | Immediately cut motor power and disable AI |
-| **SHUTDOWN SERVER** / `Ctrl+Q` | Send `CMD_KILL` – stop motors, shut down server |
+Both the Streamlit browser viewer and the PyQt5 desktop viewer provide the same controls.  Keyboard shortcuts are only available in the PyQt5 viewer.
+
+| Control | Streamlit | PyQt5 shortcut | Action |
+|---|---|---|---|
+| **AUTO MODE** | button | `Ctrl+A` | AI decision fuser drives the robot |
+| **MANUAL MODE** | button | `Ctrl+M` | Operator controls motors directly; AI is paused |
+| **PREDICTIVE** | button | `Ctrl+P` | Switch to V-JEPA 2 predictive mode |
+| **BASELINE** | button | `Ctrl+B` | Switch to reactive-only baseline mode |
+| **Drive buttons** | ▲▼◄► buttons | Arrow keys (hold) | Manual drive in MANUAL mode |
+| **Speed: Full / Slow** | radio | — | Toggle between full PWM and slow PWM |
+| **EMERGENCY STOP** | button | `Space` / `Esc` | Cut motor power and disable AI |
+| **SHUTDOWN SERVER** | button | `Ctrl+Q` | Send `CMD_KILL` – stop motors, shut down server |
 
 ---
 
