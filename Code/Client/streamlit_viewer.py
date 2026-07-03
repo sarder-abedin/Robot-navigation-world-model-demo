@@ -87,7 +87,7 @@ class _Backend:
                 v = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 v.settimeout(3.0)
                 v.connect((ip, VIDEO_PORT))
-                v.settimeout(None)  # blocking recv; daemon thread exits on disconnect
+                v.settimeout(15.0)  # long enough for AI pipeline warmup; catches dead server
                 self._vid = v
                 threading.Thread(target=self._recv_vid, daemon=True, name="VideoRecv").start()
                 self.log = f"Connected to {ip}:{CMD_PORT}  |  video stream active"
@@ -110,6 +110,8 @@ class _Backend:
         self._cmd = self._vid = None
         with self._lock:
             self._jpg = None
+        self.vid_frames = 0
+        self.cmd_msgs = 0
         self.log = "Disconnected"
 
     # ── Send ───────────────────────────────────────────────────────────────────
@@ -145,7 +147,7 @@ class _Backend:
                                     "pattern":  p[4],
                                     "sonic":    p[5].strip(),
                                 }
-                            self.cmd_msgs += 1
+                                self.cmd_msgs += 1
             except Exception:
                 break
         self.running = False
@@ -154,7 +156,12 @@ class _Backend:
         def _exact(n: int) -> bytes | None:
             b = b""
             while len(b) < n:
-                chunk = self._vid.recv(n - len(b))
+                try:
+                    chunk = self._vid.recv(n - len(b))
+                except socket.timeout:
+                    if not self.running:
+                        return None
+                    continue  # pipeline may be slow to start; keep waiting
                 if not chunk:
                     return None
                 b += chunk
@@ -171,7 +178,7 @@ class _Backend:
                     break
                 with self._lock:
                     self._jpg = jpg
-                self.vid_frames += 1
+                    self.vid_frames += 1
             except Exception:
                 break
 
@@ -243,10 +250,18 @@ def _live_panel() -> None:
             st.caption(f"Frames received: {be_.vid_frames}")
         else:
             if be_.running:
-                st.warning(
-                    "Waiting for video… If this persists, ensure the server IP is `localhost` "
-                    "when viewer and AI server are in the same Docker container."
-                )
+                connected_ip = st.session_state.get("server_ip", "")
+                if connected_ip in ("localhost", "127.0.0.1", "0.0.0.0", ""):
+                    st.warning(
+                        "Waiting for video… AI pipeline may still be loading. "
+                        "If this persists, check that the AI server started "
+                        "(look for 'AI pipeline started' in server logs)."
+                    )
+                else:
+                    st.info(
+                        f"Waiting for video from {connected_ip}… "
+                        "AI pipeline may still be warming up."
+                    )
             else:
                 st.info("No video – connect to the server to see the camera feed")
 
