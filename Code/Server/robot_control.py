@@ -169,26 +169,47 @@ class TCPRobotController:
         self._sonic_stop_cm = r["ultrasonic_stop_cm"]
         self._use_sonic_guard = r.get("use_ultrasonic_guard", True)
         self._conn = robot_conn
+        self._last_sent: str | None = None
+
+    def _send(self, action: str) -> None:
+        """Send a CMD_AIMOVE and make the outcome visible in the log.
+
+        send_aimove() returns False when the robot COMMAND channel (port 5004)
+        is not connected — which can happen while the VIDEO channel (8004) is
+        still delivering frames, so the UI shows live video but the robot never
+        moves. Log on every action change, and warn loudly when a command could
+        not be delivered so this failure mode is obvious.
+        """
+        ok = self._conn.send_aimove(action)
+        if action != self._last_sent:
+            if ok:
+                logger.info("AI → robot: CMD_AIMOVE#%s", action)
+            else:
+                logger.warning(
+                    "AI → robot: CMD_AIMOVE#%s NOT delivered – robot command "
+                    "channel (port 5004) is not connected", action,
+                )
+            self._last_sent = action
 
     def forward(self) -> None:
         if self._sonic_blocked():
             logger.info("Sonic guard: forward blocked – sending STOP")
             self.stop()
             return
-        self._conn.send_aimove("FORWARD")
+        self._send("FORWARD")
 
     def slow_forward(self) -> None:
         if self._sonic_blocked():
             self.stop()
             return
-        self._conn.send_aimove("SLOW")
+        self._send("SLOW")
 
     def stop(self) -> None:
-        self._conn.send_aimove("STOP")
+        self._send("STOP")
 
     def reroute(self) -> None:
         # Timed manoeuvre executes on the Pi; we just send the action
-        self._conn.send_aimove("REROUTE")
+        self._send("REROUTE")
 
     def safe_stop(self) -> None:
         self._conn.send_stop()
