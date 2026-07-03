@@ -38,23 +38,35 @@
 #     -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
 #     nav-server python main_server.py --mode live --nav predictive --no-display
 #
+# Operator UI viewer – run NATIVELY on Mac (recommended) or via X11 on Linux:
+#   Mac:   cd Code/Client && pip install PyQt5 opencv-python numpy && python ai_viewer.py
+#          (enter 'localhost' as server IP – Docker Desktop maps ports to host)
+#   Linux: xhost +local:docker
+#          docker run --rm -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
+#            nav-server python Code/Client/ai_viewer.py
+#
 # Via docker compose:
 #   docker compose -f docker-compose.server.yml up
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM python:3.11-slim
 
-# libgomp1: OpenMP runtime required by PyTorch.
-# No X11/GL packages needed — the server always runs headless (--no-display)
-# and opencv-python-headless is force-installed below.
+# libgomp1:        OpenMP runtime for PyTorch.
+# libqt5widgets5 / libqt5gui5 / libqt5core5a: Qt5 runtime for PyQt5 (ai_viewer.py).
+# libxcb-xinerama0: xcb platform plugin needed by Qt5 on Linux.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
+    libqt5widgets5 \
+    libqt5gui5 \
+    libqt5core5a \
+    libxcb-xinerama0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy server code, config, and demo assets
+# Copy server code, viewer, config, and demo assets
 COPY Code/Server/ ./Code/Server/
+COPY Code/Client/ ./Code/Client/
 COPY requirements_server.txt .
 COPY assets/ ./assets/
 
@@ -67,18 +79,20 @@ COPY assets/ ./assets/
 #   docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 \
 #                -f Dockerfile.server -t nav-server-gpu .
 #
-# PyQt5 is stripped before install: it is viewer-only and has no pre-built
-# arm64 wheel, so pip would try to compile from source (needs qmake / Qt dev).
-# opencv-python-headless is force-reinstalled so the image never needs libGL/X11
-# (libgl1-mesa-glx was removed in Debian Trixie; server always runs --no-display).
+# opencv-python-headless is force-reinstalled so the AI pipeline never needs
+# libGL/X11 (server always runs --no-display).
+#
+# PyQt5 note: pre-built wheels exist for amd64 Linux only.
+#   • amd64 Linux → installs fine; viewer can run inside container via X11 forward.
+#   • arm64 Linux (Mac M-series Docker) → no wheel; build skips it gracefully.
+#     On Mac, run ai_viewer.py NATIVELY and connect to localhost:5003/8003.
 ARG TORCH_INDEX=""
-RUN grep -v '^PyQt5' requirements_server.txt > /tmp/req_server.txt && \
+RUN grep -v '^PyQt5' requirements_server.txt > /tmp/req_no_qt.txt && \
     if [ -n "$TORCH_INDEX" ]; then \
-        pip install --no-cache-dir torch torchvision --index-url "$TORCH_INDEX" && \
-        pip install --no-cache-dir -r /tmp/req_server.txt --no-deps; \
-    else \
-        pip install --no-cache-dir -r /tmp/req_server.txt; \
+        pip install --no-cache-dir torch torchvision --index-url "$TORCH_INDEX"; \
     fi && \
+    pip install --no-cache-dir -r /tmp/req_no_qt.txt && \
+    (pip install --no-cache-dir PyQt5 || echo "PyQt5 skipped – no arm64 wheel; run ai_viewer.py natively") && \
     pip install --no-cache-dir --force-reinstall opencv-python-headless
 
 WORKDIR /app/Code/Server
