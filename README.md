@@ -44,27 +44,25 @@ docker run --rm \
 # Build the robot image (cross-compile on Mac/Linux or build directly on Pi)
 docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
 
-# Run on Pi 5 (kernel ≥ 6.6) — replace 192.168.1.42 with your PC's IP
+# Recommended: use compose — it already wires up the camera (video0 + media0/1),
+# both gpiochip nodes, and the udev mount. Just set your PC's IP:
+SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
+
+# Or the equivalent single docker run (Pi 5) — replace 192.168.1.42 with your PC's IP.
+# Note BOTH gpiochip mappings: on Pi 5 the lgpio pin factory needs the RP1
+# controller visible at chip 4 as well, or motors fail with "can not open gpiochip".
 docker run --rm --privileged \
   --device /dev/video0:/dev/video0 \
   --device /dev/gpiochip0:/dev/gpiochip0 \
+  --device /dev/gpiochip0:/dev/gpiochip4 \
   -v /run/udev:/run/udev:ro \
   -e SERVER_IP=192.168.1.42 \
-  nav-robot
-
-# If gpiodetect shows your GPIO chip is gpiochip4 (older Pi 5 kernel):
-docker run --rm --privileged \
-  --device /dev/video0:/dev/video0 \
-  --device /dev/gpiochip4:/dev/gpiochip4 \
-  -v /run/udev:/run/udev:ro \
-  -e SERVER_IP=192.168.1.42 \
-  -e GPIO_CHIP=4 \
   nav-robot
 ```
 
 > **Camera (CSI)** — the container uses **picamera2/libcamera** to drive the Pi CSI camera (same stack as Freenove). `-v /run/udev:/run/udev:ro` is **required** so libcamera can enumerate the camera inside the container; with `--privileged` the camera device nodes under `/dev` are already available. If picamera2 cannot be imported the code falls back to OpenCV V4L2 on `/dev/video0`, but the CSI camera generally does **not** produce frames through that path — so if the PC log says *"waiting for camera frames"*, confirm the udev mount is present.
 >
-> **GPIO chip** — Pi 5 kernel ≥ 6.6 uses `/dev/gpiochip0` (`pinctrl-rp1`). Run `gpiodetect` on the Pi to find the right chip. Pass `-e GPIO_CHIP=<N>` and `--device /dev/gpiochip<N>:/dev/gpiochip<N>` to match your kernel.
+> **GPIO chip** — on Pi 5 the RP1 controller is `/dev/gpiochip0`, but the lgpio pin factory also probes `gpiochip4`, so map the host controller to **both** container nodes (`--device /dev/gpiochip0:/dev/gpiochip0 --device /dev/gpiochip0:/dev/gpiochip4`) as shown above. If motors log `can not open gpiochip`, that second mapping is missing. Run `gpiodetect` on the host to confirm which chip is `pinctrl-rp1`.
 
 ---
 
@@ -426,31 +424,25 @@ docker run --rm --gpus all \
 The robot image uses `python:3.11-slim-bookworm`.
 
 - **Camera (CSI)** — uses `picamera2`/`libcamera` (the same stack Freenove uses). Mount `-v /run/udev:/run/udev:ro` so libcamera can enumerate the camera inside the container. It falls back to OpenCV V4L2 on `/dev/video0` only if picamera2 cannot be imported, but the CSI camera generally will not stream through that fallback.
-- **GPIO chip** — Pi 5 kernel ≥ 6.6 uses `/dev/gpiochip0` (`pinctrl-rp1`). Run `gpiodetect` on the Pi to find the right chip number. Pass `-e GPIO_CHIP=<N>` and `--device /dev/gpiochip<N>:/dev/gpiochip<N>` to match; no need to edit `config_robot.yaml`.
+- **GPIO chip** — on Pi 5 the RP1 controller is `/dev/gpiochip0`, but the lgpio pin factory also probes `gpiochip4`; map the host controller to **both** container nodes (shown below) or motors fail with `can not open gpiochip`. Run `gpiodetect` on the host to confirm which chip is `pinctrl-rp1`.
 
 ```bash
 # Build (cross-compile on Mac/Linux, or build directly on the Pi)
 docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
 
-# Run on Pi 5 (kernel ≥ 6.6, gpiochip0) — replace 192.168.1.42 with your PC's IP
+# Recommended — docker compose wires up camera + both gpiochips + udev for you:
+SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
+
+# Equivalent single docker run (Pi 5) — replace 192.168.1.42 with your PC's IP.
+# BOTH gpiochip mappings are required (RP1 is gpiochip0 but lgpio also probes 4),
+# and -v /run/udev is required for libcamera to find the CSI camera.
 docker run --rm --privileged \
   --device /dev/video0:/dev/video0 \
   --device /dev/gpiochip0:/dev/gpiochip0 \
+  --device /dev/gpiochip0:/dev/gpiochip4 \
   -v /run/udev:/run/udev:ro \
   -e SERVER_IP=192.168.1.42 \
   nav-robot
-
-# If gpiodetect shows gpiochip4 (older Pi 5 kernel):
-docker run --rm --privileged \
-  --device /dev/video0:/dev/video0 \
-  --device /dev/gpiochip4:/dev/gpiochip4 \
-  -v /run/udev:/run/udev:ro \
-  -e SERVER_IP=192.168.1.42 \
-  -e GPIO_CHIP=4 \
-  nav-robot
-
-# Via docker compose
-SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
 ```
 
 > **YOLOv8n weights** (~6 MB) are pre-downloaded during `docker build` so the

@@ -48,6 +48,19 @@ class Camera:
                 hflip=1 if self._hflip else 0,
                 vflip=1 if self._vflip else 0,
             )
+            # libcamera enumerates cameras via the udev socket. In Docker that
+            # socket must be mounted; otherwise global_camera_info() is empty and
+            # Picamera2() raises an opaque IndexError. Check first and give a
+            # clear, actionable message.
+            cameras = Picamera2.global_camera_info()
+            if not cameras:
+                raise RuntimeError(
+                    "libcamera found no cameras. In Docker this almost always means "
+                    "the udev socket is not mounted — add '-v /run/udev:/run/udev:ro' "
+                    "to your docker run (or use 'docker compose -f docker-compose.robot.yml up', "
+                    "which already mounts it). Also confirm the CSI ribbon is seated and the "
+                    "camera works on the host with: rpicam-hello --list-cameras"
+                )
             self._picam = Picamera2()
             config = self._picam.create_video_configuration(
                 main={"format": "RGB888", "size": (self._width, self._height)},
