@@ -217,11 +217,11 @@ with c_btn:
     st.write("")
     st.write("")
     if be.running:
-        if st.button("Disconnect", use_container_width=True):
+        if st.button("Disconnect", width="stretch"):
             be.disconnect()
             st.rerun()
     else:
-        if st.button("Connect", type="primary", use_container_width=True):
+        if st.button("Connect", type="primary", width="stretch"):
             be.connect(ip)
             st.rerun()
 
@@ -246,7 +246,7 @@ def _live_panel() -> None:
     with v_col:
         st.subheader("Live Video")
         if jpg:
-            st.image(jpg, use_container_width=True)
+            st.image(jpg, width="stretch")
             st.caption(f"Frames received: {be_.vid_frames}")
         else:
             if be_.running:
@@ -321,11 +321,11 @@ st.divider()
 st.subheader("Navigation Mode")
 nm1, nm2 = st.columns(2)
 with nm1:
-    if st.button("🔵  PREDICTIVE  (V-JEPA 2 active)", use_container_width=True, type="primary"):
+    if st.button("🔵  PREDICTIVE  (V-JEPA 2 active)", width="stretch", type="primary"):
         be.send("CMD_AIMODE#2\n")
         be.log = "Switched to PREDICTIVE mode"
 with nm2:
-    if st.button("🟡  BASELINE  (reactive, no V-JEPA 2)", use_container_width=True):
+    if st.button("🟡  BASELINE  (reactive, no V-JEPA 2)", width="stretch"):
         be.send("CMD_AIMODE#1\n")
         be.log = "Switched to BASELINE mode"
 
@@ -337,14 +337,14 @@ st.subheader("Drive Control")
 d1, d2 = st.columns(2)
 with d1:
     auto_type = "primary" if be.mode == "AUTO" else "secondary"
-    if st.button("🤖  AUTO MODE  (AI drives)", use_container_width=True, type=auto_type):
+    if st.button("🤖  AUTO MODE  (AI drives)", width="stretch", type=auto_type):
         be.mode = "AUTO"
         be.send("CMD_AIMODE#2\n")
         be.log = "AUTO MODE – AI decision fuser is driving"
         st.rerun()
 with d2:
     man_type = "primary" if be.mode == "MANUAL" else "secondary"
-    if st.button("🕹️  MANUAL MODE  (you drive)", use_container_width=True, type=man_type):
+    if st.button("🕹️  MANUAL MODE  (you drive)", width="stretch", type=man_type):
         be.mode = "MANUAL"
         be.send("CMD_AIMODE#0\n")
         be.send("CMD_MOTOR#0#0\n")
@@ -359,23 +359,23 @@ if be.mode == "MANUAL":
 
     _, cfwd, _ = st.columns([1, 1, 1])
     with cfwd:
-        if st.button("▲  Forward", use_container_width=True):
+        if st.button("▲  Forward", width="stretch"):
             be.send(f"CMD_MOTOR#{spd}#{spd}\n")
 
     cleft, cstop, cright = st.columns(3)
     with cleft:
-        if st.button("◄  Turn Left", use_container_width=True):
+        if st.button("◄  Turn Left", width="stretch"):
             be.send(f"CMD_MOTOR#-{spd}#{spd}\n")
     with cstop:
-        if st.button("■  STOP", use_container_width=True):
+        if st.button("■  STOP", width="stretch"):
             be.send("CMD_MOTOR#0#0\n")
     with cright:
-        if st.button("Turn Right  ►", use_container_width=True):
+        if st.button("Turn Right  ►", width="stretch"):
             be.send(f"CMD_MOTOR#{spd}#-{spd}\n")
 
     _, cback, _ = st.columns([1, 1, 1])
     with cback:
-        if st.button("▼  Backward", use_container_width=True):
+        if st.button("▼  Backward", width="stretch"):
             be.send(f"CMD_MOTOR#-{spd}#-{spd}\n")
 
     st.caption("Each button sends one motor command. For sustained motion, click repeatedly or hold the button.")
@@ -390,7 +390,7 @@ with ks1:
     if st.button(
         "⚡  EMERGENCY STOP  — halt motors & disable AI",
         type="primary",
-        use_container_width=True,
+        width="stretch",
     ):
         be.send("CMD_AIMODE#0\n")
         be.send("CMD_MOTOR#0#0\n")
@@ -399,7 +399,7 @@ with ks1:
 with ks2:
     if st.button(
         "🔴  SHUTDOWN SERVER  — stop the entire server process",
-        use_container_width=True,
+        width="stretch",
     ):
         be.send("CMD_KILL#0\n")
         be.log = "Shutdown command sent – server is stopping"
