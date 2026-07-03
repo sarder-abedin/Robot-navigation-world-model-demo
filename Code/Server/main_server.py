@@ -84,7 +84,6 @@ class PCNavigationServer:
     def __init__(self, cfg: dict, nav_mode: str):
         self._cfg = cfg
         self._nav_mode = nav_mode
-        self._ai_active = True
 
         from camera_buffer import CameraBuffer
         from server import TankServer
@@ -204,17 +203,14 @@ class PCNavigationServer:
         if cmd == self.CMD_AIMODE:
             val = self._parser.intParameter[0] if self._parser.intParameter else -1
             if val == 0:
-                self._ai_active = False
                 self._ai.set_motor_enabled(False)
                 if self._robot_conn:
                     self._robot_conn.send_stop()
                 logger.info("AI control disabled by UI viewer")
             elif val == 1:
-                self._ai_active = True
                 self._ai.set_motor_enabled(True)
                 self._ai.set_navigation_mode("baseline")
             elif val == 2:
-                self._ai_active = True
                 self._ai.set_motor_enabled(True)
                 self._ai.set_navigation_mode("predictive")
             # Forward mode change to robot
@@ -222,9 +218,11 @@ class PCNavigationServer:
                 self._robot_conn.send_aimode(val)
 
         elif cmd == self.CMD_MOTOR:
-            # Manual motor command from operator UI – relay directly to robot
+            # Manual motor command from operator UI – disable AI then relay so the
+            # pipeline cannot override this command on the next frame.
             if self._robot_conn and len(self._parser.intParameter) >= 2:
                 L, R = self._parser.intParameter[0], self._parser.intParameter[1]
+                self._ai.set_motor_enabled(False)
                 self._robot_conn.send_motor_command(L, R)
                 logger.debug("Manual CMD_MOTOR relayed: L=%d R=%d", L, R)
             elif self._robot_conn:

@@ -93,7 +93,18 @@ def main() -> None:
         )
         camera.start_stream()
 
-        gpio_chip = int(os.environ.get("GPIO_CHIP", cfg.get("gpio", {}).get("chip", 0)))
+        _gpio_env = os.environ.get("GPIO_CHIP")
+        if _gpio_env is not None:
+            try:
+                gpio_chip = int(_gpio_env)
+            except ValueError:
+                logger.error(
+                    "GPIO_CHIP env var must be an integer (e.g. 0 or 4), got: %r -- exiting",
+                    _gpio_env,
+                )
+                sys.exit(1)
+        else:
+            gpio_chip = int(cfg.get("gpio", {}).get("chip", 0))
         sonic_cfg = cfg.get("ultrasonic", {})
 
         try:
