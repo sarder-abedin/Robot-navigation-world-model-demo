@@ -91,8 +91,25 @@ def main() -> None:
             )
         )
         camera.start_stream()
-        motor = tankMotor()
-        ultrasonic = Ultrasonic()
+
+        gpio_chip = cfg.get("gpio", {}).get("chip", 4)
+        sonic_cfg = cfg.get("ultrasonic", {})
+
+        try:
+            motor = tankMotor(gpiochip=gpio_chip)
+        except Exception as exc:
+            logger.warning("Motor init failed (%s) – motor disabled", exc)
+            motor = None
+
+        try:
+            ultrasonic = Ultrasonic(
+                trigger_pin=sonic_cfg.get("trigger_pin", 27),
+                echo_pin=sonic_cfg.get("echo_pin", 22),
+                gpiochip=gpio_chip,
+            )
+        except Exception as exc:
+            logger.warning("Ultrasonic init failed (%s) – sensor disabled", exc)
+            ultrasonic = None
 
         detector = DetectorRobot(cfg)
         try:
