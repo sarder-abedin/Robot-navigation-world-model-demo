@@ -420,11 +420,12 @@ The robot image uses `python:3.11-slim-bookworm`.
 docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
 
 # Run on Pi 5 (kernel ≥ 6.6) — replace 192.168.1.42 with your PC's IP
-docker run --rm --privileged \
-  --device /dev/video0:/dev/video0 \
-  --device /dev/gpiochip0:/dev/gpiochip0 \
-  -e SERVER_IP=192.168.1.42 \
-  nav-robot
+#docker run --rm --privileged \
+#  --device /dev/video0:/dev/video0 \
+#  --device /dev/gpiochip0:/dev/gpiochip0 \
+#  -e SERVER_IP=192.168.1.42 \
+#  nav-robot
+docker run --rm --privileged   --device /dev/video0:/dev/video0   --device /dev/gpiochip0:/dev/gpiochip0   --device /dev/gpiochip0:/dev/gpiochip4   -e SERVER_IP=192.168.68.107   nav-robot
 
 # Via docker compose
 SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
