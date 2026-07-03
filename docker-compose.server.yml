@@ -1,10 +1,10 @@
-# docker-compose.server.yml – Run the PC/Mac AI server
+# docker-compose.server.yml – Run the PC/Mac AI server + Streamlit UI viewer
 #
-# Builds a multi-platform image (amd64 + arm64 / Mac Apple Silicon).
-# No CUDA required; uses CPU-only PyTorch by default.
+# The container starts both the AI navigation server AND the Streamlit viewer.
+# After starting, open http://localhost:8501 in your browser.
 #
 # Usage:
-#   # Demo mode (no robot hardware, no display):
+#   # Demo mode (no robot hardware):
 #   docker compose -f docker-compose.server.yml up
 #
 #   # Live mode (robot Pi must connect on 5004/8004):
@@ -25,18 +25,17 @@ services:
       dockerfile: Dockerfile.server
     image: nav-server:latest
     environment:
-      - DISPLAY=${DISPLAY:-:0}
       - NAV_MODE=${NAV_MODE:-demo}
       - NAV_STRATEGY=${NAV_STRATEGY:-predictive}
     volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw   # X11 for OpenCV window (Linux only)
       - ./logs_rpi:/app/logs_rpi            # persist run logs
       - ./assets:/app/assets:ro             # demo video clips
     ports:
-      - "5003:5003"   # UI viewer (cmd)
-      - "8003:8003"   # UI viewer (video)
+      - "5003:5003"   # AI server cmd  (used by Streamlit viewer internally)
+      - "8003:8003"   # AI server video (used by Streamlit viewer internally)
       - "5004:5004"   # Robot cmd
       - "8004:8004"   # Robot video
+      - "8501:8501"   # Streamlit browser UI  ← open http://localhost:8501
     # Uncomment for NVIDIA GPU on Linux (requires nvidia-container-toolkit):
     # deploy:
     #   resources:
@@ -45,9 +44,4 @@ services:
     #         - driver: nvidia
     #           count: all
     #           capabilities: [gpu]
-    command: >
-      python main_server.py
-        --mode ${NAV_MODE:-demo}
-        --nav ${NAV_STRATEGY:-predictive}
-        --no-display
     restart: unless-stopped

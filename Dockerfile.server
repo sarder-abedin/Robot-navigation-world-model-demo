@@ -6,6 +6,7 @@
 #   • SSv2-style temporal motion pattern recogniser
 #   • Decision fusion  (weighted risk → FORWARD / SLOW / STOP / REROUTE)
 #   • OpenCV HUD overlay + TCP servers for UI viewer and robot connection
+#   • Streamlit browser-based operator UI on port 8501
 #
 # In LIVE mode YOLOv8n is NOT loaded here — the Pi runs it and sends
 # CMD_DETECTION.  YOLOv8 is only used in DEMO mode (no robot connected).
@@ -26,24 +27,24 @@
 # Build:
 #   docker build -f Dockerfile.server -t nav-server .
 #
-# Demo mode (no robot, no display):
+# Demo mode (no robot):
 #   docker run --rm \
-#     -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
+#     -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
 #     -v $(pwd)/assets:/app/assets:ro \
 #     -v $(pwd)/logs_rpi:/app/logs_rpi \
 #     nav-server
+#   Then open http://localhost:8501 in your browser.
 #
 # Live mode (wait for Pi to connect):
 #   docker run --rm \
-#     -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
-#     nav-server python main_server.py --mode live --nav predictive --no-display
+#     -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
+#     -e NAV_MODE=live \
+#     nav-server
 #
-# Operator UI viewer – run NATIVELY on Mac (recommended) or via X11 on Linux:
-#   Mac:   cd Code/Client && pip install PyQt5 opencv-python numpy && python ai_viewer.py
-#          (enter 'localhost' as server IP – Docker Desktop maps ports to host)
-#   Linux: xhost +local:docker
-#          docker run --rm -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
-#            nav-server python Code/Client/ai_viewer.py
+# Server only (no Streamlit):
+#   docker run --rm \
+#     -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
+#     nav-server python main_server.py --mode demo --nav predictive --no-display
 #
 # Via docker compose:
 #   docker compose -f docker-compose.server.yml up
@@ -64,11 +65,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy server code, viewer, config, and demo assets
+# Copy server code, viewer, config, demo assets, and startup script
 COPY Code/Server/ ./Code/Server/
 COPY Code/Client/ ./Code/Client/
 COPY requirements_server.txt .
 COPY assets/ ./assets/
+COPY start_server.sh /app/start_server.sh
+RUN chmod +x /app/start_server.sh
 
 # Install Python dependencies.
 # pip resolves the correct torch wheel automatically for the build platform:
@@ -82,23 +85,26 @@ COPY assets/ ./assets/
 # opencv-python-headless is force-reinstalled so the AI pipeline never needs
 # libGL/X11 (server always runs --no-display).
 #
+# streamlit is installed from requirements_server.txt – works on all platforms.
+#
 # PyQt5 note: pre-built wheels exist for amd64 Linux only.
-#   • amd64 Linux → installs fine; viewer can run inside container via X11 forward.
-#   • arm64 Linux (Mac M-series Docker) → no wheel; build skips it gracefully.
-#     On Mac, run ai_viewer.py NATIVELY and connect to localhost:5003/8003.
+#   • amd64 Linux → installs fine; ai_viewer.py can run via X11 forward.
+#   • arm64 Linux (Mac M-series Docker) → no wheel; gracefully skipped.
+#     Use the Streamlit viewer (http://localhost:8501) on Mac instead.
 ARG TORCH_INDEX=""
 RUN grep -v '^PyQt5' requirements_server.txt > /tmp/req_no_qt.txt && \
     if [ -n "$TORCH_INDEX" ]; then \
         pip install --no-cache-dir torch torchvision --index-url "$TORCH_INDEX"; \
     fi && \
     pip install --no-cache-dir -r /tmp/req_no_qt.txt && \
-    (pip install --no-cache-dir PyQt5 || echo "PyQt5 skipped – no arm64 wheel; run ai_viewer.py natively") && \
+    (pip install --no-cache-dir PyQt5 || echo "PyQt5 skipped – no arm64 wheel; use Streamlit viewer at http://localhost:8501") && \
     pip install --no-cache-dir --force-reinstall opencv-python-headless
 
 WORKDIR /app/Code/Server
 
-# UI viewer ports and robot connection ports
-EXPOSE 5003 8003 5004 8004
+# UI viewer ports, robot connection ports, and Streamlit browser UI port
+EXPOSE 5003 8003 5004 8004 8501
 
-# Default: demo mode with predictive navigation, no display window
-CMD ["python", "main_server.py", "--mode", "demo", "--nav", "predictive", "--no-display"]
+# Default: start AI server + Streamlit viewer together.
+# Open http://localhost:8501 in your browser after container starts.
+CMD ["/app/start_server.sh"]

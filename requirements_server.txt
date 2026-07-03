@@ -21,7 +21,11 @@ opencv-python>=4.8.0         # headless variant also works: opencv-python-headle
 Pillow>=10.0.0               # required by ultralytics and transformers
 numpy>=1.24.0
 
-# ── Operator UI viewer (Code/Client/ai_viewer.py) ─────────────────────────────
+# ── Operator UI viewer ────────────────────────────────────────────────────────
+# Streamlit viewer (Code/Client/streamlit_viewer.py) – browser-based, runs in Docker
+streamlit>=1.37.0
+# PyQt5 desktop viewer (Code/Client/ai_viewer.py) – native desktop use only
+# Not installed in Docker (no arm64 wheel); run natively on Mac/Linux if preferred.
 PyQt5>=5.15.0
 
 # ── Config / utilities ────────────────────────────────────────────────────────
