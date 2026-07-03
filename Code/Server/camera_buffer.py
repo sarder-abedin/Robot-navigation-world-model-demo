@@ -47,6 +47,9 @@ class CameraBuffer:
         # Shared rolling deque; maxlen keeps memory bounded
         self._buf: deque[np.ndarray] = deque(maxlen=self._clip_len)
         self._lock = threading.Lock()
+        # Monotonic counter bumped whenever a NEW frame is appended, so the AI
+        # pipeline can skip re-processing the same frame thousands of times.
+        self._seq = 0
 
         self._thread: threading.Thread | None = None
         self._running = False
@@ -109,6 +112,17 @@ class CameraBuffer:
         with self._lock:
             return self._buf[-1] if self._buf else None
 
+    def get_latest(self):
+        """Return (seq, frame) of the most recent frame, or None if empty.
+
+        `seq` lets the caller detect whether a genuinely new frame has arrived
+        instead of reprocessing the same one at thousands of fps.
+        """
+        with self._lock:
+            if not self._buf:
+                return None
+            return self._seq, self._buf[-1]
+
     def get_clip(self, n: int | None = None) -> list[np.ndarray] | None:
         """Return the last n frames as a list, or None if the buffer is not full."""
         n = n or self._clip_len
@@ -130,6 +144,7 @@ class CameraBuffer:
         if frame is not None:
             with self._lock:
                 self._buf.append(frame)
+                self._seq += 1
 
     # ── Background capture loops ──────────────────────────────────────────────
 
@@ -155,6 +170,7 @@ class CameraBuffer:
             if frame is not None:
                 with self._lock:
                     self._buf.append(frame)
+                    self._seq += 1
 
     def _demo_loop(self) -> None:
         """Read frames from a video file and feed the buffer at video frame-rate."""
@@ -173,6 +189,7 @@ class CameraBuffer:
             resized = cv2.resize(rgb, (self._ai_size, self._ai_size))
             with self._lock:
                 self._buf.append(resized)
+                self._seq += 1
 
             time.sleep(delay)
 
