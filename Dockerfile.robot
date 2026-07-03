@@ -75,11 +75,17 @@ COPY Code/Server/parameter.py .
 # Python dependencies
 # ---------------------------------------------------------------------------
 
+# numpy is pinned to the 1.26 line on purpose: the apt-built picamera2 helper
+# `simplejpeg` is compiled against numpy 1.26 (dtype struct size 96).  An older
+# numpy 1.24 (size 88) or numpy 2.x (size 120) triggers
+#   "ValueError: numpy.dtype size changed ... Expected 96 ... got 88/120"
+# when picamera2 imports simplejpeg.  numpy 1.26.x keeps OpenCV / torch /
+# ultralytics happy too, so it is the one version that satisfies the whole stack.
 RUN pip install --no-cache-dir \
     "lgpio>=0.2.2.0" \
     "gpiozero>=2.0" \
     "ultralytics>=8.0.0" \
-    "numpy>=1.24.0" \
+    "numpy>=1.26,<2" \
     "PyYAML>=6.0.0" \
     "opencv-python-headless>=4.8.0"
 
@@ -93,7 +99,7 @@ RUN pip install --no-cache-dir \
 # camera hardware (only Picamera2() instantiation does).
 # ---------------------------------------------------------------------------
 
-RUN python3 -c "import numpy, cv2, picamera2, libcamera; print('camera stack import OK: numpy', numpy.__version__, '| cv2', cv2.__version__, '| picamera2 + libcamera present')"
+RUN python3 -c "import numpy, cv2, simplejpeg, libcamera, picamera2; from picamera2.encoders import JpegEncoder; print('camera stack import OK: numpy', numpy.__version__, '| cv2', cv2.__version__, '| simplejpeg + picamera2 + libcamera present')"
 
 # ---------------------------------------------------------------------------
 # Download YOLO weights during build
