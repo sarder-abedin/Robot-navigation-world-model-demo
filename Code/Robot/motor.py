@@ -22,11 +22,13 @@ def _duty_to_fraction(value: int) -> float:
 
 
 class tankMotor:
-    def __init__(self) -> None:
+    def __init__(self, gpiochip: int = 4) -> None:
         from gpiozero import Motor
-        self._left = Motor(forward=7, backward=8)
-        self._right = Motor(forward=11, backward=10)
-        logger.info("tankMotor initialised")
+        from gpiozero.pins.lgpio import LGPIOFactory
+        factory = LGPIOFactory(chip=gpiochip)
+        self._left = Motor(forward=7, backward=8, pin_factory=factory)
+        self._right = Motor(forward=11, backward=10, pin_factory=factory)
+        logger.info("tankMotor initialised (gpiochip%d)", gpiochip)
 
     def setMotorModel(self, left: int, right: int) -> None:
         self._apply(self._left, left)

@@ -17,14 +17,20 @@ _MAX_RANGE_CM = 400.0
 
 
 class Ultrasonic:
-    def __init__(self, trigger_pin: int = 27, echo_pin: int = 22) -> None:
+    def __init__(self, trigger_pin: int = 27, echo_pin: int = 22, gpiochip: int = 4) -> None:
         from gpiozero import DistanceSensor
+        from gpiozero.pins.lgpio import LGPIOFactory
+        factory = LGPIOFactory(chip=gpiochip)
         self._sensor = DistanceSensor(
             echo=echo_pin,
             trigger=trigger_pin,
             max_distance=_MAX_RANGE_CM / 100.0,
+            pin_factory=factory,
         )
-        logger.info("Ultrasonic sensor initialised (trigger=%d echo=%d)", trigger_pin, echo_pin)
+        logger.info(
+            "Ultrasonic sensor initialised (trigger=%d echo=%d gpiochip%d)",
+            trigger_pin, echo_pin, gpiochip,
+        )
 
     def get_distance(self) -> float:
         try:

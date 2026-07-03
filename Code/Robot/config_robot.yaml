@@ -25,6 +25,11 @@ camera:
   stream_width: 400
   stream_height: 300
 
+# ── GPIO chip ─────────────────────────────────────────────────────────────────
+# Pi 5 uses /dev/gpiochip4; Pi 4 and earlier use /dev/gpiochip0
+gpio:
+  chip: 4
+
 # ── Motor control ─────────────────────────────────────────────────────────────
 robot:
   speed_full: 1500
