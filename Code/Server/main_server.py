@@ -213,8 +213,8 @@ class PCNavigationServer:
             elif val == 2:
                 self._ai.set_motor_enabled(True)
                 self._ai.set_navigation_mode("predictive")
-            # Forward mode change to robot
-            if self._robot_conn:
+            # Forward mode change to robot only for valid modes (never CMD_AIMODE#-1)
+            if self._robot_conn and val in (0, 1, 2):
                 self._robot_conn.send_aimode(val)
 
         elif cmd == self.CMD_MOTOR:
@@ -248,9 +248,10 @@ class PCNavigationServer:
                 if jpg is None:
                     time.sleep(0.05)
                     continue
-                length_bin = struct.pack("<I", len(jpg))
-                self._tcp.sendDataToVideoClient(length_bin)
-                self._tcp.sendDataToVideoClient(jpg)
+                # Send the length prefix and JPEG as ONE buffer so a client can
+                # never receive a header without its body (frame desync) if it
+                # connects or drops between two separate sends.
+                self._tcp.sendDataToVideoClient(struct.pack("<I", len(jpg)) + jpg)
             except Exception as exc:
                 logger.debug("Video send error: %s", exc)
             time.sleep(1.0 / 20)

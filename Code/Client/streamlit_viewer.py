@@ -25,6 +25,7 @@ CMD_PORT   = 5003
 VIDEO_PORT = 8003
 SPEED_FULL = 1500
 SPEED_SLOW = 600
+MAX_FRAME_BYTES = 10 * 1024 * 1024   # reject absurd frame lengths (stream desync guard)
 
 ACTION_BG = {
     "FORWARD": "#1a7a1a",
@@ -81,7 +82,9 @@ class _Backend:
             s.settimeout(None)
             self._cmd    = s
             self.running = True
-            threading.Thread(target=self._recv_cmd, daemon=True, name="CmdRecv").start()
+            # Pass the socket to the thread so a lingering thread from a previous
+            # connection never reads (or writes running for) the new socket.
+            threading.Thread(target=self._recv_cmd, args=(s,), daemon=True, name="CmdRecv").start()
             # Video connection (non-fatal if unavailable)
             try:
                 v = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -89,7 +92,7 @@ class _Backend:
                 v.connect((ip, VIDEO_PORT))
                 v.settimeout(15.0)  # long enough for AI pipeline warmup; catches dead server
                 self._vid = v
-                threading.Thread(target=self._recv_vid, daemon=True, name="VideoRecv").start()
+                threading.Thread(target=self._recv_vid, args=(v,), daemon=True, name="VideoRecv").start()
                 self.log = f"Connected to {ip}:{CMD_PORT}  |  video stream active"
             except Exception as e:
                 self._vid = None
@@ -110,8 +113,8 @@ class _Backend:
         self._cmd = self._vid = None
         with self._lock:
             self._jpg = None
-        self.vid_frames = 0
-        self.cmd_msgs = 0
+            self.vid_frames = 0
+            self.cmd_msgs = 0
         self.log = "Disconnected"
 
     # ── Send ───────────────────────────────────────────────────────────────────
@@ -126,11 +129,13 @@ class _Backend:
 
     # ── Background recv threads (write to self.* only, no st.* calls) ─────────
 
-    def _recv_cmd(self) -> None:
+    def _recv_cmd(self, sock: socket.socket) -> None:
         buf = ""
-        while self.running and self._cmd:
+        # Guard on `sock is self._cmd` so a stale thread from a previous
+        # connection stops (and never clobbers self.running for the new one).
+        while self.running and sock is self._cmd:
             try:
-                raw = self._cmd.recv(1024)
+                raw = sock.recv(1024)
                 if not raw:
                     break
                 buf += raw.decode("utf-8", errors="replace")
@@ -150,16 +155,18 @@ class _Backend:
                                 self.cmd_msgs += 1
             except Exception:
                 break
-        self.running = False
+        # Only tear down if this is still the active connection's socket.
+        if sock is self._cmd:
+            self.running = False
 
-    def _recv_vid(self) -> None:
+    def _recv_vid(self, sock: socket.socket) -> None:
         def _exact(n: int) -> bytes | None:
             b = b""
             while len(b) < n:
                 try:
-                    chunk = self._vid.recv(n - len(b))
+                    chunk = sock.recv(n - len(b))
                 except socket.timeout:
-                    if not self.running:
+                    if not self.running or sock is not self._vid:
                         return None
                     continue  # pipeline may be slow to start; keep waiting
                 if not chunk:
@@ -167,12 +174,16 @@ class _Backend:
                 b += chunk
             return b
 
-        while self.running and self._vid:
+        while self.running and sock is self._vid:
             try:
                 hdr = _exact(4)
                 if not hdr:
                     break
                 length = struct.unpack("<I", hdr)[0]
+                # Guard against a desynced/malformed header: a bogus length would
+                # otherwise make _exact() try to read gigabytes and hang/OOM.
+                if not (0 < length <= MAX_FRAME_BYTES):
+                    break
                 jpg = _exact(length)
                 if not jpg:
                     break

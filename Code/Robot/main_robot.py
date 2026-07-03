@@ -36,6 +36,42 @@ import yaml
 logger = logging.getLogger(__name__)
 _shutdown = False
 
+# REROUTE runs as a timed maneuver. It must not block the command loop, or a
+# STOP/KILL/MOTOR arriving mid-reroute would be ignored for ~1.5 s. It runs in a
+# worker thread that a new command can preempt via this cancel event.
+_reroute_thread: threading.Thread | None = None
+_reroute_cancel = threading.Event()
+
+
+def _cancel_reroute() -> None:
+    """Stop any in-progress reroute maneuver so a new command takes effect now."""
+    global _reroute_thread
+    if _reroute_thread is not None and _reroute_thread.is_alive():
+        _reroute_cancel.set()
+        _reroute_thread.join(timeout=1.0)
+    _reroute_thread = None
+
+
+def _start_reroute(motor, speed_slow: int, reroute_secs: float) -> None:
+    """Run the back-up + spin maneuver in a preemptible worker thread."""
+    global _reroute_thread
+    _cancel_reroute()
+    _reroute_cancel.clear()
+
+    def _run():
+        motor.setMotorModel(-speed_slow, -speed_slow)   # back up
+        if _reroute_cancel.wait(0.3):                   # preempted?
+            motor.setMotorModel(0, 0)
+            return
+        motor.setMotorModel(-speed_slow, speed_slow)    # spin left
+        if _reroute_cancel.wait(reroute_secs):
+            motor.setMotorModel(0, 0)
+            return
+        motor.setMotorModel(0, 0)
+
+    _reroute_thread = threading.Thread(target=_run, daemon=True, name="Reroute")
+    _reroute_thread.start()
+
 
 def _signal_handler(sig, frame):
     global _shutdown
@@ -290,6 +326,7 @@ def main() -> None:
 
         elif command == "CMD_MOTOR" and len(parts) >= 3:
             # Manual motor command from the operator UI (relayed by PC)
+            _cancel_reroute()
             try:
                 left = int(parts[1])
                 right = int(parts[2])
@@ -301,18 +338,21 @@ def main() -> None:
                 logger.warning("Bad CMD_MOTOR: %s (%s)", cmd, exc)
 
         elif command == "CMD_STOP":
+            _cancel_reroute()
             if motor:
                 motor.setMotorModel(0, 0)
             logger.info("Motors stopped (CMD_STOP)")
 
         elif command == "CMD_AIMODE":
             # AI mode change – stop motors for safety on mode transition
+            _cancel_reroute()
             if motor:
                 motor.setMotorModel(0, 0)
             logger.info("AI mode change: %s", cmd)
 
         elif command == "CMD_KILL":
             logger.warning("CMD_KILL received – robot shutting down")
+            _cancel_reroute()
             _shutdown = True
 
     # ── Shutdown ─────────────────────────────────────────────────────────────
@@ -322,6 +362,10 @@ def main() -> None:
 def _execute_aimove(action: str, motor, speed_full: int, speed_slow: int,
                     reroute_secs: float) -> None:
     """Map an AI navigation action string to tankMotor calls."""
+    # Any new action preempts an in-progress (non-blocking) reroute maneuver.
+    if action != "REROUTE":
+        _cancel_reroute()
+
     if action == "FORWARD":
         if motor:
             motor.setMotorModel(speed_full, speed_full)
@@ -341,13 +385,10 @@ def _execute_aimove(action: str, motor, speed_full: int, speed_slow: int,
             logger.info("[MockMotor] STOP")
 
     elif action == "REROUTE":
-        # Back up briefly then spin — the timed maneuver runs here on the Pi
+        # Timed back-up + spin runs in a worker thread so STOP/KILL/MOTOR can
+        # preempt it instead of being ignored for the full maneuver.
         if motor:
-            motor.setMotorModel(-speed_slow, -speed_slow)   # back up
-            time.sleep(0.3)
-            motor.setMotorModel(-speed_slow, speed_slow)    # spin left
-            time.sleep(reroute_secs)
-            motor.setMotorModel(0, 0)
+            _start_reroute(motor, speed_slow, reroute_secs)
         else:
             logger.info("[MockMotor] REROUTE (%.1f s)", reroute_secs)
 
@@ -357,6 +398,7 @@ def _execute_aimove(action: str, motor, speed_full: int, speed_slow: int,
 
 def _cleanup(motor, camera, ultrasonic, client) -> None:
     logger.info("Robot client shutting down…")
+    _cancel_reroute()
     try:
         if motor:
             motor.setMotorModel(0, 0)

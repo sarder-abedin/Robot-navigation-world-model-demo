@@ -270,10 +270,15 @@ class RobotConnectionServer:
                     logger.error("Robot accept loop error: %s", exc)
 
     def _cmd_recv_loop(self) -> None:
+        # Bind the socket once at thread start. If this thread outlives its
+        # connection and _accept_loop re-accepts, self._cmd_client points at the
+        # NEW socket — reading self._cmd_client here would steal the new
+        # connection's data. Using the captured local avoids that.
+        sock = self._cmd_client
         buf = ""
-        while self._running and self._cmd_client:
+        while self._running and sock is self._cmd_client:
             try:
-                data = self._cmd_client.recv(1024)
+                data = sock.recv(1024)
                 if not data:
                     logger.warning("Robot cmd socket closed")
                     self._connected = False
@@ -325,9 +330,12 @@ class RobotConnectionServer:
                 break
 
     def _video_recv_loop(self) -> None:
-        while self._running and self._video_client:
+        # Capture the socket once (see _cmd_recv_loop) so a stale thread can't
+        # read the next connection's video stream after a re-accept.
+        sock = self._video_client
+        while self._running and sock is self._video_client:
             try:
-                header = self._recv_exact(4)
+                header = self._recv_exact(sock, 4)
                 if header is None:
                     logger.warning("Robot video socket closed")
                     self._connected = False
@@ -337,7 +345,7 @@ class RobotConnectionServer:
                     logger.error("Oversized robot frame (%d bytes) – dropping", n)
                     self._connected = False
                     break
-                jpg = self._recv_exact(n)
+                jpg = self._recv_exact(sock, n)
                 if jpg is None:
                     self._connected = False
                     break
@@ -349,11 +357,11 @@ class RobotConnectionServer:
                 self._connected = False
                 break
 
-    def _recv_exact(self, n: int) -> bytes | None:
+    def _recv_exact(self, sock, n: int) -> bytes | None:
         buf = b""
         while len(buf) < n and self._running:
             try:
-                chunk = self._video_client.recv(n - len(buf))
+                chunk = sock.recv(n - len(buf))
                 if not chunk:
                     return None
                 buf += chunk

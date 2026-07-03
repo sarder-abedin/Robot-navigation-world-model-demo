@@ -94,11 +94,13 @@ class Visualizer:
             self._draw_risk_bar(vis, decision.risk_score, w, h)
 
         if self._overlay_action:
-            self._draw_action(vis, str(decision.action), w, h)
+            # .value → "FORWARD" not "Action.FORWARD" (str-Enum on Python 3.11+),
+            # so ACTION_COLOURS lookups hit and the HUD shows the right label/colour.
+            self._draw_action(vis, getattr(decision.action, "value", decision.action), w, h)
 
         if self._overlay_wm:
-            self._draw_wm_label(vis, decision.world_model_label)
-            self._draw_temporal(vis, temporal_result.pattern)
+            self._draw_wm_label(vis, getattr(decision.world_model_label, "value", decision.world_model_label))
+            self._draw_temporal(vis, getattr(temporal_result.pattern, "value", temporal_result.pattern))
 
         self._draw_sonic(vis, ultrasonic_cm, w)
         self._draw_mode_badge(vis, w)
