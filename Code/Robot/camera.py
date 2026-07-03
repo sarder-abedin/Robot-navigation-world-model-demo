@@ -108,10 +108,13 @@ class Camera:
         import cv2
         if self._picam is not None:
             with self._lock:
-                frame_rgb = self._picam.capture_array()
-            if frame_rgb is None:
+                # picamera2's "RGB888" format returns a BGR-ordered array (its
+                # names are little-endian, so "RGB888" is B,G,R in memory — the
+                # OpenCV-native order). Use it directly; converting RGB->BGR here
+                # would swap red and blue and tint the whole stream red.
+                frame_bgr = self._picam.capture_array()
+            if frame_bgr is None:
                 return None
-            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
         elif self._cap is not None:
             with self._lock:
                 ok, frame_bgr = self._cap.read()
