@@ -51,10 +51,19 @@ def test_baseline_ignores_world_model(cfg):
 
 
 def test_ultrasonic_override(cfg):
-    """Ultrasonic risk=1.0 must stop the robot regardless of other signals."""
+    """Ultrasonic risk=1.0 must hard-stop the robot regardless of other signals."""
     f = DecisionFuser(cfg, "predictive")
     r = f.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR", ultrasonic_risk=1.0)
-    assert r.action in (Action.STOP, Action.REROUTE)
+    assert r.action == Action.STOP
+
+
+def test_ultrasonic_emergency_stop_beats_blocking(cfg):
+    """ultrasonic_risk=1.0 must STOP even when BLOCKING pattern would normally REROUTE."""
+    f = DecisionFuser(cfg, "predictive")
+    r = f.decide(0.85, 0.9, 0.9, "BLOCKED", "BLOCKING", ultrasonic_risk=1.0)
+    assert r.action == Action.STOP, (
+        f"Expected STOP (hard obstacle in sensor range) but got {r.action}"
+    )
 
 
 def test_hysteresis(cfg):

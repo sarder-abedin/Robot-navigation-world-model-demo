@@ -203,34 +203,62 @@ class RobotConnectionServer:
             return False
 
     def _accept_loop(self) -> None:
-        """Accept the robot on both sockets (cmd first, then video)."""
-        try:
-            self._cmd_server.settimeout(120.0)
-            self._video_server.settimeout(120.0)
+        """Accept the robot on both sockets; re-accept after disconnect."""
+        self._cmd_server.settimeout(5.0)
+        self._video_server.settimeout(5.0)
 
-            logger.info("Accepting robot cmd connection…")
-            self._cmd_client, addr = self._cmd_server.accept()
-            logger.info("Robot cmd connected from %s", addr)
+        while self._running:
+            try:
+                logger.info("Waiting for robot cmd connection…")
+                try:
+                    self._cmd_client, addr = self._cmd_server.accept()
+                except socket.timeout:
+                    continue
+                logger.info("Robot cmd connected from %s", addr)
 
-            logger.info("Accepting robot video connection…")
-            self._video_client, addr = self._video_server.accept()
-            logger.info("Robot video connected from %s", addr)
+                logger.info("Waiting for robot video connection…")
+                try:
+                    self._video_client, addr = self._video_server.accept()
+                except socket.timeout:
+                    try:
+                        self._cmd_client.close()
+                    except Exception:
+                        pass
+                    self._cmd_client = None
+                    continue
+                logger.info("Robot video connected from %s", addr)
 
-            self._connected = True
+                self._connected = True
 
-            self._cmd_recv_thread = threading.Thread(
-                target=self._cmd_recv_loop, daemon=True, name="RobotCmdRx"
-            )
-            self._cmd_recv_thread.start()
+                rx_cmd = threading.Thread(
+                    target=self._cmd_recv_loop, daemon=True, name="RobotCmdRx"
+                )
+                rx_vid = threading.Thread(
+                    target=self._video_recv_loop, daemon=True, name="RobotVideoRx"
+                )
+                self._cmd_recv_thread = rx_cmd
+                self._video_recv_thread = rx_vid
+                rx_cmd.start()
+                rx_vid.start()
 
-            self._video_recv_thread = threading.Thread(
-                target=self._video_recv_loop, daemon=True, name="RobotVideoRx"
-            )
-            self._video_recv_thread.start()
+                # Block until both recv threads exit (robot disconnected)
+                rx_cmd.join()
+                rx_vid.join()
 
-        except Exception as exc:
-            if self._running:
-                logger.error("Robot accept error: %s", exc)
+                self._connected = False
+                logger.info("Robot disconnected; ready to re-accept")
+                for s in (self._cmd_client, self._video_client):
+                    try:
+                        if s:
+                            s.close()
+                    except Exception:
+                        pass
+                self._cmd_client = None
+                self._video_client = None
+
+            except Exception as exc:
+                if self._running:
+                    logger.error("Robot accept loop error: %s", exc)
 
     def _cmd_recv_loop(self) -> None:
         buf = ""

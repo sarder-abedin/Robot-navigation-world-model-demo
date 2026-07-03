@@ -119,7 +119,11 @@ class DecisionFuser:
             action = Action.SLOW
             explanation = f"Medium risk ({smoothed:.2f}) – slowing"
         else:
-            if temporal_pattern == "BLOCKING":
+            if ultrasonic_risk >= 1.0:
+                action = Action.STOP
+                self._stop_until = now + self._stop_hold
+                explanation = f"Ultrasonic emergency stop (risk={smoothed:.2f})"
+            elif temporal_pattern == "BLOCKING":
                 action = Action.REROUTE
                 explanation = f"High risk ({smoothed:.2f}) + BLOCKING – reroute"
             else:
