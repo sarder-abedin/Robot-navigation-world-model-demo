@@ -19,19 +19,12 @@ docker build -f Dockerfile.server -t nav-server .
 
 # Demo mode — no robot needed; supply any corridor video first:
 #   mkdir -p assets/demo_clips && cp /path/to/corridor.mp4 assets/demo_clips/
-docker run --rm \
-  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
-  -v "$(pwd)/assets:/app/assets:ro" \
-  -v "$(pwd)/logs_rpi:/app/logs_rpi" \
-  nav-server
+docker run --rm -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 -v "$(pwd)/assets:/app/assets:ro" -v "$(pwd)/logs_rpi:/app/logs_rpi" nav-server
 # Wait for: "[start_server] Starting Streamlit on http://0.0.0.0:8501"
 # Then open http://localhost:8501 → enter "localhost" as server IP → Connect
 
 # Live mode — server + Streamlit UI, waits for Pi to connect on ports 5004/8004
-docker run --rm \
-  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
-  -e NAV_MODE=live \
-  nav-server
+docker run --rm -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 -e NAV_MODE=live nav-server
 # Then open http://localhost:8501 → enter "localhost" as server IP → Connect
 ```
 
@@ -51,13 +44,7 @@ SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
 # Or the equivalent single docker run (Pi 5) — replace 192.168.1.42 with your PC's IP.
 # Note BOTH gpiochip mappings: on Pi 5 the lgpio pin factory needs the RP1
 # controller visible at chip 4 as well, or motors fail with "can not open gpiochip".
-docker run --rm --privileged \
-  --device /dev/video0:/dev/video0 \
-  --device /dev/gpiochip0:/dev/gpiochip0 \
-  --device /dev/gpiochip0:/dev/gpiochip4 \
-  -v /run/udev:/run/udev:ro \
-  -e SERVER_IP=192.168.1.42 \
-  nav-robot
+docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpiochip0:/dev/gpiochip0 --device /dev/gpiochip0:/dev/gpiochip4 -v /run/udev:/run/udev:ro -e SERVER_IP=192.168.1.42 nav-robot
 ```
 
 > **Camera (CSI)** — the container uses **picamera2/libcamera** to drive the Pi CSI camera (same stack as Freenove). `-v /run/udev:/run/udev:ro` is **required** so libcamera can enumerate the camera inside the container; with `--privileged` the camera device nodes under `/dev` are already available. If picamera2 cannot be imported the code falls back to OpenCV V4L2 on `/dev/video0`, but the CSI camera generally does **not** produce frames through that path — so if the PC log says *"waiting for camera frames"*, confirm the udev mount is present.
@@ -251,8 +238,7 @@ The Pi connects **outbound** to the PC server; it does not bind any ports.
 ```bash
 # System packages (run once on the Pi)
 sudo apt-get update
-sudo apt-get install -y python3-picamera2 python3-libcamera \
-  python3-gpiozero python3-kms++ python3-prctl libatlas-base-dev
+sudo apt-get install -y python3-picamera2 python3-libcamera python3-gpiozero python3-kms++ python3-prctl libatlas-base-dev
 
 # Python packages (includes ultralytics for YOLOv8n)
 cd /path/to/robot-navigation-world-model-demo
@@ -385,38 +371,21 @@ docker build -f Dockerfile.server -t nav-server .
 
 # Demo mode — place a video at assets/demo_clips/corridor.mp4 first
 # The container starts BOTH the AI server AND the Streamlit browser UI.
-docker run --rm \
-  -p 5003:5003 -p 8003:8003 \
-  -p 5004:5004 -p 8004:8004 \
-  -p 8501:8501 \
-  -v "$(pwd)/assets:/app/assets:ro" \
-  -v "$(pwd)/logs_rpi:/app/logs_rpi" \
-  nav-server
+docker run --rm -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 -v "$(pwd)/assets:/app/assets:ro" -v "$(pwd)/logs_rpi:/app/logs_rpi" nav-server
 # Then open http://localhost:8501 — enter "localhost" as the server IP.
 
 # Live mode — server + viewer, waiting for Pi to connect
-docker run --rm \
-  -p 5003:5003 -p 8003:8003 \
-  -p 5004:5004 -p 8004:8004 \
-  -p 8501:8501 \
-  -e NAV_MODE=live \
-  nav-server
+docker run --rm -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 -e NAV_MODE=live nav-server
 
 # Server only (no Streamlit viewer)
-docker run --rm \
-  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 \
-  nav-server python main_server.py --mode demo --nav predictive --no-display
+docker run --rm -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 nav-server python main_server.py --mode demo --nav predictive --no-display
 
 # Via docker compose (recommended — sets NAV_MODE and NAV_STRATEGY env vars)
 NAV_MODE=live NAV_STRATEGY=predictive docker compose -f docker-compose.server.yml up
 
 # NVIDIA GPU (Linux only — requires nvidia-container-toolkit)
-docker build \
-  --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 \
-  -f Dockerfile.server -t nav-server-gpu .
-docker run --rm --gpus all \
-  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
-  nav-server-gpu
+docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 -f Dockerfile.server -t nav-server-gpu .
+docker run --rm --gpus all -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 nav-server-gpu
 ```
 
 **Raspberry Pi robot (`Dockerfile.robot`, arm64):**
@@ -436,13 +405,7 @@ SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
 # Equivalent single docker run (Pi 5) — replace 192.168.1.42 with your PC's IP.
 # BOTH gpiochip mappings are required (RP1 is gpiochip0 but lgpio also probes 4),
 # and -v /run/udev is required for libcamera to find the CSI camera.
-docker run --rm --privileged \
-  --device /dev/video0:/dev/video0 \
-  --device /dev/gpiochip0:/dev/gpiochip0 \
-  --device /dev/gpiochip0:/dev/gpiochip4 \
-  -v /run/udev:/run/udev:ro \
-  -e SERVER_IP=192.168.1.42 \
-  nav-robot
+docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpiochip0:/dev/gpiochip0 --device /dev/gpiochip0:/dev/gpiochip4 -v /run/udev:/run/udev:ro -e SERVER_IP=192.168.1.42 nav-robot
 ```
 
 > **YOLOv8n weights** (~6 MB) are pre-downloaded during `docker build` so the
