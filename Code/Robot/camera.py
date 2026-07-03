@@ -11,9 +11,9 @@ Fallback backend: cv2.VideoCapture on /dev/video<device> (works in Docker
                   when --device /dev/video0:/dev/video0 is passed).
 
 Image orientation:
-  The Freenove FNK0077 mounts the CSI camera upside-down, so hflip and vflip
-  both default to True (matching the Freenove original) to produce a
-  correctly-oriented image.  Set both False if your mount is upright.
+  Orientation is applied here at capture, so the corrected frame is what gets
+  streamed to the PC (UI, V-JEPA 2, YOLO). Default is upright (no flip); set
+  hflip/vflip True (config or -e CAMERA_HFLIP/CAMERA_VFLIP) for an inverted mount.
 """
 from __future__ import annotations
 
@@ -28,8 +28,8 @@ class Camera:
         self,
         stream_size: tuple[int, int] = (400, 300),
         device: int = 0,
-        hflip: bool = True,
-        vflip: bool = True,
+        hflip: bool = False,
+        vflip: bool = False,
     ):
         self._width, self._height = stream_size
         self._device = device
