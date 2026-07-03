@@ -37,19 +37,20 @@ docker run --rm \
 ### Fastest path — Raspberry Pi robot (Docker)
 
 ```bash
-# On the Pi: install camera/GPIO host libs once
-sudo apt-get install -y python3-picamera2 python3-libcamera python3-kms++
-
 # Build the robot image (cross-compile on Mac/Linux or build directly on Pi)
 docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
 
-# Run (replace 192.168.1.42 with your PC's IP)
+# Run on Pi 5 (kernel ≥ 6.6) — replace 192.168.1.42 with your PC's IP
 docker run --rm --privileged \
-  --device /dev/video0 \
-  --device /dev/gpiochip4 \
+  --device /dev/video0:/dev/video0 \
+  --device /dev/gpiochip0:/dev/gpiochip0 \
   -e SERVER_IP=192.168.1.42 \
   nav-robot
 ```
+
+> **Camera** — if `python3-picamera2` is installed on the Pi host the container uses it automatically; otherwise it falls back to OpenCV V4L2 via `/dev/video0` with no extra setup required.
+>
+> **GPIO chip** — Pi 5 kernel ≥ 6.6 uses `/dev/gpiochip0` (`pinctrl-rp1`). Run `gpiodetect` on the Pi to confirm which chip is labelled `pinctrl-rp1`. Set `gpio.chip` in `Code/Robot/config_robot.yaml` to match.
 
 ---
 
@@ -282,10 +283,13 @@ In demo mode the server runs local YOLOv8n (no Pi needed).
 **Step 3 (optional)** – Connect the UI viewer while the server runs:
 
 ```bash
+pip install PyQt5 opencv-python numpy   # one-time
 cd Code/Client
 python ai_viewer.py
-# Type 127.0.0.1 (localhost) in the IP field and click Connect
+# Enter 127.0.0.1 (localhost) in the IP field and click Connect
 ```
+
+> **Docker server on Mac** — Docker Desktop maps container ports to localhost automatically, so enter `localhost` or `127.0.0.1` as the server IP.
 
 ---
 
@@ -321,11 +325,19 @@ The robot:
 4. Awaits `CMD_AIMOVE` (AI actions) and `CMD_MOTOR` (manual commands)
 
 **Step 5 (optional)** – Connect the UI viewer from any machine on the network:
+
 ```bash
+pip install PyQt5 opencv-python numpy   # one-time
 cd Code/Client
 python ai_viewer.py
-# Enter the PC's IP address (192.168.1.42) and click Connect
+# Enter the PC's IP address (e.g. 192.168.1.42) and click Connect
 ```
+
+| Where viewer runs | Server IP to enter |
+|---|---|
+| Same machine as the server | `localhost` or `127.0.0.1` |
+| Different machine on LAN | PC's LAN IP (e.g. `192.168.1.42`) |
+| Mac with server in Docker Desktop | `localhost` (Docker Desktop maps ports to host) |
 
 ---
 
@@ -376,26 +388,16 @@ docker run --rm --gpus all \
 
 **Raspberry Pi robot (`Dockerfile.robot`, arm64):**
 
-The robot image uses `python:3.11-slim-bookworm`.  Camera/GPIO packages
-(`python3-picamera2`, `python3-libcamera`, `python3-kms++`) are Raspberry Pi OS
-specific and **must be installed on the Pi host** before running the container —
-the container accesses them via device passthrough:
+The robot image uses `python:3.11-slim-bookworm`.
+
+- **Camera** — tries `picamera2` first; falls back to OpenCV V4L2 via `/dev/video0` automatically if `libcamera` is not present. No host setup required for the fallback.
+- **GPIO chip** — Pi 5 kernel ≥ 6.6 uses `/dev/gpiochip0` (`pinctrl-rp1`). Run `gpiodetect` to confirm and set `gpio.chip` in `config_robot.yaml` accordingly.
 
 ```bash
-# One-time Pi host setup (run directly on the Pi, not in Docker)
-sudo apt-get install -y python3-picamera2 python3-libcamera python3-kms++
-
 # Build (cross-compile on Mac/Linux, or build directly on the Pi)
 docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
 
-# Run on Pi — replace 192.168.1.42 with your PC's IP
-docker run --rm --privileged \
-  --device /dev/video0:/dev/video0 \
-  --device /dev/gpiochip4:/dev/gpiochip4 \
-  -e SERVER_IP=192.168.1.42 \
-  nav-robot
-
-# Pi 4 uses /dev/gpiochip0 instead of /dev/gpiochip4
+# Run on Pi 5 (kernel ≥ 6.6) — replace 192.168.1.42 with your PC's IP
 docker run --rm --privileged \
   --device /dev/video0:/dev/video0 \
   --device /dev/gpiochip0:/dev/gpiochip0 \
@@ -408,6 +410,27 @@ SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
 
 > **YOLOv8n weights** (~6 MB) are pre-downloaded during `docker build` so the
 > container starts immediately without a network call.
+
+**Operator UI viewer (`Code/Client/ai_viewer.py`):**
+
+The viewer is a lightweight PyQt5 app that connects to the PC server over TCP.
+It is **not** part of the server Docker image's runtime — run it natively:
+
+```bash
+# Install once (on Mac, Linux, or Windows)
+pip install PyQt5 opencv-python numpy
+
+# Run
+cd Code/Client
+python ai_viewer.py
+```
+
+| Scenario | Server IP to enter in viewer |
+|---|---|
+| Server running natively on the same machine | `localhost` |
+| Server in Docker Desktop on Mac | `localhost` (Docker Desktop maps ports) |
+| Server in Docker on a remote Linux machine | that machine's LAN IP |
+| Server and viewer on different LAN machines | PC server's LAN IP |
 
 ---
 
@@ -466,6 +489,7 @@ At least 10 frames per class is recommended.
 | Setting | Default | Effect |
 |---|---|---|
 | `server_ip` | `192.168.1.100` | PC server IP address |
+| `gpio.chip` | `0` | GPIO chip number — Pi 5 kernel ≥ 6.6 → `0`; Pi 5 kernel < 6.6 → `4`; Pi 4 → `0`. Run `gpiodetect` to confirm |
 | `detector.model` | `yolov8n.pt` | YOLOv8 model (runs locally on Pi) |
 | `detector.conf` | `0.35` | Detection confidence threshold |
 | `detector.run_every_n_frames` | `2` | YOLOv8 cadence (CPU saving) |
