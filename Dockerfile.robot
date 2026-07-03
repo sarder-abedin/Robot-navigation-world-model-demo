@@ -24,21 +24,23 @@
 # Notes:
 #   --privileged   simplest for dev; replace with --device flags for production
 #   /dev/gpiochip4 is the GPIO chip on Pi 5 (Pi 4 uses /dev/gpiochip0)
-#   libcamera system libs need to be installed on the host; picamera2 from apt
+#   Camera: picamera2 pip pkg is installed; if libcamera is absent the robot
+#           falls back to OpenCV VideoCapture via /dev/video0 automatically
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM python:3.11-slim-bookworm
 
 # System libraries available in standard Debian Bookworm.
-# Pi-specific camera packages (python3-picamera2, python3-libcamera, python3-kms++,
-# libcamera-apps-lite) are NOT in standard Debian repos — they live in the
-# Raspberry Pi Foundation's repo and must be pre-installed on the Pi host:
-#   sudo apt-get install -y python3-picamera2 python3-libcamera python3-kms++
-# The container accesses them at runtime via --privileged + device passthrough.
 #
-# gcc/python3-dev/libcap-dev are needed to compile python-prctl (a picamera2 dep).
+# Camera note: python3-libcamera (the libcamera Python binding) lives in the
+# Raspberry Pi Foundation's apt repo, not standard Debian, so it cannot be
+# installed here via apt.  camera.py handles this gracefully:
+#   • On a Pi with system python3-libcamera → uses picamera2 (best quality)
+#   • In Docker with --device /dev/video0    → falls back to OpenCV V4L2
+#
+# libatlas / libglib / libgl are runtime deps for numpy / OpenCV / gpiozero.
+# gcc / python3-dev / libcap-dev compile python-prctl (pulled in by picamera2).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libcamera-dev \
     libatlas-base-dev \
     libglib2.0-0 \
     libgl1-mesa-glx \
