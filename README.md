@@ -52,6 +52,8 @@ docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpio
 
 > **Camera (CSI)** — the container uses **picamera2/libcamera** to drive the Pi CSI camera (same stack as Freenove). `-v /run/udev:/run/udev:ro` is **required** so libcamera can enumerate the camera inside the container; with `--privileged` the camera device nodes under `/dev` are already available. If picamera2 cannot be imported the code falls back to OpenCV V4L2 on `/dev/video0`, but the CSI camera generally does **not** produce frames through that path — so if the PC log says *"waiting for camera frames"*, confirm the udev mount is present.
 >
+> **Camera orientation** — the feed is streamed upright by default (no flip), so the UI, V-JEPA 2 and YOLO all get the correctly-oriented frame. If your camera is mounted **inverted** and the image looks upside-down, flip it with `-e CAMERA_HFLIP=1 -e CAMERA_VFLIP=1` (no rebuild needed) or set `camera.hflip`/`camera.vflip: true` in `config_robot.yaml`.
+>
 > **GPIO chip** — on Pi 5 the RP1 controller is `/dev/gpiochip0`, but the lgpio pin factory also probes `gpiochip4`, so map the host controller to **both** container nodes (`--device /dev/gpiochip0:/dev/gpiochip0 --device /dev/gpiochip0:/dev/gpiochip4`) as shown above. If motors log `can not open gpiochip`, that second mapping is missing. Run `gpiodetect` on the host to confirm which chip is `pinctrl-rp1`.
 
 ---

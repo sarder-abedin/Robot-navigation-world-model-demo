@@ -131,8 +131,8 @@ def main() -> None:
         cam_cfg = cfg.get("camera", {})
         # Orientation: default from config, but allow -e CAMERA_HFLIP / CAMERA_VFLIP
         # to correct an upside-down feed at runtime without rebuilding the image.
-        hflip = _env_bool("CAMERA_HFLIP", cam_cfg.get("hflip", True))
-        vflip = _env_bool("CAMERA_VFLIP", cam_cfg.get("vflip", True))
+        hflip = _env_bool("CAMERA_HFLIP", cam_cfg.get("hflip", False))
+        vflip = _env_bool("CAMERA_VFLIP", cam_cfg.get("vflip", False))
         camera = Camera(
             stream_size=(
                 cam_cfg.get("stream_width", 400),
