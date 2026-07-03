@@ -1,26 +1,33 @@
-# docker-compose.robot.yml – Run the Raspberry Pi robot client
-#
-# Usage (on Raspberry Pi):
-#   SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
-#
-# Prerequisites on the host Pi:
-#   sudo apt-get install -y libcamera-dev python3-libcamera python3-kms++
+# docker-compose.robot.yml
 
 services:
   nav-robot:
     build:
       context: .
       dockerfile: Dockerfile.robot
+
     image: nav-robot:latest
+
     environment:
-      - SERVER_IP=${SERVER_IP:-192.168.1.100}
-    # Hardware access
-    privileged: true          # simplest for dev; restrict in production
+      SERVER_IP: ${SERVER_IP:-192.168.1.100}
+
+    privileged: true
+
     devices:
-      - /dev/video0:/dev/video0     # camera (USB webcam fallback)
-      - /dev/gpiochip4:/dev/gpiochip4  # GPIO chip on Pi 5
-      # Pi 4: use /dev/gpiochip0 instead
+      # Camera
+      - /dev/video0:/dev/video0
+
+      # Raspberry Pi Camera / libcamera
+      - /dev/media0:/dev/media0
+      - /dev/media1:/dev/media1
+
+      # GPIO (Pi 5)
+      - /dev/gpiochip0:/dev/gpiochip0
+      - /dev/gpiochip0:/dev/gpiochip4
+
     volumes:
-      - /run/udev:/run/udev:ro      # needed for libcamera device discovery
-    network_mode: host              # use host network for simplest discovery
+      - /run/udev:/run/udev:ro
+
+    network_mode: host
+
     restart: unless-stopped
