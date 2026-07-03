@@ -1,13 +1,14 @@
 """
-camera.py – Pi camera wrapper (Freenove FNK0077 streaming approach).
+camera.py – Pi camera wrapper (on-demand capture for split-inference).
 
-Primary backend:  picamera2 with the hardware JpegEncoder driving a
-                  StreamingOutput buffer via start_recording() — this is the
-                  exact proven-working pattern from Freenove's Code/Server/camera.py.
-Fallback backend: cv2.VideoCapture on /dev/video<device> for Docker/dev
-                  environments where libcamera is not installed.  A background
-                  thread grabs + JPEG-encodes frames into the same
-                  StreamingOutput so get_frame() behaves identically.
+In this split-inference architecture the Pi grabs one frame at a time and
+sends it to the PC, so on-demand capture (picamera2 capture_array) is simpler
+and more robust than a continuous JpegEncoder stream — every get_frame() call
+is guaranteed to return the latest frame or None, never blocks indefinitely.
+
+Primary backend:  picamera2 capture_array() with a Transform for hflip/vflip.
+Fallback backend: cv2.VideoCapture on /dev/video<device> (works in Docker
+                  when --device /dev/video0:/dev/video0 is passed).
 
 Image orientation:
   The Freenove FNK0077 mounts the CSI camera upside-down, so hflip and vflip
@@ -16,25 +17,10 @@ Image orientation:
 """
 from __future__ import annotations
 
-import io
 import logging
 import threading
-from threading import Condition
 
 logger = logging.getLogger(__name__)
-
-
-class StreamingOutput(io.BufferedIOBase):
-    """Thread-safe latest-JPEG-frame buffer (Freenove pattern)."""
-
-    def __init__(self) -> None:
-        self.frame: bytes | None = None
-        self.condition = Condition()
-
-    def write(self, buf) -> None:
-        with self.condition:
-            self.frame = buf
-            self.condition.notify_all()
 
 
 class Camera:
@@ -49,22 +35,13 @@ class Camera:
         self._device = device
         self._hflip = hflip
         self._vflip = vflip
-
-        self._picam = None       # picamera2 backend
-        self._cap = None         # OpenCV VideoCapture fallback
-        self._streaming = False
-
-        self.streaming_output = StreamingOutput()
-
-        # OpenCV fallback capture thread
-        self._fallback_thread: threading.Thread | None = None
-        self._running = False
+        self._picam = None   # picamera2 backend
+        self._cap = None     # OpenCV VideoCapture fallback
+        self._lock = threading.Lock()
 
     def start_stream(self) -> None:
         try:
             from picamera2 import Picamera2
-            from picamera2.encoders import JpegEncoder
-            from picamera2.outputs import FileOutput
             from libcamera import Transform
 
             transform = Transform(
@@ -72,18 +49,14 @@ class Camera:
                 vflip=1 if self._vflip else 0,
             )
             self._picam = Picamera2()
-            stream_config = self._picam.create_video_configuration(
-                main={"size": (self._width, self._height)},
+            config = self._picam.create_video_configuration(
+                main={"format": "RGB888", "size": (self._width, self._height)},
                 transform=transform,
             )
-            self._picam.configure(stream_config)
-            # Hardware JPEG encoder pushes frames into streaming_output.write()
-            self._picam.start_recording(
-                JpegEncoder(), FileOutput(self.streaming_output)
-            )
-            self._streaming = True
+            self._picam.configure(config)
+            self._picam.start()
             logger.info(
-                "Camera streaming via picamera2 JpegEncoder at %dx%d (hflip=%s vflip=%s)",
+                "Camera started via picamera2 at %dx%d (hflip=%s vflip=%s)",
                 self._width, self._height, self._hflip, self._vflip,
             )
         except (ImportError, ModuleNotFoundError) as exc:
@@ -92,70 +65,60 @@ class Camera:
                 "falling back to OpenCV V4L2 (/dev/video%d)",
                 exc, self._device,
             )
-            self._start_opencv_fallback()
-
-    def _start_opencv_fallback(self) -> None:
-        import cv2
-        self._cap = cv2.VideoCapture(self._device)
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
-        if not self._cap.isOpened():
-            raise RuntimeError(
-                f"Failed to open /dev/video{self._device} – "
-                "check '--device /dev/video0:/dev/video0' in docker run"
+            import cv2
+            self._cap = cv2.VideoCapture(self._device)
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
+            if not self._cap.isOpened():
+                raise RuntimeError(
+                    f"Failed to open /dev/video{self._device} – "
+                    "check '--device /dev/video0:/dev/video0' in docker run"
+                ) from exc
+            logger.info(
+                "Camera started via OpenCV V4L2 (/dev/video%d) at %dx%d",
+                self._device, self._width, self._height,
             )
-        logger.info(
-            "Camera streaming via OpenCV V4L2 (/dev/video%d) at %dx%d (hflip=%s vflip=%s)",
-            self._device, self._width, self._height, self._hflip, self._vflip,
-        )
-        self._running = True
-        self._fallback_thread = threading.Thread(
-            target=self._opencv_capture_loop, daemon=True, name="CameraCapture"
-        )
-        self._fallback_thread.start()
 
-    def _opencv_capture_loop(self) -> None:
-        """Grab + JPEG-encode frames into streaming_output (fallback only)."""
+    def _apply_flip(self, frame_bgr):
         import cv2
-        while self._running:
-            ok, frame_bgr = self._cap.read()
-            if not ok or frame_bgr is None:
-                continue
-            # picamera2 applies flips via Transform; do the same here for parity
-            if self._hflip and self._vflip:
-                frame_bgr = cv2.flip(frame_bgr, -1)   # 180° rotation
-            elif self._hflip:
-                frame_bgr = cv2.flip(frame_bgr, 1)    # horizontal
-            elif self._vflip:
-                frame_bgr = cv2.flip(frame_bgr, 0)    # vertical
-            ok, buf = cv2.imencode(
-                ".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80]
-            )
-            if ok:
-                self.streaming_output.write(buf.tobytes())
+        # picamera2 applies flips via Transform; the OpenCV fallback must do it here
+        if self._hflip and self._vflip:
+            return cv2.flip(frame_bgr, -1)   # 180° rotation
+        if self._hflip:
+            return cv2.flip(frame_bgr, 1)    # horizontal
+        if self._vflip:
+            return cv2.flip(frame_bgr, 0)    # vertical
+        return frame_bgr
 
     def get_frame(self) -> bytes | None:
-        """Block until a new JPEG frame is available, then return it (Freenove pattern)."""
-        with self.streaming_output.condition:
-            # Timeout so shutdown / disconnect does not block the thread forever
-            self.streaming_output.condition.wait(timeout=1.0)
-            return self.streaming_output.frame
+        """Capture one frame and return it as JPEG bytes (or None on failure)."""
+        import cv2
+        if self._picam is not None:
+            with self._lock:
+                frame_rgb = self._picam.capture_array()
+            if frame_rgb is None:
+                return None
+            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        elif self._cap is not None:
+            with self._lock:
+                ok, frame_bgr = self._cap.read()
+            if not ok or frame_bgr is None:
+                return None
+            frame_bgr = self._apply_flip(frame_bgr)
+        else:
+            return None
+        ok, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return buf.tobytes() if ok else None
 
     def close(self) -> None:
-        self._running = False
-        # Wake any thread blocked in get_frame()
-        with self.streaming_output.condition:
-            self.streaming_output.condition.notify_all()
         if self._picam:
             try:
-                if self._streaming:
-                    self._picam.stop_recording()
+                self._picam.stop()
                 self._picam.close()
             except Exception as exc:
                 logger.warning("Camera close error: %s", exc)
             finally:
                 self._picam = None
-                self._streaming = False
         if self._cap:
             try:
                 self._cap.release()
