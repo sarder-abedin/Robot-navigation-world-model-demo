@@ -89,17 +89,35 @@ def main() -> None:
             stream_size=(
                 cam_cfg.get("stream_width", 400),
                 cam_cfg.get("stream_height", 300),
-            )
+            ),
+            hflip=cam_cfg.get("hflip", True),
+            vflip=cam_cfg.get("vflip", True),
         )
         camera.start_stream()
 
-        gpio_chip = int(os.environ.get("GPIO_CHIP", cfg.get("gpio", {}).get("chip", 0)))
+        _gpio_env = os.environ.get("GPIO_CHIP")
+        if _gpio_env is not None:
+            try:
+                gpio_chip = int(_gpio_env)
+            except ValueError:
+                logger.error(
+                    "GPIO_CHIP env var must be an integer (e.g. 0 or 4), got: %r -- exiting",
+                    _gpio_env,
+                )
+                sys.exit(1)
+        else:
+            gpio_chip = int(cfg.get("gpio", {}).get("chip", 0))
         sonic_cfg = cfg.get("ultrasonic", {})
 
         try:
             motor = tankMotor(gpiochip=gpio_chip)
         except Exception as exc:
-            logger.warning("Motor init failed (%s) – motor disabled", exc)
+            logger.warning(
+                "Motor init failed (%s) – motor disabled. "
+                "If this says 'cannot open gpiochip', check --device /dev/gpiochip%d "
+                "and set -e GPIO_CHIP=%d in docker run.",
+                exc, gpio_chip, gpio_chip,
+            )
             motor = None
 
         try:
