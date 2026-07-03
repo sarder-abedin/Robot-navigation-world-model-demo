@@ -85,7 +85,7 @@ class _Backend:
                 v = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 v.settimeout(3.0)
                 v.connect((ip, VIDEO_PORT))
-                v.settimeout(1.0)
+                v.settimeout(None)  # blocking recv; daemon thread exits on disconnect
                 self._vid = v
                 threading.Thread(target=self._recv_vid, daemon=True, name="VideoRecv").start()
                 self.log = f"Connected to {ip}:{CMD_PORT}  |  video stream active"
@@ -265,8 +265,11 @@ def _live_panel() -> None:
         sonic_raw = s["sonic"]
         try:
             sonic_cm = float(sonic_raw)
-            sonic_str = f"{sonic_cm:.1f} cm"
-            sonic_c   = "#ff4444" if sonic_cm < 20 else "#44cc44"
+            if sonic_cm < 0:
+                sonic_str, sonic_c = "---", "#aaa"
+            else:
+                sonic_str = f"{sonic_cm:.1f} cm"
+                sonic_c   = "#ff4444" if sonic_cm < 20 else "#44cc44"
         except ValueError:
             sonic_str = sonic_raw
             sonic_c   = "#aaa"
