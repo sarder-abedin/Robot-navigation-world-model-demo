@@ -6,8 +6,11 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Deep learning (V-JEPA 2 world model) ──────────────────────────────────────
-torch>=2.1.0
-torchvision>=0.16.0          # required by ultralytics; V-JEPA 2 uses torch only
+# torch 2.8+ bundles CUDA as hard deps on arm64 Linux (pulled by pip from PyPI).
+# Cap at <2.8.0 to keep the Docker image CPU-only on Mac M-series arm64 Docker.
+# The GPU build path (TORCH_INDEX build-arg) bypasses this cap via a separate install.
+torch>=2.1.0,<2.8.0
+torchvision>=0.16.0,<0.23.0  # required by ultralytics; V-JEPA 2 uses torch only
 transformers>=4.40.0         # HuggingFace AutoModel for V-JEPA 2 weights
 accelerate>=0.27.0           # fast model loading for transformers
 

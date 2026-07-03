@@ -74,29 +74,30 @@ COPY start_server.sh /app/start_server.sh
 RUN chmod +x /app/start_server.sh
 
 # Install Python dependencies.
-# pip resolves the correct torch wheel automatically for the build platform:
-#   arm64 (Mac M-series) → torch CPU/MPS wheels from PyPI
-#   amd64 Linux CPU      → torch CPU wheels from PyPI
-#
-# For NVIDIA GPU on Linux, build with:
-#   docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 \
-#                -f Dockerfile.server -t nav-server-gpu .
-#
-# opencv-python-headless is force-reinstalled so the AI pipeline never needs
-# libGL/X11 (server always runs --no-display).
-#
-# streamlit is installed from requirements_server.txt – works on all platforms.
-#
-# PyQt5 note: pre-built wheels exist for amd64 Linux only.
-#   • amd64 Linux → installs fine; ai_viewer.py can run via X11 forward.
-#   • arm64 Linux (Mac M-series Docker) → no wheel; gracefully skipped.
+# pip notes:
+#   • pip 24.0 (in python:3.11-slim) has a hash-verification bug with CUDA packages.
+#     We upgrade pip first to fix it.
+#   • torch 2.8+ bundles CUDA as hard pip deps on arm64 Linux (Mac M-series Docker).
+#     requirements_server.txt caps at <2.8.0 to keep the image CPU-only by default.
+#   • For NVIDIA GPU on Linux, pass TORCH_INDEX to install the CUDA torch separately
+#     BEFORE the requirements file is processed, bypassing the cap:
+#       docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 \
+#                    -f Dockerfile.server -t nav-server-gpu .
+#   • opencv-python-headless is force-reinstalled so the AI pipeline never needs
+#     libGL/X11 (server always runs --no-display).
+#   • PyQt5: pre-built wheels exist for amd64 Linux only.
+#     arm64 Linux (Mac M-series Docker) → no wheel; gracefully skipped.
 #     Use the Streamlit viewer (http://localhost:8501) on Mac instead.
 ARG TORCH_INDEX=""
-RUN grep -v '^PyQt5' requirements_server.txt > /tmp/req_no_qt.txt && \
+RUN pip install --upgrade pip && \
+    grep -v '^PyQt5' requirements_server.txt > /tmp/req_no_qt.txt && \
     if [ -n "$TORCH_INDEX" ]; then \
         pip install --no-cache-dir torch torchvision --index-url "$TORCH_INDEX"; \
+        grep -v '^torch' /tmp/req_no_qt.txt | grep -v '^torchvision' > /tmp/req_no_torch_qt.txt; \
+        pip install --no-cache-dir -r /tmp/req_no_torch_qt.txt; \
+    else \
+        pip install --no-cache-dir -r /tmp/req_no_qt.txt; \
     fi && \
-    pip install --no-cache-dir -r /tmp/req_no_qt.txt && \
     (pip install --no-cache-dir PyQt5 || echo "PyQt5 skipped – no arm64 wheel; use Streamlit viewer at http://localhost:8501") && \
     pip install --no-cache-dir --force-reinstall opencv-python-headless
 
