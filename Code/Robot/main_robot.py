@@ -89,7 +89,9 @@ def main() -> None:
             stream_size=(
                 cam_cfg.get("stream_width", 400),
                 cam_cfg.get("stream_height", 300),
-            )
+            ),
+            hflip=cam_cfg.get("hflip", True),
+            vflip=cam_cfg.get("vflip", True),
         )
         camera.start_stream()
 

@@ -21,9 +21,14 @@ detector:
   center_zone_width: 0.40     # fraction of frame width = "danger zone"
 
 # ── Camera (Pi camera settings) ───────────────────────────────────────────────
+# The Freenove FNK0077 mounts the CSI camera upside-down, so both flips
+# default to true to produce a correctly-oriented image.
+# Set hflip/vflip to false if your camera mount is already upright.
 camera:
   stream_width: 400
   stream_height: 300
+  hflip: true   # rotate image 180° to correct for inverted CSI mount
+  vflip: true
 
 # ── GPIO chip ─────────────────────────────────────────────────────────────────
 # Pi 5 kernel ≥ 6.6 (pinctrl-rp1): /dev/gpiochip0   ← current default
