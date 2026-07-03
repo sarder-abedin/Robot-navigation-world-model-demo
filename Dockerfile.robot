@@ -75,5 +75,10 @@ RUN pip install --no-cache-dir \
 RUN python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')" || true
 
 ENV SERVER_IP=192.168.1.100
+# GPIO_CHIP: override the gpiochip device number at runtime.
+# Pi 5 kernel ≥ 6.6 (pinctrl-rp1): GPIO_CHIP=0  (default)
+# Pi 5 kernel < 6.6 or if gpiodetect shows gpiochip4: GPIO_CHIP=4
+# Example: docker run -e GPIO_CHIP=4 nav-robot
+ENV GPIO_CHIP=0
 
 CMD ["sh", "-c", "python3 main_robot.py --server-ip $SERVER_IP"]

@@ -80,7 +80,15 @@ class CameraBuffer:
         else:
             self._cap = cv2.VideoCapture(self._video_path)
             if not self._cap.isOpened():
-                raise RuntimeError(f"Cannot open demo video: {self._video_path}")
+                raise RuntimeError(
+                    f"Cannot open demo video: {self._video_path}\n"
+                    "  To run with a real Pi robot use LIVE mode:\n"
+                    "    docker run -e NAV_MODE=live ... nav-server\n"
+                    "    docker compose -f docker-compose.server.yml up  "
+                    "(with NAV_MODE=live)\n"
+                    "  To run demo mode without a robot, place a corridor video at:\n"
+                    f"    {self._video_path}"
+                )
             self._thread = threading.Thread(
                 target=self._demo_loop, daemon=True, name="CameraBufferDemo"
             )
