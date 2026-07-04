@@ -76,6 +76,7 @@ class Visualizer:
         decision,
         temporal_result,
         ultrasonic_cm: float = -1.0,
+        ssv2_sentence: str = "",
     ) -> np.ndarray:
         """Annotate a BGR frame with full AI pipeline state."""
         vis = frame_bgr.copy()
@@ -105,8 +106,19 @@ class Visualizer:
         self._draw_sonic(vis, ultrasonic_cm, w)
         self._draw_mode_badge(vis, w)
         self._draw_fps(vis, fps)
+        if ssv2_sentence:
+            self._draw_ssv2(vis, ssv2_sentence, w, h)
 
         return vis
+
+    def _draw_ssv2(self, vis, sentence: str, w: int, h: int) -> None:
+        """Draw the genuine SSv2 action sentence (YOLO-filled) near the bottom."""
+        text = f"SSv2: {sentence}"
+        font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+        (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+        x, y = 10, h - 12
+        cv2.rectangle(vis, (x - 4, y - th - 6), (x + tw + 4, y + 6), (0, 0, 0), -1)
+        cv2.putText(vis, text, (x, y), font, scale, (0, 255, 255), thick, cv2.LINE_AA)
 
     def show(self, frame_bgr: np.ndarray) -> bool:
         """Show frame in OpenCV window. Returns False if user presses 'q'."""

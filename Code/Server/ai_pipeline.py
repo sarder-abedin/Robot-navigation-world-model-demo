@@ -49,6 +49,9 @@ class AIState:
     ultrasonic_cm: float = -1.0
     frame_count: int = 0
     running: bool = False
+    ssv2_sentence: str = ""       # genuine SSv2 label with YOLO object filled in
+    ssv2_confidence: float = 0.0
+    logging_enabled: bool = False
 
 
 class AIPipeline:
@@ -68,7 +71,12 @@ class AIPipeline:
 
         self._nav_mode = self._cfg.get("navigation_mode", "predictive")
 
-        self._state = AIState(navigation_mode=self._nav_mode)
+        # Run logging (CSV + annotated frames) starts from config; toggled at
+        # runtime from the UI (CMD_LOGGING) or at startup via env/CLI.
+        self._logging_enabled = bool(self._cfg.get("logging", {}).get("enabled", False))
+
+        self._state = AIState(navigation_mode=self._nav_mode,
+                              logging_enabled=self._logging_enabled)
         self._state_lock = threading.Lock()
         self._motor_enabled = True  # False when UI disables AI (CMD_AIMODE#0)
 
@@ -83,6 +91,7 @@ class AIPipeline:
         self._detector = None
         self._world_model = None
         self._temporal = None
+        self._ssv2 = None
         self._fuser = None
         self._robot = None
         self._nav_logger = None
@@ -148,6 +157,17 @@ class AIPipeline:
         with self._state_lock:
             self._motor_enabled = enabled
         logger.info("Motor output %s", "enabled" if enabled else "disabled (manual/off mode)")
+
+    def set_logging_enabled(self, enabled: bool) -> None:
+        """Turn run logging (CSV + annotated frames) on/off at runtime."""
+        with self._state_lock:
+            self._logging_enabled = enabled
+            self._state.logging_enabled = enabled
+        logger.info("Run logging %s", "ENABLED" if enabled else "disabled")
+
+    def is_logging_enabled(self) -> bool:
+        with self._state_lock:
+            return self._logging_enabled
 
     def set_navigation_mode(self, mode: str) -> None:
         """Switch between 'predictive' and 'baseline' at runtime."""
@@ -245,6 +265,14 @@ class AIPipeline:
             self._temporal.push(obs_state)
             temporal_result = self._temporal.classify()
 
+            # ── 4b. Genuine SSv2 action recognition (annotation/log only) ─────
+            # The "something" slot is filled with the largest obstacle's YOLO
+            # class. Does NOT affect navigation.
+            object_label = det_result.labels[0] if det_result.labels else ""
+            ssv2_result = self._ssv2.recognize(clip or [], object_label)
+            ssv2_sentence = ssv2_result.sentence if ssv2_result.buffer_ready else ""
+            ssv2_conf = ssv2_result.confidence if ssv2_result.buffer_ready else 0.0
+
             # ── 5. Ultrasonic guard (hard safety) ─────────────────────────────
             sonic_risk = self._robot.get_ultrasonic_risk()
             sonic_cm = -1.0
@@ -266,34 +294,46 @@ class AIPipeline:
                 ultrasonic_risk=sonic_risk,
             )
 
-            logger.info(
-                "[%05d] %s risk=%.2f | det=%.2f wm=%.2f ta=%.2f | %s",
-                frame_idx, decision.action, decision.risk_score,
-                det_result.raw_risk, wm_risk, temporal_result.temporal_risk,
-                decision.explanation,
-            )
+            if ssv2_sentence:
+                logger.info(
+                    "[%05d] %s risk=%.2f | det=%.2f wm=%.2f ta=%.2f | SSv2: %s (%.0f%%) | %s",
+                    frame_idx, decision.action, decision.risk_score,
+                    det_result.raw_risk, wm_risk, temporal_result.temporal_risk,
+                    ssv2_sentence, ssv2_conf * 100, decision.explanation,
+                )
+            else:
+                logger.info(
+                    "[%05d] %s risk=%.2f | det=%.2f wm=%.2f ta=%.2f | %s",
+                    frame_idx, decision.action, decision.risk_score,
+                    det_result.raw_risk, wm_risk, temporal_result.temporal_risk,
+                    decision.explanation,
+                )
 
             # ── 7. Execute motor command ──────────────────────────────────────
             with self._state_lock:
                 motor_enabled = self._motor_enabled
+                logging_enabled = self._logging_enabled
             if motor_enabled:
                 self._execute_action(self._robot, decision.action)
 
             # ── 8. Visualise ──────────────────────────────────────────────────
             annotated = self._visualizer.annotate(
-                frame_bgr, det_result, decision, temporal_result, sonic_cm
+                frame_bgr, det_result, decision, temporal_result, sonic_cm,
+                ssv2_sentence=ssv2_sentence,
             )
             with self._annotated_lock:
                 self._last_annotated_bgr = annotated
             self._visualizer.show(annotated)
 
-            # ── 9. Log ────────────────────────────────────────────────────────
-            self._nav_logger.log_frame(
-                annotated, decision, det_result, sonic_cm
-            )
+            # ── 9. Log (only when the operator has logging enabled) ───────────
+            if logging_enabled:
+                self._nav_logger.log_frame(
+                    annotated, decision, det_result, sonic_cm,
+                    ssv2_sentence=ssv2_sentence,
+                )
 
             # ── 10. Broadcast AI status to TCP client ─────────────────────────
-            self._broadcast_status(decision, temporal_result, sonic_cm)
+            self._broadcast_status(decision, temporal_result, sonic_cm, ssv2_sentence)
 
             # ── 11. Update shared state ───────────────────────────────────────
             with self._state_lock:
@@ -304,6 +344,8 @@ class AIPipeline:
                 self._state.obstacles_detected = len(det_result.boxes)
                 self._state.ultrasonic_cm = sonic_cm
                 self._state.frame_count = frame_idx
+                self._state.ssv2_sentence = ssv2_sentence
+                self._state.ssv2_confidence = ssv2_conf
 
     # ── Component construction ────────────────────────────────────────────────
 
@@ -337,6 +379,10 @@ class AIPipeline:
         self._world_model = WorldModel(cfg)
         self._world_model.load()
 
+        from ssv2_model import SSv2Recognizer
+        self._ssv2 = SSv2Recognizer(cfg)
+        self._ssv2.load()
+
         self._temporal = TemporalActionRecognizer(cfg)
         self._fuser = DecisionFuser(cfg, self._nav_mode)
         # Use TCP controller when robot_connection available, else real/mock
@@ -350,12 +396,16 @@ class AIPipeline:
 
     # ── TCP status broadcast ──────────────────────────────────────────────────
 
-    def _broadcast_status(self, decision, temporal_result, sonic_cm: float) -> None:
+    def _broadcast_status(self, decision, temporal_result, sonic_cm: float,
+                          ssv2_sentence: str = "") -> None:
         """
         Send a compact status string to all connected command clients so the
         lightweight client UI can display live AI state without video decoding.
 
-        Format: CMD_AISTATUS#<action>#<risk*100>#<wm_label>#<pattern>#<sonic_cm>\r\n
+        Format:
+          CMD_AISTATUS#<action>#<risk*100>#<wm_label>#<pattern>#<sonic_cm>#<ssv2>\r\n
+        The ssv2 sentence is the last field so older clients that split on the
+        first 6 fields keep working.
         """
         if self._tcp_server is None:
             return
@@ -366,12 +416,15 @@ class AIPipeline:
             action = getattr(decision.action, "value", decision.action)
             wm_label = getattr(decision.world_model_label, "value", decision.world_model_label)
             pattern = getattr(temporal_result.pattern, "value", temporal_result.pattern)
+            # '#' is the field separator; keep the sentence clean.
+            ssv2 = (ssv2_sentence or "").replace("#", " ")
             msg = (
                 f"CMD_AISTATUS#{action}"
                 f"#{int(decision.risk_score * 100)}"
                 f"#{wm_label}"
                 f"#{pattern}"
-                f"#{sonic_cm:.1f}\r\n"
+                f"#{sonic_cm:.1f}"
+                f"#{ssv2}\r\n"
             )
             if self._tcp_server.isCmdServerConnected():
                 self._tcp_server.sendDataToCmdClinet(msg)

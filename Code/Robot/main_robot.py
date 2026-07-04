@@ -324,6 +324,7 @@ def main() -> None:
                 area_frac_pct=last_packet.area_frac_pct,
                 centroid_x_pct=last_packet.centroid_x_pct,
                 sonic_cm=sonic_cm,
+                top_label=last_packet.top_label,
             )
             time.sleep(sonic_interval)
 

@@ -60,6 +60,19 @@ temporal_action:
   clear_ratio: 0.7             # fraction of absent frames → CLEARING
   movement_speed_threshold: 5.0  # px/frame to distinguish moving vs static
 
+# ── Genuine SSv2 action recognition (VideoMAE, annotation/log only) ──────────
+# Runs a real Something-Something-V2 video classifier over a clip; the
+# "something" placeholder in the predicted label is filled with the object YOLO
+# detected. Annotation/logging only — does NOT drive navigation. Falls back to a
+# stub (still fills the object) when the model/weights are unavailable.
+ssv2:
+  enabled: true
+  model_id: "MCG-NJU/videomae-base-finetuned-ssv2"
+  num_frames: 16
+  device: "cpu"
+  run_every_n_frames: 16       # heavy on CPU – classify roughly once per clip
+  min_confidence: 0.15         # below this the sentence is shown as tentative
+
 # ── Decision fusion ────────────────────────────────────────────────────────────
 decision:
   weights:
@@ -92,6 +105,10 @@ logging:
   save_annotated_frames: true
   annotated_frame_interval: 5
   csv_log: true
+  # Initial state of run logging (CSV + annotated frames). The operator can flip
+  # this at runtime from the UI toggle, or at startup with --logging on/off or
+  # the NAV_LOGGING=1/0 env var.
+  enabled: false
 
 # ── TCP / Server ───────────────────────────────────────────────────────────────
 server:

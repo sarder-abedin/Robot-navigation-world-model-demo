@@ -57,6 +57,7 @@ class RobotConnectionServer:
             "area_frac_pct": 0,
             "centroid_x_pct": 50,
             "n_obstacles": 0,
+            "top_label": "",
         }
         self._detection_lock = threading.Lock()
 
@@ -157,6 +158,7 @@ class RobotConnectionServer:
         cx_norm = d["centroid_x_pct"] / 100.0
         obs_in_center = d["obs_in_center"]
         n = d["n_obstacles"]
+        top_label = d.get("top_label", "") or "obstacle"
 
         boxes = []
         if n > 0 and area_frac > 0:
@@ -173,7 +175,7 @@ class RobotConnectionServer:
 
         return DetectionResult(
             boxes=boxes,
-            labels=["obstacle"] * len(boxes),
+            labels=[top_label] * len(boxes),
             confidences=[risk] * len(boxes),
             obstacle_in_center=obs_in_center,
             closest_area=area_frac,
@@ -299,6 +301,8 @@ class RobotConnectionServer:
                                 area_pct = int(parts[3])
                                 cx_pct = int(parts[4])
                                 sonic_cm = float(parts[5])
+                                # Optional trailing YOLO label (SSv2 filler).
+                                top_label = parts[6].strip() if len(parts) >= 7 else ""
                                 with self._detection_lock:
                                     self._latest_detection = {
                                         "yolo_risk_pct": risk_pct,
@@ -306,6 +310,7 @@ class RobotConnectionServer:
                                         "area_frac_pct": area_pct,
                                         "centroid_x_pct": cx_pct,
                                         "n_obstacles": 1 if risk_pct > 0 else 0,
+                                        "top_label": top_label,
                                     }
                                 with self._sonic_lock:
                                     self._latest_sonic_cm = sonic_cm

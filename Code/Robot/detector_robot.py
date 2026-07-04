@@ -28,6 +28,7 @@ class DetectionPacket:
     area_frac_pct: int = 0       # 0-100
     centroid_x_pct: int = 50     # 0-100  (50 = centre)
     n_obstacles: int = 0
+    top_label: str = ""          # class name of the largest obstacle (fills SSv2 "something")
 
 
 class DetectorRobot:
@@ -68,6 +69,8 @@ class DetectorRobot:
         obs_in_center = False
         best_area = 0.0
         best_cx = 0.5
+        best_label = ""
+        names = getattr(results, "names", None) or getattr(self._model, "names", {})
         n = 0
 
         for box in results.boxes:
@@ -76,6 +79,10 @@ class DetectorRobot:
             if area > best_area:
                 best_area = area
                 best_cx = (x1 + x2) / 2 / w
+                try:
+                    best_label = str(names[int(box.cls[0])])
+                except Exception:
+                    best_label = ""
             if cx_lo <= (x1 + x2) / 2 <= cx_hi:
                 obs_in_center = True
             n += 1
@@ -95,5 +102,6 @@ class DetectorRobot:
             area_frac_pct=int(best_area * 100),
             centroid_x_pct=int(best_cx * 100),
             n_obstacles=n,
+            top_label=best_label,
         )
         return self._last
