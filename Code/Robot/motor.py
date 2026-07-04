@@ -13,6 +13,7 @@ Positive → forward, negative → reverse.  Zero → coast stop.
 from __future__ import annotations
 
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -24,26 +25,54 @@ def _duty_to_fraction(value: int) -> float:
 
 
 class tankMotor:
-    def __init__(self, gpiochip: int = 0) -> None:
+    def __init__(self, gpiochip: int = 0, soft_start: bool = True,
+                 ramp_step: float = 0.35, ramp_pause: float = 0.02) -> None:
         from gpiozero import Motor
         from gpiozero.pins.lgpio import LGPIOFactory
         factory = LGPIOFactory(chip=gpiochip)
         self._left = Motor(forward=24, backward=23, pin_factory=factory)
         self._right = Motor(forward=5, backward=6, pin_factory=factory)
-        logger.info("tankMotor initialised (gpiochip%d)", gpiochip)
+        # Soft-start: ramp big PWM jumps over a few steps so the motor inrush
+        # current doesn't spike and brown out the Pi (which shows up as the Pi
+        # dropping off the network the moment it starts to drive). A jump larger
+        # than ramp_step (fraction of full scale) is split into 4 steps ~ramp_pause
+        # apart; steady/small changes apply instantly.
+        self._soft_start = soft_start
+        self._ramp_step = ramp_step
+        self._ramp_pause = ramp_pause
+        self._last_l = 0.0   # last signed fraction applied
+        self._last_r = 0.0
+        logger.info("tankMotor initialised (gpiochip%d, soft_start=%s)", gpiochip, soft_start)
 
-    def setMotorModel(self, left: int, right: int) -> None:
-        self._apply(self._left, left)
-        self._apply(self._right, right)
+    @staticmethod
+    def _signed_fraction(value: int) -> float:
+        f = _duty_to_fraction(value)
+        return f if value > 0 else (-f if value < 0 else 0.0)
 
-    def _apply(self, motor, value: int) -> None:
-        fraction = _duty_to_fraction(value)
-        if value > 0:
-            motor.forward(fraction)
-        elif value < 0:
-            motor.backward(fraction)
+    @staticmethod
+    def _apply_signed(motor, frac: float) -> None:
+        if frac > 0:
+            motor.forward(min(1.0, frac))
+        elif frac < 0:
+            motor.backward(min(1.0, -frac))
         else:
             motor.stop()
+
+    def setMotorModel(self, left: int, right: int) -> None:
+        tl = self._signed_fraction(left)
+        tr = self._signed_fraction(right)
+        biggest_jump = max(abs(tl - self._last_l), abs(tr - self._last_r))
+        if self._soft_start and biggest_jump > self._ramp_step:
+            steps = 4
+            for i in range(1, steps + 1):
+                self._apply_signed(self._left, self._last_l + (tl - self._last_l) * i / steps)
+                self._apply_signed(self._right, self._last_r + (tr - self._last_r) * i / steps)
+                if i < steps:
+                    time.sleep(self._ramp_pause)
+        else:
+            self._apply_signed(self._left, tl)
+            self._apply_signed(self._right, tr)
+        self._last_l, self._last_r = tl, tr
 
     def close(self) -> None:
         try:

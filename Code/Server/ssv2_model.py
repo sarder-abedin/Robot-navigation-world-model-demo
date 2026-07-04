@@ -137,7 +137,10 @@ class SSv2Recognizer:
 
         # Re-use the cached classification on skipped frames, but refresh the
         # filled sentence with the current object so the annotation stays live.
-        if self._model is not None and self._call_count % self._run_every != 0:
+        # Always run once as soon as the clip is FIRST ready (self._last has no
+        # real result yet) so we never show the default "UNKNOWN" placeholder.
+        have_result = self._last.buffer_ready
+        if self._model is not None and have_result and self._call_count % self._run_every != 0:
             cached = self._last
             return SSv2Result(
                 template=cached.template,

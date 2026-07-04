@@ -23,8 +23,8 @@ import streamlit as st
 # ── Constants ──────────────────────────────────────────────────────────────────
 CMD_PORT   = 5003
 VIDEO_PORT = 8003
-SPEED_FULL = 3000   # ~73% of the 4095 max duty — enough to actually move the tank
-SPEED_SLOW = 1800   # ~44%
+SPEED_FULL = 2000   # ~49% of the 4095 max duty — moves but stays reactive
+SPEED_SLOW = 1200   # ~29%
 MAX_FRAME_BYTES = 10 * 1024 * 1024   # reject absurd frame lengths (stream desync guard)
 
 ACTION_BG = {
@@ -373,7 +373,7 @@ with d2:
 
 if be.mode == "MANUAL":
     speed_choice = st.radio(
-        "Speed", ["Full  (3000 PWM)", "Slow  (1800 PWM)"], horizontal=True
+        "Speed", ["Full  (2000 PWM)", "Slow  (1200 PWM)"], horizontal=True
     )
     spd = SPEED_FULL if "Full" in speed_choice else SPEED_SLOW
 
