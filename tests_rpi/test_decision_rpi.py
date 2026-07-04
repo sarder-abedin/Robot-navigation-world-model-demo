@@ -81,3 +81,27 @@ def test_medium_risk_slows(cfg):
     mid = (cfg["decision"]["low_risk_max"] + cfg["decision"]["medium_risk_max"]) / 2
     r = f.decide(mid, mid, 0.0, "MIXED", "UNCERTAIN")
     assert r.action == Action.SLOW
+
+
+def test_ultrasonic_is_separate_not_fused(cfg):
+    """A partial ultrasonic risk (warn zone) must NOT drive the action or the
+    fused risk score — the ultrasonic is a separate hard-stop, only at >=1.0."""
+    f = DecisionFuser(cfg, "predictive")
+    r = f.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR", ultrasonic_risk=0.7)
+    assert r.action == Action.FORWARD          # 0.7 < 1.0 → no hard stop
+    assert r.risk_score == 0.0                 # ultrasonic not blended into AI risk
+
+
+def test_vision_reroutes_on_wm_blocked(cfg):
+    """High AI risk with a V-JEPA 2 BLOCKED label reroutes (vision-driven turn),
+    even without a BLOCKING temporal pattern and without ultrasonic."""
+    f = DecisionFuser(cfg, "predictive")
+    r = f.decide(0.9, 0.9, 0.9, "BLOCKED", "APPROACHING")
+    assert r.action == Action.REROUTE
+
+
+def test_high_risk_without_vision_block_stops(cfg):
+    """High AI risk but no vision block signal → STOP (can't know where to turn)."""
+    f = DecisionFuser(cfg, "predictive")
+    r = f.decide(0.9, 0.9, 0.9, "MIXED", "APPROACHING")
+    assert r.action == Action.STOP

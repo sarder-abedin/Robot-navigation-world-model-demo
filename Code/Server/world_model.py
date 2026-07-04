@@ -162,15 +162,35 @@ class WorldModel:
         logger.debug("Synthetic anchors initialised")
 
     def _preprocess_frame(self, rgb: np.ndarray) -> np.ndarray:
-        """(H,W,3) uint8 → (C,H,W) float32 ImageNet-normalised."""
+        """(H,W,3) uint8 → (C,input_size,input_size) float32 ImageNet-normalised.
+
+        Frames are resized to the model's expected resolution (input_size, e.g.
+        256 for vitl-fpc64-256) — the checkpoint's patch embedding is fixed to
+        that size, so feeding a different resolution corrupts the embedding.
+        """
+        import cv2
+        if rgb.shape[0] != self._input_size or rgb.shape[1] != self._input_size:
+            rgb = cv2.resize(rgb, (self._input_size, self._input_size),
+                             interpolation=cv2.INTER_AREA)
         f = rgb.astype(np.float32) / 255.0
         mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
         std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
         f = (f - mean) / std
         return f.transpose(2, 0, 1)
 
+    @staticmethod
+    def _sample_frames(frames: list[np.ndarray], n: int) -> list[np.ndarray]:
+        """Evenly sample exactly n frames (the checkpoint's frames-per-clip)."""
+        if len(frames) == n:
+            return list(frames)
+        idxs = np.linspace(0, len(frames) - 1, n).round().astype(int)
+        return [frames[i] for i in idxs]
+
     def _preprocess_clip(self, frames: list[np.ndarray]):
         import torch
+        # V-JEPA 2 checkpoints are fixed to N frames per clip (fpc64 → 64). Sample
+        # exactly that many so the temporal patch embedding matches the weights.
+        frames = self._sample_frames(frames, self._clip_len)
         arr = np.stack([self._preprocess_frame(f) for f in frames], axis=0)
         return torch.from_numpy(arr).float().to(self._device)
 

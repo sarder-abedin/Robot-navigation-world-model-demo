@@ -265,9 +265,11 @@ class AIPipeline:
             temporal_result = self._temporal.classify()
 
             # ── 4b. Genuine SSv2 action recognition (annotation/log only) ─────
-            # The "something" slot is filled with the largest obstacle's YOLO
-            # class. Does NOT affect navigation.
-            object_label = det_result.labels[0] if det_result.labels else ""
+            # The "something" slot is filled with the CLOSEST/largest obstacle's
+            # YOLO class (not just the first detected box). Does NOT affect nav.
+            object_label = getattr(det_result, "closest_label", "") or (
+                det_result.labels[0] if det_result.labels else ""
+            )
             ssv2_result = self._ssv2.recognize(clip or [], object_label)
             ssv2_sentence = ssv2_result.sentence if ssv2_result.buffer_ready else ""
             ssv2_conf = ssv2_result.confidence if ssv2_result.buffer_ready else 0.0
