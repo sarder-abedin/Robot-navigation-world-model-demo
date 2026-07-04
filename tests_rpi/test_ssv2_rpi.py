@@ -118,3 +118,81 @@ def test_aistatus_six_field_back_compat():
     p = line.split("#")
     ssv2 = p[6].strip() if len(p) >= 7 else ""
     assert ssv2 == ""
+
+
+# ── Pi picks the largest obstacle's label ─────────────────────────────────────
+
+def test_detector_robot_top_label_is_largest_box():
+    import numpy as np
+    from detector_robot import DetectorRobot
+
+    class Box:
+        def __init__(self, xyxy, cls):
+            self.xyxy = [np.array(xyxy)]
+            self.cls = [cls]
+
+    class Res:
+        names = {0: "person", 1: "chair"}
+        boxes = [Box([10, 10, 50, 50], 1), Box([0, 0, 200, 200], 0)]  # person is bigger
+        def __call__(self, *a, **k):
+            return [self]
+
+    d = DetectorRobot({"detector": {"run_every_n_frames": 1}})
+    d._model = Res()
+    pkt = d.detect(np.zeros((300, 400, 3), np.uint8))
+    assert pkt.top_label == "person" and pkt.n_obstacles == 2
+
+
+def test_detector_robot_top_label_empty_when_no_detections():
+    import numpy as np
+    from detector_robot import DetectorRobot
+
+    class Res:
+        names = {}
+        boxes = []
+        def __call__(self, *a, **k):
+            return [self]
+
+    d = DetectorRobot({"detector": {"run_every_n_frames": 1}})
+    d._model = Res()
+    assert d.detect(np.zeros((300, 400, 3), np.uint8)).top_label == ""
+
+
+# ── Server-side run-logging toggle ────────────────────────────────────────────
+
+def test_pipeline_logging_toggle(cfg):
+    from ai_pipeline import AIPipeline
+    cfg["logging"]["enabled"] = False
+    ai = AIPipeline(cfg=cfg)
+    assert ai.is_logging_enabled() is False
+    ai.set_logging_enabled(True)
+    assert ai.is_logging_enabled() is True
+    assert ai.get_state().logging_enabled is True
+    ai.set_logging_enabled(False)
+    assert ai.is_logging_enabled() is False
+
+
+def test_pipeline_logging_initial_from_config(cfg):
+    from ai_pipeline import AIPipeline
+    cfg["logging"]["enabled"] = True
+    assert AIPipeline(cfg=cfg).is_logging_enabled() is True
+
+
+def test_resolve_logging_enabled_precedence(monkeypatch):
+    import main_server
+
+    class Args:
+        def __init__(self, logging):
+            self.logging = logging
+
+    # --logging flag wins over env and config
+    monkeypatch.setenv("NAV_LOGGING", "1")
+    assert main_server._resolve_logging_enabled(Args("off"), {"logging": {"enabled": True}}) is False
+    # env wins over config when no flag
+    assert main_server._resolve_logging_enabled(Args(None), {"logging": {"enabled": False}}) is True
+    monkeypatch.setenv("NAV_LOGGING", "0")
+    assert main_server._resolve_logging_enabled(Args(None), {"logging": {"enabled": True}}) is False
+    # config used when neither flag nor env
+    monkeypatch.delenv("NAV_LOGGING", raising=False)
+    assert main_server._resolve_logging_enabled(Args(None), {"logging": {"enabled": True}}) is True
+    assert main_server._resolve_logging_enabled(Args(None), {"logging": {"enabled": False}}) is False
