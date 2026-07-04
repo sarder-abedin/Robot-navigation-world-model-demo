@@ -61,10 +61,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # cannot read the Pi CSI camera.
 #
 # We add dist-packages via a .pth file (site.addsitedir APPENDS it) rather than
-# PYTHONPATH (which PREPENDS).  Appending keeps the pip-installed numpy/OpenCV in
-# /usr/local ahead of the apt numpy in dist-packages, avoiding a numpy ABI clash
-# that would otherwise break `import cv2`, while still making picamera2 + libcamera
-# importable.
+# PYTHONPATH (which PREPENDS), so the pip-installed OpenCV in /usr/local stays
+# ahead of any apt copy while picamera2 + libcamera remain importable. NOTE:
+# path order alone is NOT relied on for numpy — the pip step below force-pins
+# numpy 1.26.4 and removes the apt numpy outright (see the ABI comment there).
 RUN echo "import site; site.addsitedir('/usr/lib/python3/dist-packages')" \
     > /usr/local/lib/python3.11/site-packages/zzz_dist_packages.pth
 
@@ -89,12 +89,20 @@ COPY Code/Robot/ .
 #                   docker build --build-arg YOLO_ON_PI=0 -f Dockerfile.robot ...
 ARG YOLO_ON_PI=1
 
-# numpy is pinned to the 1.26 line on purpose: the apt-built picamera2 helper
-# `simplejpeg` is compiled against numpy 1.26 (dtype struct size 96).  An older
-# numpy 1.24 (size 88) or numpy 2.x (size 120) triggers
+# numpy MUST be exactly the 1.26 line: the apt-built picamera2 helper `simplejpeg`
+# (in /usr/lib/python3/dist-packages) is compiled against numpy 1.26 (dtype struct
+# size 96). An older numpy 1.24 (size 88) or numpy 2.x (size 120) triggers
 #   "ValueError: numpy.dtype size changed ... Expected 96 ... got 88/120"
-# when picamera2 imports simplejpeg.  numpy 1.26.x keeps OpenCV / torch /
-# ultralytics happy too, so it is the one version that satisfies the whole stack.
+# when picamera2 imports simplejpeg.
+#
+# Two hazards break the naive pin:
+#   1. Bookworm ships an apt numpy 1.24 in dist-packages. Relying only on sys.path
+#      order (the .pth append) to keep pip's 1.26 ahead is fragile — on the current
+#      apt/pip snapshot the apt 1.24 wins and simplejpeg aborts.
+#   2. `pip install ultralytics` can quietly move numpy off 1.26.
+# So we (a) pin numpy 1.26.4 LAST with --force-reinstall so nothing downgrades it,
+# and (b) delete the stale apt numpy from dist-packages so 1.26.4 is the ONLY numpy
+# importable — guaranteeing it matches what simplejpeg was compiled against.
 RUN pip install --no-cache-dir \
     "lgpio>=0.2.2.0" \
     "gpiozero>=2.0" \
@@ -105,7 +113,13 @@ RUN pip install --no-cache-dir \
          pip install --no-cache-dir "ultralytics>=8.0.0"; \
        else \
          echo "YOLO_ON_PI=0 – skipping ultralytics/torch (server-side detection)"; \
-       fi
+       fi \
+    && pip install --no-cache-dir --force-reinstall --no-deps "numpy==1.26.4" \
+    && rm -rf /usr/lib/python3/dist-packages/numpy \
+              /usr/lib/python3/dist-packages/numpy.libs \
+              /usr/lib/python3/dist-packages/numpy-*.egg-info \
+              /usr/lib/python3/dist-packages/numpy-*.dist-info \
+    && python3 -c "import numpy; print('numpy authoritative:', numpy.__version__, numpy.__file__)"
 
 # ---------------------------------------------------------------------------
 # Verify the camera stack imports (fail the build if it does not).
