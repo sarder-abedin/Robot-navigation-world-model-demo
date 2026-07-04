@@ -29,6 +29,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ---------------------------------------------------------------------------
 # System packages
+#   gcc/g++/python3-dev/libcap-dev : build toolchain for the arm64 pip wheels
+#   libatlas-base-dev              : BLAS for numpy/opencv
+#   libglib2.0-0                   : required by opencv-python-headless at import
+#   libcamera0.5 + python3-libcamera + python3-picamera2 : Pi CSI camera stack
+#   python3-kms++ / python3-prctl  : picamera2 runtime helpers
+# NOTE: libgl1 is intentionally NOT installed — it is only needed by the GUI
+# opencv-python; we use opencv-python-headless (no libGL). libcamera-tools (CLI
+# binaries) is also omitted — the app uses the python3-libcamera bindings only.
 # ---------------------------------------------------------------------------
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -38,9 +46,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcap-dev \
     libatlas-base-dev \
     libglib2.0-0 \
-    libgl1 \
     libcamera0.5 \
-    libcamera-tools \
     python3-libcamera \
     python3-picamera2 \
     python3-kms++ \
@@ -69,7 +75,6 @@ WORKDIR /app
 # ---------------------------------------------------------------------------
 
 COPY Code/Robot/ .
-COPY Code/Server/parameter.py .
 
 # ---------------------------------------------------------------------------
 # Python dependencies
