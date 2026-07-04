@@ -75,6 +75,15 @@ COPY Code/Server/parameter.py .
 # Python dependencies
 # ---------------------------------------------------------------------------
 
+# YOLO_ON_PI controls whether YOLOv8n runs on the Pi.
+#   1 (default) → install ultralytics/torch; the Pi can run YOLO locally
+#                 (DETECTOR_LOCATION=pi, classic split-inference).
+#   0           → SKIP ultralytics/torch entirely for a much smaller/faster Pi
+#                 image. Use with DETECTOR_LOCATION=server so the PC runs YOLO on
+#                 the streamed frames (saves the Pi's CPU/battery). Build with:
+#                   docker build --build-arg YOLO_ON_PI=0 -f Dockerfile.robot ...
+ARG YOLO_ON_PI=1
+
 # numpy is pinned to the 1.26 line on purpose: the apt-built picamera2 helper
 # `simplejpeg` is compiled against numpy 1.26 (dtype struct size 96).  An older
 # numpy 1.24 (size 88) or numpy 2.x (size 120) triggers
@@ -84,10 +93,14 @@ COPY Code/Server/parameter.py .
 RUN pip install --no-cache-dir \
     "lgpio>=0.2.2.0" \
     "gpiozero>=2.0" \
-    "ultralytics>=8.0.0" \
     "numpy>=1.26,<2" \
     "PyYAML>=6.0.0" \
-    "opencv-python-headless>=4.8.0"
+    "opencv-python-headless>=4.8.0" \
+    && if [ "$YOLO_ON_PI" = "1" ]; then \
+         pip install --no-cache-dir "ultralytics>=8.0.0"; \
+       else \
+         echo "YOLO_ON_PI=0 – skipping ultralytics/torch (server-side detection)"; \
+       fi
 
 # ---------------------------------------------------------------------------
 # Verify the camera stack imports (fail the build if it does not).
@@ -102,12 +115,19 @@ RUN pip install --no-cache-dir \
 RUN python3 -c "import numpy, cv2, simplejpeg, libcamera, picamera2; from picamera2.encoders import JpegEncoder; print('camera stack import OK: numpy', numpy.__version__, '| cv2', cv2.__version__, '| simplejpeg + picamera2 + libcamera present')"
 
 # ---------------------------------------------------------------------------
-# Download YOLO weights during build
+# Download YOLO weights during build (only when YOLO runs on the Pi)
 # ---------------------------------------------------------------------------
 
-RUN python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')" || true
+RUN if [ "$YOLO_ON_PI" = "1" ]; then \
+      python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')" || true; \
+    fi
 
 ENV SERVER_IP=192.168.1.100
+# DETECTOR_LOCATION: where YOLO runs in live mode.
+#   pi     → Pi runs YOLOv8n locally (default; needs YOLO_ON_PI=1 image)
+#   server → Pi streams frames only; the PC runs YOLO (saves Pi battery)
+# Override at runtime: docker run -e DETECTOR_LOCATION=server nav-robot
+ENV DETECTOR_LOCATION=pi
 # GPIO_CHIP: override the gpiochip device number at runtime.
 # Pi 5 kernel ≥ 6.6 (pinctrl-rp1): GPIO_CHIP=0  (default)
 # Pi 5 kernel < 6.6 or if gpiodetect shows gpiochip4: GPIO_CHIP=4

@@ -9,10 +9,14 @@
 #     libopenblas-dev                     # speeds up numpy / torch on arm64
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── AI – YOLOv8n (runs locally on the Pi) ────────────────────────────────────
+# ── AI – YOLOv8n (ONLY needed when DETECTOR_LOCATION=pi) ──────────────────────
 # ultralytics pulls in torch for arm64 automatically on Pi OS (Bookworm).
 # If pip cannot find a torch wheel for your platform, install it manually:
 #   pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#
+# OPTIONAL: if you run YOLO on the PC instead (DETECTOR_LOCATION=server), the Pi
+# never imports torch/ultralytics — skip this line for a much smaller install.
+# The Docker image skips it automatically when built with --build-arg YOLO_ON_PI=0.
 ultralytics>=8.0.0
 
 # ── Pi camera ─────────────────────────────────────────────────────────────────

@@ -80,6 +80,29 @@ docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpio
 > **GPIO chip** — on Pi 5 the RP1 controller is `/dev/gpiochip0`, but the lgpio pin factory also probes `gpiochip4`, so map the host controller to **both** container nodes (`--device /dev/gpiochip0:/dev/gpiochip0 --device /dev/gpiochip0:/dev/gpiochip4`) as shown above. If motors log `can not open gpiochip`, that second mapping is missing. Run `gpiodetect` on the host to confirm which chip is `pinctrl-rp1`.
 >
 > **Motor speed** — the robot drives **slowly** by default (`speed_full: 1600`, `speed_slow: 1000` out of 4095) so it stays reactive to the CPU pipeline. Tune it **without rebuilding** via `-e SPEED_FULL=<n> -e SPEED_SLOW=<n>` (or edit `config_robot.yaml`): raise it a little if the robot doesn't start moving, lower it if it's still too fast. A soft-start ramp (`robot.soft_start`) blunts the current spike so the Pi doesn't brown out on drive.
+>
+> ⚠️ **Compose forwards env vars only if they're declared.** With `docker compose`, an inline var like `SPEED_FULL=1500` reaches the container **only** because `docker-compose.robot.yml` lists it under `environment:`. The forwarded vars are: `SERVER_IP`, `DETECTOR_LOCATION`, `SPEED_FULL`, `SPEED_SLOW`, `CAMERA_HFLIP`, `CAMERA_VFLIP`, `GPIO_CHIP`. Example: `SERVER_IP=192.168.68.107 SPEED_FULL=1500 docker compose -f docker-compose.robot.yml up`.
+>
+> 🔋 **Server-side YOLO (battery saver)** — if the Pi keeps **browning out** (drops off Wi-Fi the moment it starts driving), move YOLO to the PC. The Pi already streams every frame to the PC for V-JEPA 2, so this costs no extra bandwidth; it just removes the Pi's biggest CPU/current draw. Set `DETECTOR_LOCATION=server` on **both** the robot and the server (they must match), and the Pi keeps its ultrasonic sensor as the local hard-stop safety:
+>
+> ```bash
+> # Robot (run ON the Pi): stream frames only, no YOLO.  --build is REQUIRED the
+> # first time and after every git pull, or compose reuses the stale image and the
+> # DETECTOR_LOCATION switch is ignored (see "compose reuses stale images" below).
+> SERVER_IP=192.168.1.42 DETECTOR_LOCATION=server docker compose -f docker-compose.robot.yml up --build
+>
+> # Server (run on the PC): run YOLO on the streamed frames
+> NAV_MODE=live DETECTOR_LOCATION=server docker compose -f docker-compose.server.yml up --build
+> ```
+>
+> For an even smaller/faster Pi image that omits torch/ultralytics entirely, build with `docker build --platform linux/arm64 --build-arg YOLO_ON_PI=0 -f Dockerfile.robot -t nav-robot .` (only valid together with `DETECTOR_LOCATION=server`).
+>
+> ⚠️ **`docker compose up` reuses stale images.** Both compose files pin an
+> `image:` name, so `up` alone will **not** rebuild after you change code or
+> `git pull` — it silently reruns the old image and your new flags appear to "do
+> nothing". Always pass `--build` (or run `docker compose ... build` first). Build
+> the **robot** image **on the Pi** (arm64 + Raspberry Pi apt repos); it will not
+> build on a Mac/PC.
 
 ---
 
@@ -87,27 +110,31 @@ docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpio
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  PC / Laptop  (TCP SERVER – runs heavy AI)                      │
+│  PC / Laptop  (TCP SERVER – runs heavy AI)  [venv OR Docker]    │
 │                                                                 │
 │  main_server.py              ← entry point                      │
 │  ├── V-JEPA 2                ← future-scene prediction          │
-│  ├── SSv2 temporal rules     ← motion pattern classification    │
+│  ├── SSv2 (VideoMAE)         ← genuine action recognition       │
+│  ├── YOLOv8n  (server mode)  ← runs here iff DETECTOR_LOCATION= │
+│  │                             server (offloads the Pi's battery)│
 │  ├── Decision fuser          ← weighted risk fusion + hysteresis│
 │  ├── Visualization (OpenCV)  ← annotated HUD overlay            │
 │  └── TCP servers                                                │
-│      ├── ports 5003/8003     ← operator UI viewer (ai_viewer)   │
+│      ├── ports 5003/8003     ← operator UI viewer               │
 │      └── ports 5004/8004     ← robot (Pi) connection            │
 └───────────────────┬──────────────────────────────────────────── ┘
-                    │  CMD_AIMOVE / CMD_STOP ↓  ↑ CMD_DETECTION
-                    │  CMD_MOTOR (manual)    ↓  ↑ JPEG frames
+                    │  CMD_AIMOVE / CMD_STOP ↓  ↑ CMD_DETECTION (risk + sonic)
+                    │  CMD_MOTOR (manual)    ↓  ↑ JPEG frames (always)
 ┌───────────────────┴──────────────────────────────────────────── ┐
-│  Raspberry Pi  (TCP CLIENT – hardware + fast AI)                │
+│  Raspberry Pi  (TCP CLIENT – hardware)      [Docker]           │
 │                                                                 │
 │  main_robot.py               ← connects to PC server            │
-│  ├── YOLOv8n                 ← instantaneous obstacle detection  │
 │  ├── picamera2               ← JPEG camera stream → port 8004   │
+│  ├── YOLOv8n  (pi mode)      ← runs here iff DETECTOR_LOCATION= │
+│  │                             pi (default); skipped in server  │
 │  ├── tankMotor (gpiozero)    ← executes CMD_AIMOVE / CMD_MOTOR  │
-│  └── Ultrasonic sensor       ← distance included in CMD_DETECTION│
+│  └── Ultrasonic sensor       ← local hard-stop safety (ALWAYS   │
+│                                on the Pi, both modes)           │
 └─────────────────────────────────────────────────────────────────┘
                     ▲
                     │  CMD_AISTATUS (live AI state)
@@ -127,7 +154,9 @@ docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpio
 **Key design decisions:**
 - The PC is the TCP *server* (binds and listens); the robot and UI viewer are
   TCP *clients* (connect outbound to the PC).
-- **YOLOv8n runs on the Pi** (fast reactive detection, low latency).
+- **YOLOv8n runs on the Pi** by default (fast reactive detection, low latency),
+  or on the **PC** when `DETECTOR_LOCATION=server` — the Pi then streams frames
+  only, sparing its battery (see the 🔋 note above).
 - **V-JEPA 2 + SSv2 + decision run on the PC** (GPU-capable heavy inference).
 - Only compact detection results (`CMD_DETECTION`) are sent over the network —
   not raw feature tensors.
@@ -138,7 +167,7 @@ docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpio
 
 | Model | Nickname | What it does | Where it runs |
 |---|---|---|---|
-| **YOLOv8n** | "The Photographer" | Spots obstacles in the current frame; sends aggregated risk+position **and the largest obstacle's class label** to PC | Pi |
+| **YOLOv8n** | "The Photographer" | Spots obstacles in the current frame; sends aggregated risk+position **and the largest obstacle's class label** to PC | Pi (or PC if `DETECTOR_LOCATION=server`) |
 | **V-JEPA 2** | "The Fortune Teller" | Predicts what the scene will look like 0.5 s from now in latent space | PC |
 | **SSv2 temporal rules** | "The Behaviour Analyst" | Classifies the obstacle's motion pattern (APPROACHING / CROSSING / BLOCKING …) — drives `temporal_risk` | PC |
 | **SSv2 model (VideoMAE)** | "The Narrator" | A **real** Something-Something-V2 video classifier; its "something" slot is filled with YOLO's object → e.g. *"person moving closer"*. Annotation/log only | PC |
@@ -285,35 +314,57 @@ Robot-navigation-world-model-demo/
 
 ### PC / Laptop (TCP server – binds ports 5003/5004/8003/8004)
 
+The server runs **two ways** — pick one. Use the **virtualenv** path for development
+and GPU on a Mac (MPS); use **Docker** for a one-command reproducible run. Both are
+documented step by step under [How to run](#how-to-run).
+
+**Option 1 — Python virtualenv (native):**
+
 ```bash
 # Clone the repo
 git clone https://github.com/sarder-abedin/robot-navigation-world-model-demo
 cd robot-navigation-world-model-demo
 
-# Install Python packages
+# Create and activate an isolated virtual environment
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+
+# Install server + UI dependencies into the venv
+pip install --upgrade pip
 pip install -r requirements_server.txt
 
 # V-JEPA 2 weights (~300 MB) are downloaded from HuggingFace on first run.
 # If offline, the system falls back to a lightweight stub encoder.
 ```
 
-### Raspberry Pi (TCP client – robot hardware + YOLOv8n)
+**Option 2 — Docker:** no local Python needed; see
+[Option C – Docker](#option-c--docker-recommended-for-reproducibility).
 
-The Pi connects **outbound** to the PC server; it does not bind any ports.
+### Raspberry Pi (TCP client – robot hardware) — **Docker-based**
+
+The Pi runs **in Docker** (the supported path): the image bundles picamera2,
+libcamera, GPIO and — in `pi` detection mode — YOLOv8n, all pinned to versions
+that coexist on Pi OS. It connects **outbound** to the PC server; it binds no ports.
 
 ```bash
-# System packages (run once on the Pi)
+# On the Pi, from the repo root:
+docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
+# (drop --platform if building on the Pi itself). Full run commands under
+# "How to run → Option C". YOLOv8n weights (~6 MB) are baked in at build time.
+```
+
+<details><summary>Bare-metal Pi install (unsupported fallback, no Docker)</summary>
+
+```bash
 sudo apt-get update
 sudo apt-get install -y python3-picamera2 python3-libcamera python3-gpiozero python3-kms++ python3-prctl libatlas-base-dev
-
-# Python packages (includes ultralytics for YOLOv8n)
 cd /path/to/robot-navigation-world-model-demo
+python3 -m venv .venv --system-site-packages   # picamera2/libcamera come from apt
+source .venv/bin/activate
 pip3 install -r Code/Robot/requirements_robot.txt
-
-# YOLOv8n weights (~6 MB) download automatically on first run.
-# To pre-download:
-python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
+python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"   # pre-fetch weights
 ```
+</details>
 
 ---
 
@@ -389,16 +440,23 @@ python main_server.py --mode live --nav predictive
 ```
 The server prints its ports and waits for the robot to connect.
 
-**Step 4** – On the Raspberry Pi, connect the robot client:
+**Step 4** – On the Raspberry Pi, start the robot client **in Docker** (build once,
+then run — see [Option C](#option-c--docker-recommended-for-reproducibility) for the
+full flags):
 ```bash
-cd Code/Robot
-python main_robot.py --server-ip 192.168.1.42
+# On the Pi:
+SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up --build
 ```
 The robot:
-1. Loads YOLOv8n locally
-2. Starts streaming JPEG frames to PC (for V-JEPA 2)
-3. Sends `CMD_DETECTION` (YOLO result + ultrasonic) to PC every 100 ms
-4. Awaits `CMD_AIMOVE` (AI actions) and `CMD_MOTOR` (manual commands)
+1. Streams JPEG frames to the PC (for V-JEPA 2) and reads the ultrasonic sensor
+2. Runs YOLOv8n **locally** (default `DETECTOR_LOCATION=pi`) and sends `CMD_DETECTION`
+   (YOLO risk + ultrasonic) to the PC every 100 ms — **or**, with
+   `DETECTOR_LOCATION=server`, skips YOLO and lets the PC run it (saves battery)
+3. Awaits `CMD_AIMOVE` (AI actions) and `CMD_MOTOR` (manual commands)
+
+> **Where does YOLO run?** Set `DETECTOR_LOCATION` (`pi` default | `server`) on
+> **both** sides — they must match. `server` mode moves detection to the PC so the
+> Pi only streams frames + reads ultrasonic; see the 🔋 battery-saver note above.
 
 **Step 5 (optional)** – Open the browser UI viewer from any machine on the network:
 
@@ -446,8 +504,11 @@ docker run --rm -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501
 # Server only (no Streamlit viewer)
 docker run --rm -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 nav-server python main_server.py --mode demo --nav predictive --no-display
 
-# Via docker compose (recommended — sets NAV_MODE and NAV_STRATEGY env vars)
-NAV_MODE=live NAV_STRATEGY=predictive docker compose -f docker-compose.server.yml up
+# Via docker compose (recommended — forwards NAV_MODE, NAV_STRATEGY, DETECTOR_LOCATION).
+# Pass --build the first time and after every git pull (compose reuses stale images).
+NAV_MODE=live NAV_STRATEGY=predictive docker compose -f docker-compose.server.yml up --build
+# Server-side YOLO (battery saver): add DETECTOR_LOCATION=server (match the robot)
+NAV_MODE=live DETECTOR_LOCATION=server docker compose -f docker-compose.server.yml up --build
 
 # NVIDIA GPU (Linux only — requires nvidia-container-toolkit)
 docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 -f Dockerfile.server -t nav-server-gpu .
@@ -465,8 +526,11 @@ The robot image uses `python:3.11-slim-bookworm`.
 # Build (cross-compile on Mac/Linux, or build directly on the Pi)
 docker build --platform linux/arm64 -f Dockerfile.robot -t nav-robot .
 
-# Recommended — docker compose wires up camera + both gpiochips + udev for you:
-SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up
+# Recommended — docker compose wires up camera + both gpiochips + udev for you.
+# --build is required the first time and after every git pull (stale-image trap).
+SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up --build
+# Battery saver: skip YOLO on the Pi (match DETECTOR_LOCATION=server on the PC too):
+SERVER_IP=192.168.1.42 DETECTOR_LOCATION=server docker compose -f docker-compose.robot.yml up --build
 
 # Equivalent single docker run (Pi 5) — replace 192.168.1.42 with your PC's IP.
 # BOTH gpiochip mappings are required (RP1 is gpiochip0 but lgpio also probes 4),

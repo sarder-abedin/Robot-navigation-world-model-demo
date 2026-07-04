@@ -199,13 +199,26 @@ def main() -> None:
             logger.warning("Ultrasonic init failed (%s) – sensor disabled", exc)
             ultrasonic = None
 
-        detector = DetectorRobot(cfg)
-        try:
-            detector.load()
-            logger.info("YOLOv8n loaded on Pi")
-        except Exception as exc:
-            logger.warning("YOLOv8n load failed (%s) – detection disabled", exc)
+        # Detection location: run YOLO on the Pi ("pi") or offload it to the PC
+        # ("server"). In server mode the Pi skips YOLOv8n entirely (big CPU/current
+        # saving – fixes battery brownouts) and just streams frames + ultrasonic.
+        det_location = os.environ.get(
+            "DETECTOR_LOCATION", str(cfg.get("detector", {}).get("location", "pi"))
+        ).strip().lower()
+        if det_location == "server":
             detector = None
+            logger.info(
+                "DETECTOR_LOCATION=server – YOLO runs on the PC. Pi skips YOLOv8n "
+                "to save power (still streams camera + reads ultrasonic)."
+            )
+        else:
+            detector = DetectorRobot(cfg)
+            try:
+                detector.load()
+                logger.info("YOLOv8n loaded on Pi")
+            except Exception as exc:
+                logger.warning("YOLOv8n load failed (%s) – detection disabled", exc)
+                detector = None
 
         logger.info("Hardware initialised in live mode")
     else:

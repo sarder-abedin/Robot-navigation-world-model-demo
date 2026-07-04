@@ -14,9 +14,10 @@ torchvision>=0.16.0,<0.23.0  # required by ultralytics; V-JEPA 2 uses torch only
 transformers>=4.40.0         # HuggingFace AutoModel for V-JEPA 2 weights
 accelerate>=0.27.0           # fast model loading for transformers
 
-# ── Object detection (demo mode only) ─────────────────────────────────────────
-# In live mode YOLOv8n runs on the Pi; the server receives CMD_DETECTION.
-# In demo mode (no robot) the server runs YOLOv8n locally for comparison.
+# ── Object detection ──────────────────────────────────────────────────────────
+# Needed for: demo mode (no robot) AND live mode with DETECTOR_LOCATION=server
+# (the PC runs YOLO on the Pi's streamed frames). With DETECTOR_LOCATION=pi
+# (default) the Pi runs YOLO and the server only receives CMD_DETECTION.
 ultralytics>=8.1.0
 
 # ── Computer vision ───────────────────────────────────────────────────────────
