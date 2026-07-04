@@ -164,7 +164,10 @@ def main() -> None:
         sonic_cfg = cfg.get("ultrasonic", {})
 
         try:
-            motor = tankMotor(gpiochip=gpio_chip)
+            motor = tankMotor(
+                gpiochip=gpio_chip,
+                soft_start=cfg.get("robot", {}).get("soft_start", True),
+            )
         except Exception as exc:
             logger.warning(
                 "Motor init failed (%s) – motor disabled. "
@@ -289,6 +292,7 @@ def main() -> None:
         """
         from detector_robot import DetectionPacket
         last_packet = DetectionPacket()
+        sonic_dead_ticks = 0   # consecutive max/error readings → sensor likely down
 
         while not _shutdown and client.is_connected:
             # ── 1. YOLOv8n on the latest cached frame (live mode only) ────────
@@ -316,6 +320,20 @@ def main() -> None:
                     sonic_cm = ultrasonic.get_distance()
                 except Exception as exc:
                     logger.warning("Ultrasonic error: %s", exc)
+                # A sensor that never echoes pins at max range (≈400 cm), so the
+                # hard STOP guard never fires — warn loudly, it's a safety issue.
+                if sonic_cm < 0 or sonic_cm >= 395:
+                    sonic_dead_ticks += 1
+                    if sonic_dead_ticks % 100 == 1:
+                        logger.warning(
+                            "Ultrasonic reads no echo (%.0f cm) – the distance safety "
+                            "STOP is effectively DISABLED. Check the HC-SR04 wiring "
+                            "(trigger=%s echo=%s) / 5V power / echo level-shift.",
+                            sonic_cm, sonic_cfg.get("trigger_pin", 27),
+                            sonic_cfg.get("echo_pin", 22),
+                        )
+                else:
+                    sonic_dead_ticks = 0
 
             # ── 3. Send fused CMD_DETECTION to PC ────────────────────────────
             client.send_detection(
