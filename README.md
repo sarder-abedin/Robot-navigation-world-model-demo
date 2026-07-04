@@ -8,6 +8,14 @@ future obstacles — not just react to what is currently visible.
 
 ## Quick Start
 
+> **Rebuild after pulling changes** — the server and robot are **two separate
+> images**. After changing code (or `git pull`), rebuild **both** or the stale one
+> keeps its old behaviour: `docker build -f Dockerfile.server -t nav-server .`
+> **and** `docker build -f Dockerfile.robot -t nav-robot .` (add `--no-cache` if a
+> change isn't picked up). A robot log line like `Camera started via picamera2`
+> instead of `Camera streaming via picamera2 JpegEncoder` means the robot image
+> is stale.
+
 ### Fastest path — Docker on Mac / Linux (no robot needed)
 
 ```bash

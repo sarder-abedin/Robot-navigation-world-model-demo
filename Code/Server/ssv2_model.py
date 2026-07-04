@@ -51,21 +51,24 @@ class SSv2Result:
 
 
 def fill_template(template: str, object_label: str) -> str:
-    """Replace the SSv2 'something' placeholder(s) with the detected object.
+    """Fill the SSv2 'something' placeholder(s) with the detected object.
 
-    Preserves sentence-initial capitalisation ("Something" -> "Person"). If no
-    object was detected, the template is returned unchanged ("something").
+    Real SSv2/VideoMAE labels use bracketed placeholders, e.g.
+    "Showing [something] behind [something]" or "Moving [something] closer".
+    We handle both the bracketed "[something]" form and the bare "something",
+    in either case. If no object was detected we just strip the placeholder
+    brackets for readability ("Showing something behind something").
     """
     if not template:
         return ""
     obj = (object_label or "").strip()
     if not obj:
-        return template
-    # Capitalised placeholder at the start of the sentence.
-    out = re.sub(r"^Something\b", obj[:1].upper() + obj[1:], template)
-    # Any remaining lowercase "something" placeholders.
-    out = re.sub(r"\bsomething\b", obj, out)
-    return out
+        # No detected object → drop the [ ] brackets so the sentence reads cleanly.
+        return re.sub(r"\[([Ss]omething)\]", r"\1", template)
+    out = re.sub(r"\[[Ss]omething\]", obj, template)   # "[something]" / "[Something]"
+    out = re.sub(r"\b[Ss]omething\b", obj, out)         # bare "something" / "Something"
+    # SSv2 sentences start capitalised.
+    return out[0].upper() + out[1:] if out else out
 
 
 class SSv2Recognizer:

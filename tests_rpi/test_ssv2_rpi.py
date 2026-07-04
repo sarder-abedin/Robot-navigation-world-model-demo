@@ -30,11 +30,18 @@ def cfg():
 # ── Template filling ──────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("template,obj,expected", [
+    # Bare-placeholder forms.
     ("Moving something closer", "person", "Moving person closer"),
     ("Pushing something from left to right", "chair", "Pushing chair from left to right"),
     ("Something falling like a rock", "bottle", "Bottle falling like a rock"),
-    ("Moving something closer", "", "Moving something closer"),   # no object → unchanged
     ("", "person", ""),                                            # empty template
+    # Real SSv2/VideoMAE bracketed placeholders.
+    ("Showing [something] behind [something]", "person", "Showing person behind person"),
+    ("Moving [something] closer to [something]", "cup", "Moving cup closer to cup"),
+    ("[Something] falling like a rock", "bottle", "Bottle falling like a rock"),
+    # No object detected → strip the brackets, keep "something".
+    ("Showing [something] behind [something]", "", "Showing something behind something"),
+    ("Moving something closer", "", "Moving something closer"),
 ])
 def test_fill_template(template, obj, expected):
     from ssv2_model import fill_template
@@ -50,7 +57,7 @@ def test_stub_composes_sentence_without_model(cfg):
     clip = [np.zeros((224, 224, 3), np.uint8) for _ in range(cfg["ssv2"]["num_frames"])]
     res = r.recognize(clip, "person")
     assert res.buffer_ready and res.is_stub
-    assert "person" in res.sentence
+    assert "person" in res.sentence.lower()
 
 
 def test_needs_full_clip(cfg):
