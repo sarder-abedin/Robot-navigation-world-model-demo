@@ -8,8 +8,22 @@ services:
 
     image: nav-robot:latest
 
+    # These forward shell env vars INTO the container. Without an entry here,
+    # `SPEED_FULL=1500 docker compose up` is silently ignored (the var never
+    # reaches the app). Set any of them inline or in a .env file, e.g.:
+    #   SERVER_IP=192.168.68.107 SPEED_FULL=1500 DETECTOR_LOCATION=server \
+    #     docker compose -f docker-compose.robot.yml up
     environment:
       SERVER_IP: ${SERVER_IP:-192.168.1.100}
+      # Where YOLO runs: "pi" (default) or "server" (Pi streams frames, PC runs YOLO)
+      DETECTOR_LOCATION: ${DETECTOR_LOCATION:-pi}
+      # Motor PWM duty (of 4095). Keep slow so the robot doesn't outrun perception.
+      SPEED_FULL: ${SPEED_FULL:-1600}
+      SPEED_SLOW: ${SPEED_SLOW:-1000}
+      # Camera orientation (1 = flip) and GPIO chip number.
+      CAMERA_HFLIP: ${CAMERA_HFLIP:-0}
+      CAMERA_VFLIP: ${CAMERA_VFLIP:-0}
+      GPIO_CHIP: ${GPIO_CHIP:-0}
 
     privileged: true
 

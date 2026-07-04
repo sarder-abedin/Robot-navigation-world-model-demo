@@ -13,8 +13,16 @@ server_ip: "192.168.1.100"
 robot_cmd_port: 5004
 robot_video_port: 8004
 
-# ── YOLOv8n detector (runs locally on Pi) ────────────────────────────────────
+# ── YOLOv8n detector ─────────────────────────────────────────────────────────
+# location:
+#   pi      → run YOLOv8n on the Pi and send CMD_DETECTION (classic split-inference)
+#   server  → skip YOLO on the Pi entirely; the PC runs it on the streamed frames.
+#             Saves a large amount of Pi CPU/current (fixes battery brownouts). The
+#             Pi still streams the camera, drives motors, and reads the ultrasonic
+#             sensor (its local hard-stop safety). Must match the SERVER's setting.
+# Override at runtime with -e DETECTOR_LOCATION=server (no rebuild needed).
 detector:
+  location: pi
   model: yolov8n.pt           # nano model – fits comfortably on Pi 4/5
   conf: 0.35                  # confidence threshold
   run_every_n_frames: 2       # inference every 2nd frame (reduce CPU load)

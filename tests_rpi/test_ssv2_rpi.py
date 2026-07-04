@@ -185,6 +185,31 @@ def test_pipeline_logging_initial_from_config(cfg):
     assert AIPipeline(cfg=cfg).is_logging_enabled() is True
 
 
+# ── Detector location: Pi vs server-side YOLO ─────────────────────────────────
+
+def test_detector_location_defaults_to_pi(cfg, monkeypatch):
+    from ai_pipeline import AIPipeline
+    monkeypatch.delenv("DETECTOR_LOCATION", raising=False)
+    cfg = dict(cfg); cfg["detector"] = dict(cfg["detector"]); cfg["detector"]["location"] = "pi"
+    assert AIPipeline(cfg=cfg)._server_detect is False
+
+
+def test_detector_location_server_enables_server_detect(cfg, monkeypatch):
+    from ai_pipeline import AIPipeline
+    monkeypatch.delenv("DETECTOR_LOCATION", raising=False)
+    cfg = dict(cfg); cfg["detector"] = dict(cfg["detector"]); cfg["detector"]["location"] = "server"
+    assert AIPipeline(cfg=cfg)._server_detect is True
+
+
+def test_detector_location_env_overrides_config(cfg, monkeypatch):
+    from ai_pipeline import AIPipeline
+    cfg = dict(cfg); cfg["detector"] = dict(cfg["detector"]); cfg["detector"]["location"] = "pi"
+    monkeypatch.setenv("DETECTOR_LOCATION", "server")
+    assert AIPipeline(cfg=cfg)._server_detect is True
+    monkeypatch.setenv("DETECTOR_LOCATION", "pi")
+    assert AIPipeline(cfg=cfg)._server_detect is False
+
+
 def test_resolve_logging_enabled_precedence(monkeypatch):
     import main_server
 

@@ -80,6 +80,19 @@ docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpio
 > **GPIO chip** — on Pi 5 the RP1 controller is `/dev/gpiochip0`, but the lgpio pin factory also probes `gpiochip4`, so map the host controller to **both** container nodes (`--device /dev/gpiochip0:/dev/gpiochip0 --device /dev/gpiochip0:/dev/gpiochip4`) as shown above. If motors log `can not open gpiochip`, that second mapping is missing. Run `gpiodetect` on the host to confirm which chip is `pinctrl-rp1`.
 >
 > **Motor speed** — the robot drives **slowly** by default (`speed_full: 1600`, `speed_slow: 1000` out of 4095) so it stays reactive to the CPU pipeline. Tune it **without rebuilding** via `-e SPEED_FULL=<n> -e SPEED_SLOW=<n>` (or edit `config_robot.yaml`): raise it a little if the robot doesn't start moving, lower it if it's still too fast. A soft-start ramp (`robot.soft_start`) blunts the current spike so the Pi doesn't brown out on drive.
+>
+> ⚠️ **Compose forwards env vars only if they're declared.** With `docker compose`, an inline var like `SPEED_FULL=1500` reaches the container **only** because `docker-compose.robot.yml` lists it under `environment:`. The forwarded vars are: `SERVER_IP`, `DETECTOR_LOCATION`, `SPEED_FULL`, `SPEED_SLOW`, `CAMERA_HFLIP`, `CAMERA_VFLIP`, `GPIO_CHIP`. Example: `SERVER_IP=192.168.68.107 SPEED_FULL=1500 docker compose -f docker-compose.robot.yml up`.
+>
+> 🔋 **Server-side YOLO (battery saver)** — if the Pi keeps **browning out** (drops off Wi-Fi the moment it starts driving), move YOLO to the PC. The Pi already streams every frame to the PC for V-JEPA 2, so this costs no extra bandwidth; it just removes the Pi's biggest CPU/current draw. Set `DETECTOR_LOCATION=server` on **both** the robot and the server (they must match), and the Pi keeps its ultrasonic sensor as the local hard-stop safety:
+>
+> ```bash
+> # Robot (Pi): stream frames only, no YOLO
+> SERVER_IP=192.168.1.42 DETECTOR_LOCATION=server docker compose -f docker-compose.robot.yml up
+> # Server (PC): run YOLO on the streamed frames
+> NAV_MODE=live DETECTOR_LOCATION=server docker compose -f docker-compose.server.yml up
+> ```
+>
+> For an even smaller/faster Pi image that omits torch/ultralytics entirely, build with `docker build --platform linux/arm64 --build-arg YOLO_ON_PI=0 -f Dockerfile.robot -t nav-robot .` (only valid together with `DETECTOR_LOCATION=server`).
 
 ---
 
@@ -127,7 +140,9 @@ docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpio
 **Key design decisions:**
 - The PC is the TCP *server* (binds and listens); the robot and UI viewer are
   TCP *clients* (connect outbound to the PC).
-- **YOLOv8n runs on the Pi** (fast reactive detection, low latency).
+- **YOLOv8n runs on the Pi** by default (fast reactive detection, low latency),
+  or on the **PC** when `DETECTOR_LOCATION=server` — the Pi then streams frames
+  only, sparing its battery (see the 🔋 note above).
 - **V-JEPA 2 + SSv2 + decision run on the PC** (GPU-capable heavy inference).
 - Only compact detection results (`CMD_DETECTION`) are sent over the network —
   not raw feature tensors.
@@ -138,7 +153,7 @@ docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpio
 
 | Model | Nickname | What it does | Where it runs |
 |---|---|---|---|
-| **YOLOv8n** | "The Photographer" | Spots obstacles in the current frame; sends aggregated risk+position **and the largest obstacle's class label** to PC | Pi |
+| **YOLOv8n** | "The Photographer" | Spots obstacles in the current frame; sends aggregated risk+position **and the largest obstacle's class label** to PC | Pi (or PC if `DETECTOR_LOCATION=server`) |
 | **V-JEPA 2** | "The Fortune Teller" | Predicts what the scene will look like 0.5 s from now in latent space | PC |
 | **SSv2 temporal rules** | "The Behaviour Analyst" | Classifies the obstacle's motion pattern (APPROACHING / CROSSING / BLOCKING …) — drives `temporal_risk` | PC |
 | **SSv2 model (VideoMAE)** | "The Narrator" | A **real** Something-Something-V2 video classifier; its "something" slot is filled with YOLO's object → e.g. *"person moving closer"*. Annotation/log only | PC |

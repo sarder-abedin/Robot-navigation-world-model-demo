@@ -19,11 +19,18 @@ assets/         ← Demo video clips
 ## Architecture rules
 
 - **PC = TCP server** (binds ports 5003/8003 for UI, 5004/8004 for robot)
-- **Pi = TCP client** (connects outbound; runs YOLOv8n locally)
+- **Pi = TCP client** (connects outbound; runs YOLOv8n locally in `pi` mode)
 - **UI viewer = TCP client** (connects to PC only)
-- YOLOv8n is NEVER imported in `Code/Server/` during live mode – detection
-  comes from the Pi via `CMD_DETECTION`. Local YOLOv8 in `Code/Server/detector.py`
-  is ONLY used in demo mode (no robot connected).
+- **Detection location is configurable** via `detector.location` (`pi` | `server`)
+  or the `DETECTOR_LOCATION` env var:
+  - `pi` (default): the Pi runs YOLOv8n and sends `CMD_DETECTION`. `Code/Server/`
+    does NOT import YOLO in this live mode. `Code/Server/detector.py` is used only
+    in demo mode (no robot).
+  - `server`: the Pi streams frames only; the PC runs YOLO (`Code/Server/detector.py`)
+    on them, sparing the Pi's CPU/battery. Here `Code/Server/` DOES run YOLO in
+    live mode — the sole exception to the "no YOLO on the server in live mode" rule,
+    and it is gated on `AIPipeline._server_detect`. The Pi keeps the ultrasonic
+    sensor as its local hard-stop safety regardless of this setting.
 - Motor mapping (action → PWM) happens on the **Pi** side in `main_robot.py`,
   not on the PC. The PC sends high-level `CMD_AIMOVE#FORWARD` etc.
 
@@ -110,6 +117,8 @@ Always develop on `claude/freenove-predictive-navigation-tgo1v`.
 ## Do not
 
 - Import `picamera2`, `gpiozero`, or `lgpio` in server-side code (they are Pi-only).
-- Import `ultralytics` in server-side code during live mode (handled by Pi).
+- Import `ultralytics` in server-side code during live mode **when
+  `detector.location: pi`** (handled by Pi). It IS allowed when
+  `detector.location: server` — that mode deliberately runs YOLO on the PC.
 - Run blocking calls on the main thread in `AIPipeline` (it runs in a daemon thread).
 - Hardcode IP addresses; use config files or CLI flags.
