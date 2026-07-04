@@ -214,6 +214,13 @@ def main() -> None:
 
     logger.info("Connected to PC server – robot client running")
 
+    # Single capture point: ONLY camera_loop calls camera.get_frame(). The
+    # detection loop reads this cache instead of capturing again — two threads
+    # calling picamera2 capture_array() concurrently starves the (Docker-limited)
+    # buffer pool and deadlocks on the camera lock, hanging after the first frame.
+    _frame_cache = {"jpg": None}
+    _frame_cache_lock = threading.Lock()
+
     # ── Camera streaming thread ──────────────────────────────────────────────
     def camera_loop():
         """Continuously stream JPEG frames to the PC for V-JEPA 2 inference."""
@@ -224,6 +231,8 @@ def main() -> None:
                 try:
                     jpg = camera.get_frame()
                     if jpg:
+                        with _frame_cache_lock:
+                            _frame_cache["jpg"] = jpg
                         client.send_frame(jpg)
                         frames_sent += 1
                         if frames_sent == 1:
@@ -282,10 +291,14 @@ def main() -> None:
         last_packet = DetectionPacket()
 
         while not _shutdown and client.is_connected:
-            # ── 1. YOLOv8n on latest frame (live mode only) ──────────────────
-            if mode == "live" and camera and detector:
+            # ── 1. YOLOv8n on the latest cached frame (live mode only) ────────
+            # Read the frame camera_loop already captured — do NOT call
+            # camera.get_frame() here (a second capture_array() would deadlock the
+            # camera buffer pool).
+            if mode == "live" and detector:
                 try:
-                    jpg = camera.get_frame()
+                    with _frame_cache_lock:
+                        jpg = _frame_cache["jpg"]
                     if jpg:
                         import cv2
                         import numpy as np
