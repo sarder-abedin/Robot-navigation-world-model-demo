@@ -113,10 +113,43 @@ docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpio
 
 | Model | Nickname | What it does | Where it runs |
 |---|---|---|---|
-| **YOLOv8n** | "The Photographer" | Spots obstacles in the current frame; sends aggregated risk+position to PC | Pi |
+| **YOLOv8n** | "The Photographer" | Spots obstacles in the current frame; sends aggregated risk+position **and the largest obstacle's class label** to PC | Pi |
 | **V-JEPA 2** | "The Fortune Teller" | Predicts what the scene will look like 0.5 s from now in latent space | PC |
-| **SSv2 temporal rules** | "The Behaviour Analyst" | Classifies the obstacle's motion pattern (APPROACHING / CROSSING / BLOCKING …) | PC |
+| **SSv2 temporal rules** | "The Behaviour Analyst" | Classifies the obstacle's motion pattern (APPROACHING / CROSSING / BLOCKING …) — drives `temporal_risk` | PC |
+| **SSv2 model (VideoMAE)** | "The Narrator" | A **real** Something-Something-V2 video classifier; its "something" slot is filled with YOLO's object → e.g. *"person moving closer"*. Annotation/log only | PC |
 | **Decision fuser** | "The Judge" | Combines all three risk signals into one action (FORWARD / SLOW / STOP / REROUTE) | PC |
+
+### Genuine SSv2 action recognition (YOLO-filled)
+
+`Code/Server/ssv2_model.py` runs a **real** SSv2-finetuned video classifier
+(VideoMAE, `MCG-NJU/videomae-base-finetuned-ssv2`) over the rolling clip. SSv2
+labels are templated phrases with a *"something"* placeholder — we fill that slot
+with the **largest obstacle's YOLO class** (sent as the trailing field of
+`CMD_DETECTION`), producing a human sentence like **"person moving closer"** or
+**"chair pushed from left to right"**.
+
+- It is **annotation + logging only** — it does **not** drive navigation (the
+  fast heuristic in `temporal_action.py` still supplies `temporal_risk`), so
+  navigation behaviour is unchanged.
+- Shown on the video HUD (`SSv2: …`) and as an `SSv2:` line in the AI-state panel,
+  and written to the CSV log.
+- Runs every `ssv2.run_every_n_frames` (default 16) on CPU. First run downloads
+  the checkpoint (~350 MB) from HuggingFace (`transformers` is already a
+  dependency for V-JEPA 2). If the model/weights are unavailable it falls back to
+  a stub that still fills the object. Tune or disable it in `config.yaml`
+  (`ssv2.enabled: false`) if the CPU can't run two video transformers.
+
+### Run logging (server-side, operator-controlled)
+
+Run logging (CSV + annotated frames) is written **entirely on the PC server**
+(`logs_rpi/…`) — the robot never logs. It is **off by default** and controlled by
+the operator:
+
+- **Before the run:** `--logging on` (or `docker run -e NAV_LOGGING=1 …`).
+- **During the run:** the **"Run Logging" toggle** in the Streamlit UI (sends
+  `CMD_LOGGING#<0|1>`).
+
+The CSV includes an `ssv2` column with the composed sentence.
 
 ### V-JEPA 2 anchor embeddings
 
@@ -173,7 +206,8 @@ Robot-navigation-world-model-demo/
 │   │   ├── camera_buffer.py      ← rolling frame buffer (demo / live / tcp modes)
 │   │   ├── detector.py           ← YOLOv8n (demo mode only; live mode uses Pi)
 │   │   ├── world_model.py        ← V-JEPA 2
-│   │   ├── temporal_action.py    ← SSv2-style motion patterns
+│   │   ├── temporal_action.py    ← SSv2-style motion-pattern heuristic (drives temporal_risk)
+│   │   ├── ssv2_model.py         ← genuine SSv2 model (VideoMAE); YOLO-filled sentence for annotation/log
 │   │   ├── decision.py           ← risk fusion + hysteresis
 │   │   ├── robot_control.py      ← motor controller (real / mock / TCP)
 │   │   ├── visualization.py      ← OpenCV HUD overlay
@@ -207,14 +241,15 @@ Robot-navigation-world-model-demo/
 
 | Command | Direction | Format | Meaning |
 |---|---|---|---|
-| `CMD_DETECTION` | Pi → PC | `CMD_DETECTION#<risk_pct>#<in_center>#<area_pct>#<cx_pct>#<sonic_cm>` | YOLOv8 result + ultrasonic (main Pi→PC message) |
+| `CMD_DETECTION` | Pi → PC | `CMD_DETECTION#<risk_pct>#<in_center>#<area_pct>#<cx_pct>#<sonic_cm>#<top_label>` | YOLOv8 result + ultrasonic + largest-obstacle class (fills SSv2 "something"; `top_label` may be empty) |
 | `CMD_AIMOVE` | PC → Pi | `CMD_AIMOVE#<FORWARD\|SLOW\|STOP\|REROUTE>` | AI-computed action; Pi maps to motor PWM |
 | `CMD_MOTOR` | UI → PC → Pi | `CMD_MOTOR#<L>#<R>` | Manual motor command relayed through PC |
 | `CMD_STOP` | PC → Pi | `CMD_STOP` | Emergency halt (hard safety) |
 | `CMD_KILL` | PC → Pi | `CMD_KILL` | Shutdown robot process |
 | `CMD_AIMODE` | UI → PC | `CMD_AIMODE#<0/1/2>` | Mode change from operator |
+| `CMD_LOGGING` | UI → PC | `CMD_LOGGING#<0/1>` | Toggle server-side run logging |
 | `CMD_KILL` | UI → PC | `CMD_KILL#0` | Shutdown from operator |
-| `CMD_AISTATUS` | PC → UI | `CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>` | Live AI state |
+| `CMD_AISTATUS` | PC → UI | `CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>` | Live AI state (SSv2 sentence is the last, optional field) |
 | Video frames | Pi → PC | 4-byte LE uint32 length + JPEG | Camera stream for V-JEPA 2 (port 8004) |
 | Video frames | PC → UI | 4-byte LE uint32 length + JPEG | Annotated frames (port 8003) |
 
