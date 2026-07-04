@@ -8,8 +8,10 @@
 #   • OpenCV HUD overlay + TCP servers for UI viewer and robot connection
 #   • Streamlit browser-based operator UI on port 8501
 #
-# In LIVE mode YOLOv8n is NOT loaded here — the Pi runs it and sends
-# CMD_DETECTION.  YOLOv8 is only used in DEMO mode (no robot connected).
+# YOLOv8n runs here in DEMO mode, and in LIVE mode when DETECTOR_LOCATION=server
+# (the Pi streams frames only; the PC runs detection to spare the Pi's battery).
+# With the default DETECTOR_LOCATION=pi the Pi runs YOLO and sends CMD_DETECTION,
+# so the server does not load it. ultralytics is included in requirements_server.txt.
 #
 # ── Platform support ──────────────────────────────────────────────────────────
 # This Dockerfile uses python:3.11-slim and installs CPU-only PyTorch, so it
