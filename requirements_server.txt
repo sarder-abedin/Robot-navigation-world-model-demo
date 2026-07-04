@@ -15,9 +15,8 @@ transformers>=4.40.0         # HuggingFace AutoModel for V-JEPA 2 weights
 accelerate>=0.27.0           # fast model loading for transformers
 
 # ── Object detection ──────────────────────────────────────────────────────────
-# Needed for: demo mode (no robot) AND live mode with DETECTOR_LOCATION=server
-# (the PC runs YOLO on the Pi's streamed frames). With DETECTOR_LOCATION=pi
-# (default) the Pi runs YOLO and the server only receives CMD_DETECTION.
+# Required in ALL modes: YOLO always runs on the PC (the Pi is a thin client with
+# no on-board AI), detecting on the camera frames the Pi streams.
 ultralytics>=8.1.0
 
 # ── Computer vision ───────────────────────────────────────────────────────────

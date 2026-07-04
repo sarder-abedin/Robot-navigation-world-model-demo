@@ -27,9 +27,6 @@ services:
     environment:
       - NAV_MODE=${NAV_MODE:-demo}
       - NAV_STRATEGY=${NAV_STRATEGY:-predictive}
-      # Where YOLO runs in live mode: "pi" (Pi sends CMD_DETECTION) or "server"
-      # (Pi streams frames, this PC runs YOLO). Must match the robot's setting.
-      - DETECTOR_LOCATION=${DETECTOR_LOCATION:-pi}
     volumes:
       - ./logs_rpi:/app/logs_rpi            # persist run logs
       - ./assets:/app/assets:ro             # demo video clips
