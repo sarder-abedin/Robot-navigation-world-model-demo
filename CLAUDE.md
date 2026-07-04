@@ -11,7 +11,8 @@ Split-inference architecture: Pi runs fast AI (YOLOv8n), PC runs heavy AI
 ```
 Code/Server/    ← PC AI server (V-JEPA 2, SSv2, decision, TCP server)
 Code/Robot/     ← Raspberry Pi client (YOLOv8n, camera, motors, ultrasonic)
-Code/Client/    ← Operator UI viewer (PyQt5)
+Code/Client/    ← Operator UI viewers (display-only, NO AI): Streamlit browser,
+                  desktop_viewer.py (native window via pywebview), PyQt5 ai_viewer.py
 tests_rpi/      ← Unit tests (no GPU/hardware required)
 assets/         ← Demo video clips
 ```
@@ -41,6 +42,8 @@ assets/         ← Demo video clips
 | `Code/Server/robot_control.py` | `TCPRobotController` sends `CMD_AIMOVE` to Pi |
 | `Code/Robot/main_robot.py` | Pi entry point (thin client); camera stream + sonic + command loop |
 | `Code/Robot/tcp_robot_client.py` | Pi-side TCP client; `send_sonic()` / `send_frame()` |
+| `Code/Client/streamlit_viewer.py` | Browser UI (port 8501); bundled in the server Docker image |
+| `Code/Client/desktop_viewer.py` | Native desktop window wrapping the Streamlit UI (pywebview); native-only |
 | `Code/Client/ai_viewer.py` | PyQt5 UI; AUTO mode (AI drives) / MANUAL mode (operator drives) |
 
 ## TCP protocol (summary)

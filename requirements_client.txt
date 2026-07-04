@@ -1,12 +1,24 @@
-# ── Client (runs on the operator's laptop / PC) ───────────────────────────────
-# V-JEPA 2 and SSv2 inference now runs here; install torch before this file.
-# CPU-only:  pip install torch --index-url https://download.pytorch.org/whl/cpu
-# CUDA 12.x: pip install torch --index-url https://download.pytorch.org/whl/cu121
+# ── Operator UI viewer (runs on any laptop) ──────────────────────────────────
+# The UI is a THIN display client: it shows the PC server's annotated video and
+# live AI state over TCP. It runs NO models, so torch/transformers/ultralytics
+# are intentionally NOT here (all AI lives on the PC server; see
+# requirements_server.txt). Install with:  pip install -r requirements_client.txt
 
+# ── Browser UI (default) ──────────────────────────────────────────────────────
+streamlit>=1.37.0                # streamlit_viewer.py — opens http://localhost:8501
+
+# ── Native desktop window option ─────────────────────────────────────────────
+# desktop_viewer.py wraps the Streamlit UI in an OS-native window via pywebview.
+#   macOS / Windows: works out of the box (Cocoa / EdgeChromium).
+#   Linux: also install a system webview backend, e.g.
+#     sudo apt-get install -y python3-gi gir1.2-webkit2-4.1     (GTK backend)
+pywebview>=5.0
+
+# ── PyQt5 desktop viewer (alternative native UI: ai_viewer.py) ────────────────
 PyQt5>=5.15.0
-opencv-python>=4.8.0
+
+# ── Video decode / arrays / config ────────────────────────────────────────────
+opencv-python>=4.8.0             # cv2 — decode the annotated JPEG stream
 numpy>=1.24.0
 Pillow>=10.0.0
 pyyaml>=6.0.0
-torch>=2.0.0
-transformers>=4.40.0

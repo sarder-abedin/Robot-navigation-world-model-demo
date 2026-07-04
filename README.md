@@ -260,6 +260,7 @@ Robot-navigation-world-model-demo/
 │   │   └── config_robot.yaml     ← Pi-side configuration
 │   └── Client/          ← UI viewers (connect to PC)
 │       ├── streamlit_viewer.py   ← browser UI (port 8501, bundled in Docker)
+│       ├── desktop_viewer.py     ← native desktop window wrapping Streamlit (pywebview)
 │       └── ai_viewer.py          ← PyQt5 desktop UI (run natively if preferred)
 ├── tests_rpi/           ← unit tests (no GPU / hardware required)
 ├── Dockerfile.server    ← PC Docker image (V-JEPA 2 + SSv2 + decision)
@@ -378,25 +379,53 @@ python main_server.py --mode demo --no-display
 
 In demo mode the server runs local YOLOv8n (no Pi needed).
 
-**Step 3 (optional)** – Open the browser UI viewer:
+**Step 3 (optional)** – Open the operator UI viewer.
 
-The Streamlit viewer only starts automatically inside Docker.  When running the server natively, launch it separately:
+When the server runs **natively** (not Docker) the viewer is launched separately.
+There are **three ways** to open the *same* UI — pick one. All run in a second
+terminal while `main_server.py` runs in the first, and in every case you enter
+the server IP (`127.0.0.1` if it's the same machine) and click **Connect**.
+
+First, one-time, install the viewer dependencies (no torch needed — the UI runs
+no AI):
 
 ```bash
-# Terminal 2 (while main_server.py is running in Terminal 1)
-pip install streamlit   # one-time
-streamlit run Code/Client/streamlit_viewer.py
-# Opens http://localhost:8501 — enter 127.0.0.1 as the server IP and click Connect
+pip install -r requirements_client.txt
 ```
 
-Alternatively, use the PyQt5 desktop viewer:
+**Option 1 — Browser tab (simplest):**
 
 ```bash
-pip install PyQt5 opencv-python numpy   # one-time
+streamlit run Code/Client/streamlit_viewer.py
+# Opens http://localhost:8501 in your default browser
+```
+
+**Option 2 — Native desktop window (app-like, no browser tab):**
+
+```bash
+cd Code/Client
+python desktop_viewer.py
+# Opens the SAME Streamlit UI inside a native OS window (via pywebview).
+#   • macOS / Windows: works out of the box.
+#   • Linux: also install a webview backend once:
+#       sudo apt-get install -y python3-gi gir1.2-webkit2-4.1
+# Options: python desktop_viewer.py --port 8600 --title "Nav" --width 1400 --height 900
+```
+
+`desktop_viewer.py` starts Streamlit headless, waits for it, opens the window,
+and stops Streamlit when you close the window — so it's a single command.
+
+**Option 3 — PyQt5 desktop viewer (alternative native UI, keyboard shortcuts):**
+
+```bash
 cd Code/Client
 python ai_viewer.py
-# Enter 127.0.0.1 (localhost) in the IP field and click Connect
 ```
+
+> All three show the same live video, risk bars, V-JEPA 2 / SSv2 labels and
+> AUTO/MANUAL controls. Inside Docker the **browser** viewer starts automatically
+> (a native window needs a display, so `desktop_viewer.py` / `ai_viewer.py` are
+> native-only).
 
 ---
 
@@ -525,16 +554,20 @@ Enter the server IP (use "localhost" when the viewer runs on the same machine).
 | Server in Docker Desktop on Mac | `http://localhost:8501` | `localhost` |
 | Server on a remote LAN machine | `http://<server-LAN-IP>:8501` | `localhost` |
 
-**Operator UI viewer — PyQt5 (native desktop, optional):**
+**Operator UI viewer — native desktop window (optional):**
 
-Run natively when you prefer a desktop window or need keyboard controls:
+Prefer an app-like window over a browser tab? Two native options — install the
+viewer deps once with `pip install -r requirements_client.txt`:
 
 ```bash
-# Install once (on Mac, Linux, or Windows)
-pip install PyQt5 opencv-python numpy
-
-# Run
 cd Code/Client
+
+# (a) Streamlit UI inside a native window (via pywebview) — same UI as the browser
+python desktop_viewer.py
+#   macOS / Windows: works out of the box.
+#   Linux: also `sudo apt-get install -y python3-gi gir1.2-webkit2-4.1` once.
+
+# (b) PyQt5 desktop viewer (adds keyboard shortcuts)
 python ai_viewer.py
 ```
 
@@ -542,7 +575,9 @@ python ai_viewer.py
 
 ## Operator UI controls
 
-Both the Streamlit browser viewer and the PyQt5 desktop viewer provide the same controls.  Keyboard shortcuts are only available in the PyQt5 viewer.
+The browser viewer, the native desktop window (both render the Streamlit UI), and
+the PyQt5 desktop viewer provide the same controls.  Keyboard shortcuts are only
+available in the PyQt5 viewer.
 
 | Control | Streamlit | PyQt5 shortcut | Action |
 |---|---|---|---|
