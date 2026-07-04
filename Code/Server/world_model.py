@@ -73,10 +73,11 @@ class WorldModel:
 
     def load(self) -> None:
         import torch  # type: ignore
-        self._device = torch.device(self._device_str)
+        from device_utils import resolve_device
+        self._device, dev_name = resolve_device(self._device_str)
         try:
             self._load_vjepa2()
-            logger.info("V-JEPA 2 loaded: %s on %s", self._model_id, self._device)
+            logger.info("V-JEPA 2 loaded: %s on %s", self._model_id, dev_name)
         except Exception as exc:
             logger.warning("V-JEPA 2 load failed (%s) – using stub encoder", exc)
             self._model = _StubEncoder(embed_dim=1024)

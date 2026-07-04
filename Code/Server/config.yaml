@@ -49,7 +49,7 @@ world_model:
   input_size: 224
   prediction_horizon: 4        # future frames to predict
   risk_similarity_threshold: 0.55
-  device: "cpu"                # "cuda" for GPU; "cpu" for Raspberry Pi
+  device: "auto"               # auto = CUDA → MPS → CPU; or force "cuda"/"mps"/"cpu"
   # Run world-model inference every N frames (expensive on CPU)
   run_every_n_frames: 8
 
@@ -69,8 +69,8 @@ ssv2:
   enabled: true
   model_id: "MCG-NJU/videomae-base-finetuned-ssv2"
   num_frames: 16
-  device: "cpu"
-  run_every_n_frames: 16       # heavy on CPU – classify roughly once per clip
+  device: "auto"               # auto = CUDA → MPS → CPU; or force "cuda"/"mps"/"cpu"
+  run_every_n_frames: 16       # CPU cadence; auto-halved on a GPU
   min_confidence: 0.15         # below this the sentence is shown as tentative
 
 # ── Decision fusion ────────────────────────────────────────────────────────────
