@@ -27,6 +27,43 @@ import time
 logger = logging.getLogger(__name__)
 
 
+def _distance_to_risk(
+    d_cm: float,
+    stop_cm: float,
+    state: dict,
+    blind_hold_s: float = 1.0,
+) -> float:
+    """Map an ultrasonic distance (cm) to a hard-stop risk in [0,1].
+
+    This is the deterministic safety layer (see decision.py): it reaches 1.0 only
+    when an obstacle is within stop_cm, which triggers the hard STOP. It is NOT
+    blended into the AI risk — vision handles graded slowing/rerouting.
+
+    The driver returns -1.0 (<= 0) when the sensor got no echo this cycle. A
+    single missed ping must not drop a close obstacle back to "clear", so we
+    remember the last valid reading and reuse it for blind_hold_s seconds. If the
+    sensor stays blind longer than that we return 0.0 (no hard stop) and let
+    vision drive — the last-good hold still catches a wall the sensor briefly saw.
+
+    `state` is a per-controller dict {"cm": float|None, "t": monotonic_seconds}.
+    """
+    now = time.monotonic()
+    if d_cm is not None and d_cm > 0:
+        state["cm"] = d_cm
+        state["t"] = now
+    else:
+        if state.get("t") and state.get("cm") and (now - state["t"]) <= blind_hold_s:
+            d_cm = state["cm"]          # reuse a very recent valid reading
+        else:
+            return 0.0                  # blind too long → no hard stop; vision drives
+    if d_cm <= stop_cm:
+        return 1.0
+    warn = stop_cm * 3.0
+    if d_cm >= warn:
+        return 0.0
+    return float((warn - d_cm) / (warn - stop_cm))
+
+
 class RobotController:
     """
     High-level motor controller that wraps car.motor (Freenove tankMotor).
@@ -43,6 +80,8 @@ class RobotController:
         self._reroute_dir = r["reroute_direction"]
         self._sonic_stop_cm = r["ultrasonic_stop_cm"]
         self._use_sonic_guard = r.get("use_ultrasonic_guard", True)
+        self._blind_hold_s = r.get("ultrasonic_blind_hold_seconds", 1.0)
+        self._sonic_state = {"cm": None, "t": 0.0}
         self._car = car
 
     # ── High-level commands ───────────────────────────────────────────────────
@@ -81,28 +120,17 @@ class RobotController:
     # ── Ultrasonic risk helper ────────────────────────────────────────────────
 
     def get_ultrasonic_risk(self) -> float:
-        """
-        Returns a risk score in [0,1] derived from the ultrasonic distance.
-
-        Below ultrasonic_stop_cm → 1.0 (full stop risk).
-        Linear falloff from 3× stop distance to stop distance.
-        """
+        """Risk in [0,1] from the ultrasonic distance, failing safe on no-echo."""
         if not self._use_sonic_guard or self._car is None:
             return 0.0
         try:
             d = self._car.sonic.get_distance()
-            if d <= 0:
-                return 0.0  # sensor error – ignore
-            stop = self._sonic_stop_cm
-            if d <= stop:
-                return 1.0
-            warn = stop * 3
-            if d >= warn:
-                return 0.0
-            return float((warn - d) / (warn - stop))
         except Exception as exc:
             logger.debug("Ultrasonic read error: %s", exc)
-            return 0.0
+            d = -1.0
+        return _distance_to_risk(
+            d, self._sonic_stop_cm, self._sonic_state, self._blind_hold_s,
+        )
 
     # ── Low-level ─────────────────────────────────────────────────────────────
 
@@ -168,6 +196,8 @@ class TCPRobotController:
         r = cfg["robot"]
         self._sonic_stop_cm = r["ultrasonic_stop_cm"]
         self._use_sonic_guard = r.get("use_ultrasonic_guard", True)
+        self._blind_hold_s = r.get("ultrasonic_blind_hold_seconds", 1.0)
+        self._sonic_state = {"cm": None, "t": 0.0}
         self._conn = robot_conn
         self._last_sent: str | None = None
 
@@ -220,18 +250,12 @@ class TCPRobotController:
             return 0.0
         try:
             d = self._conn.get_sonic_cm()
-            if d <= 0:
-                return 0.0
-            stop = self._sonic_stop_cm
-            if d <= stop:
-                return 1.0
-            warn = stop * 3
-            if d >= warn:
-                return 0.0
-            return float((warn - d) / (warn - stop))
         except Exception as exc:
             logger.debug("TCP sonic error: %s", exc)
-            return 0.0
+            d = -1.0
+        return _distance_to_risk(
+            d, self._sonic_stop_cm, self._sonic_state, self._blind_hold_s,
+        )
 
     def _sonic_blocked(self) -> bool:
         return self._use_sonic_guard and self.get_ultrasonic_risk() >= 1.0

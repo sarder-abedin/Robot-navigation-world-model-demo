@@ -127,6 +127,36 @@ def test_aistatus_six_field_back_compat():
     assert ssv2 == ""
 
 
+# ── Server YOLO picks the CLOSEST/largest obstacle's label (SSv2 filler) ──────
+
+def test_detector_closest_label_is_largest_box():
+    import numpy as np
+    from detector import Detector
+
+    class Box:
+        def __init__(self, xyxy, cls, conf):
+            self.xyxy = [np.array(xyxy)]
+            self.cls = [cls]
+            self.conf = [conf]
+
+    class Res:
+        names = {0: "person", 56: "chair"}
+        # chair is small, person is large → closest_label must be "person"
+        boxes = [Box([10, 10, 50, 50], 56, 0.9), Box([0, 0, 200, 200], 0, 0.9)]
+        def __call__(self, *a, **k):
+            return [self]
+
+    d = Detector({"detector": {
+        "model": "x", "confidence_threshold": 0.4, "iou_threshold": 0.45,
+        "obstacle_classes": ["person", "chair"], "center_zone_ratio": 0.4,
+        "close_area_threshold": 0.08, "run_every_n_frames": 1,
+    }})
+    d._model = Res()
+    r = d.detect(np.zeros((300, 400, 3), np.uint8))
+    assert r.closest_label == "person"
+    assert set(r.labels) == {"person", "chair"}
+
+
 # ── Server-side run-logging toggle ────────────────────────────────────────────
 
 def test_pipeline_logging_toggle(cfg):

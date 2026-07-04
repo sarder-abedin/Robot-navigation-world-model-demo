@@ -3,8 +3,9 @@ test_ultrasonic_rpi.py – Unit tests for the Ultrasonic wrapper (Code/Robot).
 
 lgpio is stubbed so the manual-timing backend runs without a Pi. Verifies:
   • lgpio backend is preferred and claims the pins,
-  • a sensor that never echoes returns max range (not a crash),
-  • a simulated echo produces a plausible distance.
+  • a sensor that never echoes returns -1.0 (INVALID) so the nav layer can fail
+    safe instead of reading a dead sensor as "clear road",
+  • a simulated echo produces a plausible distance (or INVALID) without crashing.
 """
 
 import importlib.util
@@ -48,18 +49,21 @@ def test_prefers_lgpio_backend():
     assert u._backend == "lgpio"
 
 
-def test_no_echo_returns_max_range():
+def test_no_echo_returns_invalid():
     mod = _load_with_lgpio([])          # gpio_read always 0 → echo never rises
     u = mod.Ultrasonic()
-    assert u.get_distance() == mod._MAX_RANGE_CM
+    # No echo on any sample → INVALID (-1.0), NOT max range. This is what lets
+    # the server distinguish "sensor blind" from "4 m of open space".
+    assert u.get_distance() == mod.Ultrasonic.INVALID
 
 
-def test_simulated_echo_returns_plausible_distance():
-    # echo high immediately then low after a couple of reads → small distance
+def test_simulated_echo_returns_plausible_distance_or_invalid():
+    # echo high immediately then low → near-zero pulse width under the instant
+    # stub; the result is either a valid distance in range or INVALID, never junk.
     mod = _load_with_lgpio([1, 1, 0])
     u = mod.Ultrasonic()
     d = u.get_distance()
-    assert 0.0 <= d <= mod._MAX_RANGE_CM
+    assert d == mod.Ultrasonic.INVALID or 0.0 < d <= mod._MAX_RANGE_CM
 
 
 def test_gpiozero_fallback_when_lgpio_missing(monkeypatch):

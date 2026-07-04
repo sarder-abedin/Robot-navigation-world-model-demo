@@ -26,6 +26,7 @@ class DetectionResult:
     confidences: list = field(default_factory=list)  # float scores
     obstacle_in_center: bool = False
     closest_area: float = 0.0   # largest obstacle bbox as fraction of frame area
+    closest_label: str = ""     # YOLO class of the largest/closest obstacle (SSv2 filler)
     raw_risk: float = 0.0       # heuristic reactive risk in [0,1]
     frame_width: int = 0
     frame_height: int = 0
@@ -81,6 +82,7 @@ class Detector:
         boxes, labels, confidences = [], [], []
         obstacle_in_center = False
         closest_area = 0.0
+        closest_label = ""   # label of the largest/closest obstacle (SSv2 filler)
 
         for box in results.boxes:
             cls_name = results.names[int(box.cls[0])]
@@ -93,7 +95,11 @@ class Detector:
             confidences.append(conf)
 
             area_frac = (x2 - x1) * (y2 - y1) / (w * h)
-            closest_area = max(closest_area, area_frac)
+            # Track which object is the largest (closest), not just the max area,
+            # so the SSv2 "something" slot is filled with the right YOLO class.
+            if area_frac > closest_area:
+                closest_area = area_frac
+                closest_label = cls_name
 
             box_cx = (x1 + x2) / 2
             if cx_lo <= box_cx <= cx_hi:
@@ -106,6 +112,7 @@ class Detector:
             confidences=confidences,
             obstacle_in_center=obstacle_in_center,
             closest_area=closest_area,
+            closest_label=closest_label,
             raw_risk=raw_risk,
             frame_width=w,
             frame_height=h,

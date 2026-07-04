@@ -5,7 +5,11 @@ Default pins match config_robot.yaml:
   trigger_pin: 27
   echo_pin: 22
 
-get_distance() returns centimetres (float). Returns max_range_cm on timeout/no-echo.
+get_distance() returns centimetres (float). Returns -1.0 on no-echo / sensor
+failure (NOT max_range_cm) so the navigation logic can tell "nothing within range"
+apart from "the sensor gave no reading" and fail safe instead of driving blind.
+Each call takes the median of a few quick samples to reject spurious HC-SR04
+drop-outs (angled or soft surfaces reflect poorly and often miss an echo).
 
 Primary backend: manual lgpio trigger/echo timing — this is what Freenove uses
 on Pi 5 (BCM2712), where gpiozero's software-timed DistanceSensor is unreliable
@@ -67,16 +71,41 @@ class Ultrasonic:
             trigger_pin, echo_pin, gpiochip,
         )
 
-    def get_distance(self) -> float:
+    # Sentinel returned when the sensor produced no usable echo this call.
+    INVALID = -1.0
+
+    def get_distance(self, samples: int = 3) -> float:
+        """Return the median of a few quick samples in cm, or -1.0 if none echoed.
+
+        Median filtering rejects the isolated HC-SR04 drop-outs that happen off
+        angled or soft surfaces. -1.0 means "no reading" (fail safe), distinct
+        from a genuine long-range reading near _MAX_RANGE_CM.
+        """
+        vals = []
+        for _ in range(max(1, samples)):
+            d = self._read_once()
+            if d > 0:
+                vals.append(d)
+            time.sleep(0.01)   # brief gap so consecutive pings don't cross-talk
+        if not vals:
+            return self.INVALID
+        vals.sort()
+        return round(vals[len(vals) // 2], 1)
+
+    def _read_once(self) -> float:
+        """One trigger/echo cycle. Returns cm, or -1.0 on no-echo / error."""
         if self._backend == "lgpio":
             return self._read_lgpio()
         if self._backend == "gpiozero":
             try:
-                return round(self._sensor.distance * 100.0, 1)
+                # gpiozero clamps to max_distance on no-echo; treat max as invalid
+                # so it fails safe like the lgpio path rather than reading "clear".
+                cm = round(self._sensor.distance * 100.0, 1)
+                return self.INVALID if cm >= _MAX_RANGE_CM else cm
             except Exception as exc:
                 logger.debug("Ultrasonic read error: %s", exc)
-                return _MAX_RANGE_CM
-        return _MAX_RANGE_CM
+                return self.INVALID
+        return self.INVALID
 
     def _read_lgpio(self) -> float:
         lg = self._lgpio
@@ -89,27 +118,27 @@ class Ultrasonic:
             time.sleep(0.00001)
             lg.gpio_write(chip, self._trigger, 0)
 
-            #deadline = time.time() + _ECHO_TIMEOUT_S # old code
-            deadline = time.perf_counter() + _ECHO_TIMEOUT_S # new code
+            deadline = time.perf_counter() + _ECHO_TIMEOUT_S
             # Wait for the echo to go high.
-            #start = time.time() # old code
-            start = time.perf_counter() # new code
+            start = time.perf_counter()
             while lg.gpio_read(chip, self._echo) == 0:
-                start = time.perf_counter() # new code. old code: start = time.time()
+                start = time.perf_counter()
                 if start > deadline:
-                    return _MAX_RANGE_CM
+                    return self.INVALID   # echo never rose → no echo
             # Wait for the echo to go low.
-            stop = time.perf_counter() # new code. old code: stop = time.time()
+            stop = time.perf_counter()
             while lg.gpio_read(chip, self._echo) == 1:
-                stop = time.perf_counter() # new code. old code: stop = time.time()
+                stop = time.perf_counter()
                 if stop > deadline:
-                    return _MAX_RANGE_CM
+                    return self.INVALID   # echo stuck high → bad reading
 
             distance = (stop - start) * _SPEED_OF_SOUND_CM_S / 2.0
-            return round(min(distance, _MAX_RANGE_CM), 1)
+            if distance <= 0 or distance > _MAX_RANGE_CM:
+                return self.INVALID
+            return round(distance, 1)
         except Exception as exc:
             logger.debug("Ultrasonic lgpio read error: %s", exc)
-            return _MAX_RANGE_CM
+            return self.INVALID
 
     def close(self) -> None:
         try:

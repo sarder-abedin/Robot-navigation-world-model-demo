@@ -15,9 +15,12 @@ camera:
   stream_width: 400
   stream_height: 300
   # Number of frames kept in the rolling clip buffer for V-JEPA 2.
-  clip_length: 16
-  # Target size that all frames are resized to before any model inference.
-  ai_frame_size: 224
+  # MUST match the checkpoint's frames-per-clip: vitl-fpc64 → 64.
+  clip_length: 64
+  # Target size that all frames are resized to before model inference.
+  # MUST match the checkpoint's input resolution: vitl-...-256 → 256.
+  # (SSv2/VideoMAE downsamples to its own 224 internally.)
+  ai_frame_size: 256
 
 # ── Detector (YOLOv8) ─────────────────────────────────────────────────────────
 # YOLO always runs HERE on the PC (both live and demo). The Pi is a thin client
@@ -48,7 +51,7 @@ world_model:
   # HuggingFace model ID or local checkpoint path.
   # The system falls back to a lightweight stub when the weights are absent.
   model_id: "facebook/vjepa2-vitl-fpc64-256"
-  input_size: 224
+  input_size: 256              # MUST match the checkpoint (…-256); frames resized to this
   prediction_horizon: 4        # future frames to predict
   risk_similarity_threshold: 0.55
   device: "auto"               # auto = CUDA → MPS → CPU; or force "cuda"/"mps"/"cpu"
@@ -76,13 +79,19 @@ ssv2:
   min_confidence: 0.15         # below this the sentence is shown as tentative
 
 # ── Decision fusion ────────────────────────────────────────────────────────────
+# Thresholds must be coordinated with robot speed and pipeline latency: the
+# heavy models run at only a few FPS on CPU, so a fast robot travels far between
+# updates and hits obstacles before a STOP is computed. Keep the robot slow (see
+# robot.speed_*) and the thresholds conservative so SLOW/STOP trigger early.
+# The ultrasonic hard-STOP (robot.ultrasonic_stop_cm) is a separate, immediate
+# safety layer and is the last line of defence regardless of these thresholds.
 decision:
   weights:
     detector: 0.35
     world_model: 0.45
     temporal: 0.20
-  low_risk_max: 0.30
-  medium_risk_max: 0.60
+  low_risk_max: 0.25           # above this → SLOW (was 0.30; brake earlier)
+  medium_risk_max: 0.50        # above this → STOP/REROUTE (was 0.60)
   hysteresis: 0.05
   stop_hold_seconds: 1.5
 
@@ -95,8 +104,14 @@ robot:
   # Reroute: turn for this many seconds then resume
   reroute_turn_seconds: 1.2
   reroute_direction: "left"    # "left" | "right"
-  # Safety: stop if ultrasonic reads below this distance (cm)
-  ultrasonic_stop_cm: 15.0
+  # Ultrasonic hard-STOP distance (cm) — deterministic safety, separate from the
+  # AI risk. Raised from 15→30 so the robot halts with margin instead of creeping
+  # into the wall (a slow robot + a few-FPS pipeline needs the extra distance).
+  ultrasonic_stop_cm: 30.0
+  # Reuse the last valid sonic reading for this long when a ping misses, so one
+  # HC-SR04 drop-out (common off angled/soft walls) doesn't drop a close obstacle
+  # back to "clear". Beyond this the hard-stop releases and vision drives.
+  ultrasonic_blind_hold_seconds: 1.0
   # Ultrasonic check also guards the AI-driven forward motion
   use_ultrasonic_guard: true
 
