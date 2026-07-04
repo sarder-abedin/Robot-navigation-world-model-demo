@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 
 _MAX_RANGE_CM = 400.0
 _SPEED_OF_SOUND_CM_S = 34300.0
-_ECHO_TIMEOUT_S = 0.04   # ~6.8 m round-trip cap; beyond this = no echo
+# _ECHO_TIMEOUT_S = 0.04   # ~6.8 m round-trip cap; beyond this = no echo
+_ECHO_TIMEOUT_S = (2 * _MAX_RANGE_CM) / _SPEED_OF_SOUND_CM_S # timeout = (2 * max_range) / speed_of_sound
 
 
 class Ultrasonic:
@@ -88,17 +89,19 @@ class Ultrasonic:
             time.sleep(0.00001)
             lg.gpio_write(chip, self._trigger, 0)
 
-            deadline = time.time() + _ECHO_TIMEOUT_S
+            #deadline = time.time() + _ECHO_TIMEOUT_S # old code
+            deadline = time.perf_counter() + _ECHO_TIMEOUT_S # new code
             # Wait for the echo to go high.
-            start = time.time()
+            #start = time.time() # old code
+            start = time.perf_counter() # new code
             while lg.gpio_read(chip, self._echo) == 0:
-                start = time.time()
+                start = time.perf_counter() # new code. old code: start = time.time()
                 if start > deadline:
                     return _MAX_RANGE_CM
             # Wait for the echo to go low.
-            stop = time.time()
+            stop = time.perf_counter() # new code. old code: stop = time.time()
             while lg.gpio_read(chip, self._echo) == 1:
-                stop = time.time()
+                stop = time.perf_counter() # new code. old code: stop = time.time()
                 if stop > deadline:
                     return _MAX_RANGE_CM
 
