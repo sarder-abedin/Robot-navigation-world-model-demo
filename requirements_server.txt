@@ -27,6 +27,11 @@ numpy>=1.24.0
 # ── Operator UI viewer ────────────────────────────────────────────────────────
 # Streamlit viewer (Code/Client/streamlit_viewer.py) – browser-based, runs in Docker
 streamlit>=1.37.0
+# Native desktop window (Code/Client/desktop_viewer.py) – wraps Streamlit in an
+# OS-native window via pywebview. Native use only (a window needs a display, so
+# it does nothing inside the headless Docker image). macOS/Windows work out of
+# the box; on Linux also install a system webview backend (see requirements_client.txt).
+pywebview>=5.0
 # PyQt5 desktop viewer (Code/Client/ai_viewer.py) – native desktop use only
 # Not installed in Docker (no arm64 wheel); run natively on Mac/Linux if preferred.
 PyQt5>=5.15.0
