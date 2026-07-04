@@ -370,6 +370,41 @@ python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"   # pre-fetch weig
 
 ## How to run
 
+### Choosing where YOLO runs — `DETECTOR_LOCATION`
+
+**This is the one setting that decides where object detection happens.** Set it the
+same on **both** the robot and the server.
+
+| `DETECTOR_LOCATION` | YOLOv8n runs on | Use when |
+|---|---|---|
+| `pi` *(default)* | the **Raspberry Pi** | normal operation; lowest detection latency |
+| `server` | the **PC** | the Pi browns out / battery is weak — offloads the Pi's biggest CPU draw |
+
+Either way the Pi keeps its ultrasonic sensor as the local hard-stop safety.
+
+**How to set it** (any one of these — env var wins over the config file):
+
+```bash
+# 1) Docker compose — inline env var (matches on both sides):
+DETECTOR_LOCATION=server docker compose -f docker-compose.robot.yml  up --build   # on the Pi
+DETECTOR_LOCATION=server docker compose -f docker-compose.server.yml up --build   # on the PC
+
+# 2) Plain docker run:
+docker run ... -e DETECTOR_LOCATION=server nav-robot
+
+# 3) Native / venv:
+DETECTOR_LOCATION=server python main_robot.py --server-ip 192.168.1.42
+DETECTOR_LOCATION=server python main_server.py --mode live --nav predictive
+```
+
+Or set it permanently in the config files instead of the env var:
+`Code/Robot/config_robot.yaml` → `detector.location: server`, and
+`Code/Server/config.yaml` → `detector.location: server`.
+
+> Optional: with `DETECTOR_LOCATION=server` you can also build a slimmer Pi image
+> that omits torch/ultralytics — `docker build --build-arg YOLO_ON_PI=0 …` (see the
+> 🔋 note in Quick Start).
+
 ### Option A – Demo mode (no robot hardware needed)
 
 **Step 1** – Place a corridor video clip at:
@@ -611,6 +646,7 @@ At least 10 frames per class is recommended.
 | Setting | Default | Effect |
 |---|---|---|
 | `navigation_mode` | `predictive` | Starting navigation mode |
+| `detector.location` | `pi` | **Where YOLO runs**: `pi` (Pi sends CMD_DETECTION) or `server` (PC runs YOLO on the streamed frames). Override with env `DETECTOR_LOCATION`. Must match the robot's setting |
 | `world_model.risk_similarity_threshold` | `0.55` | V-JEPA 2 BLOCKED sensitivity |
 | `decision.weights.world_model` | `0.45` | V-JEPA 2 contribution to fused risk |
 | `decision.low_risk_max` | `0.30` | Below this → FORWARD |
@@ -628,6 +664,7 @@ At least 10 frames per class is recommended.
 |---|---|---|
 | `server_ip` | `192.168.1.100` | PC server IP address |
 | `gpio.chip` | `0` | GPIO chip number — Pi 5 kernel ≥ 6.6 → `0`; Pi 5 kernel < 6.6 → `4`; Pi 4 → `0`. Run `gpiodetect` to confirm |
+| `detector.location` | `pi` | **Where YOLO runs**: `pi` (on the Pi) or `server` (on the PC). Override with env `DETECTOR_LOCATION`. Must match the server's setting |
 | `detector.model` | `yolov8n.pt` | YOLOv8 model (runs locally on Pi) |
 | `detector.conf` | `0.35` | Detection confidence threshold |
 | `detector.run_every_n_frames` | `2` | YOLOv8 cadence (CPU saving) |
