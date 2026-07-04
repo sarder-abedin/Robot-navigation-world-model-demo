@@ -81,6 +81,18 @@ def _env_bool(name: str, default: bool) -> bool:
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_int(name: str, default: int) -> int:
+    """Read an integer env var; fall back to default on unset/invalid."""
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    try:
+        return int(v)
+    except ValueError:
+        logger.warning("%s must be an integer, got %r – using %d", name, v, default)
+        return default
+
+
 def _signal_handler(sig, frame):
     global _shutdown
     _shutdown = True
@@ -351,9 +363,12 @@ def main() -> None:
 
     # ── Command receive loop (main thread) ───────────────────────────────────
     robot_cfg = cfg.get("robot", {})
-    speed_full = robot_cfg.get("speed_full", 1500)
-    speed_slow = robot_cfg.get("speed_slow", 800)
+    # Speeds are PWM duty out of 4095. Keep them slow for a reactive demo. Tune
+    # at runtime without rebuilding via -e SPEED_FULL=<n> / -e SPEED_SLOW=<n>.
+    speed_full = _env_int("SPEED_FULL", robot_cfg.get("speed_full", 1600))
+    speed_slow = _env_int("SPEED_SLOW", robot_cfg.get("speed_slow", 1000))
     reroute_secs = robot_cfg.get("reroute_turn_seconds", 1.2)
+    logger.info("Motor speeds: FORWARD=%d  SLOW=%d  (of 4095 max)", speed_full, speed_slow)
 
     while not _shutdown and client.is_connected:
         cmd = client.get_command(timeout=0.5)

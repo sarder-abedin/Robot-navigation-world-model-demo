@@ -44,12 +44,13 @@ gpio:
 # ~37% duty, which often just twitches the robot without sustaining motion on the
 # floor. 3000 (~73%) / 1800 (~44%) move it reliably. Lower these if it's too fast.
 robot:
-  # Keep this modest: the PC pipeline (V-JEPA 2 + SSv2 on CPU) runs at only a few
-  # fps, so a fast robot outruns its own perception and hits obstacles before a
-  # STOP is computed. 2000 (~49%) moves steadily but stays reactive; raise only
-  # if your power supply and pipeline fps allow. speed_slow is the cautious speed.
-  speed_full: 2000
-  speed_slow: 1200
+  # PWM duty out of 4095 — keep it SLOW. The PC pipeline (V-JEPA 2 + SSv2 on CPU)
+  # runs at only a few fps, so a fast robot outruns its own perception and hits
+  # obstacles before a STOP is computed. 1600 (~39%) is a slow, reactive crawl.
+  # If it doesn't start moving, raise it a little; if still too fast, lower it.
+  # Tune live without rebuilding: docker run ... -e SPEED_FULL=1700 -e SPEED_SLOW=1000
+  speed_full: 1600
+  speed_slow: 1000
   # Ramp PWM on big jumps so the motor inrush current doesn't brown out the Pi
   # (symptom: the Pi drops off the network the instant it starts to drive).
   soft_start: true
