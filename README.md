@@ -64,6 +64,8 @@ docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpio
 > **Camera orientation** — the feed is streamed upright by default (no flip), so the UI, V-JEPA 2 and YOLO all get the correctly-oriented frame. If your camera is mounted **inverted** and the image looks upside-down, flip it with `-e CAMERA_HFLIP=1 -e CAMERA_VFLIP=1` (no rebuild needed) or set `camera.hflip`/`camera.vflip: true` in `config_robot.yaml`.
 >
 > **GPIO chip** — on Pi 5 the RP1 controller is `/dev/gpiochip0`, but the lgpio pin factory also probes `gpiochip4`, so map the host controller to **both** container nodes (`--device /dev/gpiochip0:/dev/gpiochip0 --device /dev/gpiochip0:/dev/gpiochip4`) as shown above. If motors log `can not open gpiochip`, that second mapping is missing. Run `gpiodetect` on the host to confirm which chip is `pinctrl-rp1`.
+>
+> **Motor speed** — the robot drives **slowly** by default (`speed_full: 1600`, `speed_slow: 1000` out of 4095) so it stays reactive to the CPU pipeline. Tune it **without rebuilding** via `-e SPEED_FULL=<n> -e SPEED_SLOW=<n>` (or edit `config_robot.yaml`): raise it a little if the robot doesn't start moving, lower it if it's still too fast. A soft-start ramp (`robot.soft_start`) blunts the current spike so the Pi doesn't brown out on drive.
 
 ---
 

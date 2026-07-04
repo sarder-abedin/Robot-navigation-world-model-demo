@@ -23,8 +23,8 @@ import streamlit as st
 # ── Constants ──────────────────────────────────────────────────────────────────
 CMD_PORT   = 5003
 VIDEO_PORT = 8003
-SPEED_FULL = 2000   # ~49% of the 4095 max duty — moves but stays reactive
-SPEED_SLOW = 1200   # ~29%
+SPEED_FULL = 1600   # ~39% of the 4095 max duty — a slow, reactive crawl
+SPEED_SLOW = 1000   # ~24%
 MAX_FRAME_BYTES = 10 * 1024 * 1024   # reject absurd frame lengths (stream desync guard)
 
 ACTION_BG = {
@@ -373,7 +373,7 @@ with d2:
 
 if be.mode == "MANUAL":
     speed_choice = st.radio(
-        "Speed", ["Full  (2000 PWM)", "Slow  (1200 PWM)"], horizontal=True
+        "Speed", ["Full  (1600 PWM)", "Slow  (1000 PWM)"], horizontal=True
     )
     spd = SPEED_FULL if "Full" in speed_choice else SPEED_SLOW
 
