@@ -13,20 +13,11 @@ server_ip: "192.168.1.100"
 robot_cmd_port: 5004
 robot_video_port: 8004
 
-# ── YOLOv8n detector ─────────────────────────────────────────────────────────
-# location:
-#   pi      → run YOLOv8n on the Pi and send CMD_DETECTION (classic split-inference)
-#   server  → skip YOLO on the Pi entirely; the PC runs it on the streamed frames.
-#             Saves a large amount of Pi CPU/current (fixes battery brownouts). The
-#             Pi still streams the camera, drives motors, and reads the ultrasonic
-#             sensor (its local hard-stop safety). Must match the SERVER's setting.
-# Override at runtime with -e DETECTOR_LOCATION=server (no rebuild needed).
-detector:
-  location: pi
-  model: yolov8n.pt           # nano model – fits comfortably on Pi 4/5
-  conf: 0.35                  # confidence threshold
-  run_every_n_frames: 2       # inference every 2nd frame (reduce CPU load)
-  center_zone_width: 0.40     # fraction of frame width = "danger zone"
+# ── Object detection ─────────────────────────────────────────────────────────
+# There is NO detector on the Pi. All AI (YOLOv8n, V-JEPA 2, SSv2) runs on the PC
+# server, which detects on the camera frames the Pi streams. The Pi only sends
+# the ultrasonic distance (CMD_SONIC) as its local hard-stop safety. Detector
+# settings live in the server's config.yaml.
 
 # ── Camera (Pi camera settings) ───────────────────────────────────────────────
 # Orientation is applied at capture on the Pi, so the corrected frame flows to

@@ -25,7 +25,6 @@ is supported via set_navigation_mode() (called from the TCP command handler).
 from __future__ import annotations
 
 import logging
-import os
 import struct
 import threading
 import time
@@ -71,13 +70,6 @@ class AIPipeline:
                 self._cfg = yaml.safe_load(f)
 
         self._nav_mode = self._cfg.get("navigation_mode", "predictive")
-
-        # Detection location (live/split-inference mode): "pi" (Pi runs YOLO and
-        # sends CMD_DETECTION) or "server" (Pi streams frames only; the PC runs
-        # YOLO on them, sparing the Pi's CPU/battery). Env var wins over config.
-        det_cfg = self._cfg.get("detector", {}) or {}
-        loc = os.environ.get("DETECTOR_LOCATION", str(det_cfg.get("location", "pi")))
-        self._server_detect = loc.strip().lower() == "server"
 
         # Run logging (CSV + annotated frames) starts from config; toggled at
         # runtime from the UI (CMD_LOGGING) or at startup via env/CLI.
@@ -242,21 +234,10 @@ class AIPipeline:
     def _process_frame(self, frame_rgb, frame_idx: int) -> None:
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
-            # ── 2. Detection – pick the source ────────────────────────────────
-            #   • server-side YOLO → run the local Detector on the streamed frame
-            #     (Pi sent no YOLO result, only ultrasonic in CMD_DETECTION)
-            #   • split mode       → use the Pi's CMD_DETECTION result
-            #   • demo mode        → run the local Detector on the video frame
-            if self._server_detect and self._detector is not None:
-                try:
-                    det_result = self._detector.detect(frame_rgb)
-                except Exception as exc:
-                    logger.warning("Server-side detector error: %s", exc)
-                    return
-            elif self._robot_connection is not None and self._robot_connection.is_connected:
-                # Pi ran YOLOv8n and sent CMD_DETECTION – use that result
-                det_result = self._robot_connection.get_latest_detection()
-            elif self._detector is not None:
+            # ── 2. Detection – always the PC's local YOLO on the streamed frame.
+            # The Pi is a thin client that only streams frames + ultrasonic, so
+            # detection runs here in both live and demo mode.
+            if self._detector is not None:
                 try:
                     det_result = self._detector.detect(frame_rgb)
                 except Exception as exc:
@@ -264,7 +245,7 @@ class AIPipeline:
                     return
             else:
                 from detector import DetectionResult
-                det_result = DetectionResult()  # empty – no detection source
+                det_result = DetectionResult()  # YOLO unavailable – empty result
 
             # ── 3. V-JEPA 2 world model prediction ───────────────────────────
             clip = self._cam_buf.get_clip()
@@ -386,28 +367,19 @@ class AIPipeline:
             self._cam_buf = CameraBuffer(cfg, freenove_camera=self._freenove_camera)
             self._cam_buf.start()
 
-        # Load local YOLO when there's no robot (demo mode) OR when detection is
-        # configured to run server-side (Pi streams frames; the PC runs YOLO to
-        # spare the Pi's battery). Otherwise the Pi runs YOLO and sends
-        # CMD_DETECTION, so the server skips it.
-        if self._robot_connection is None or self._server_detect:
-            self._detector = Detector(cfg)
-            try:
-                self._detector.load()
-                if self._server_detect and self._robot_connection is not None:
-                    logger.info(
-                        "Server-side YOLO enabled (DETECTOR_LOCATION=server) – the Pi "
-                        "streams frames only; the PC runs YOLOv8n. Pi keeps ultrasonic."
-                    )
-            except Exception as exc:
-                logger.error(
-                    "YOLO failed to load on the server (%s) – detection disabled. "
-                    "Install 'ultralytics' on the PC to use server-side detection.", exc,
-                )
-                self._detector = None
-        else:
+        # All AI runs on the PC: YOLO always runs here, on the streamed frames
+        # (live) or the demo video. The Pi is a thin client that only streams
+        # frames and reports ultrasonic — it never runs YOLO.
+        self._detector = Detector(cfg)
+        try:
+            self._detector.load()
+            logger.info("YOLOv8n loaded on the server (all AI runs on the PC)")
+        except Exception as exc:
+            logger.error(
+                "YOLO failed to load on the server (%s) – detection disabled. "
+                "Ensure 'ultralytics' is installed on the PC.", exc,
+            )
             self._detector = None
-            logger.info("Local YOLOv8 skipped – using CMD_DETECTION from Pi")
 
         self._world_model = WorldModel(cfg)
         self._world_model.load()

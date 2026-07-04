@@ -98,7 +98,11 @@ class RobotTCPClient:
             return False
 
     def send_sonic(self, cm: float) -> bool:
-        """Send CMD_SONIC reading to PC (legacy; prefer send_detection)."""
+        """Send the ultrasonic distance to the PC as CMD_SONIC#<cm>.
+
+        This is the Pi's only sensor report — object detection runs on the PC
+        from the streamed camera frames, so no CMD_DETECTION is sent.
+        """
         return self._send_cmd(f"CMD_SONIC#{cm:.1f}\r\n")
 
     def send_detection(

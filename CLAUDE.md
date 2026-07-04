@@ -19,18 +19,14 @@ assets/         ← Demo video clips
 ## Architecture rules
 
 - **PC = TCP server** (binds ports 5003/8003 for UI, 5004/8004 for robot)
-- **Pi = TCP client** (connects outbound; runs YOLOv8n locally in `pi` mode)
+- **Pi = TCP client** (connects outbound; **thin client — runs NO AI**)
 - **UI viewer = TCP client** (connects to PC only)
-- **Detection location is configurable** via `detector.location` (`pi` | `server`)
-  or the `DETECTOR_LOCATION` env var:
-  - `pi` (default): the Pi runs YOLOv8n and sends `CMD_DETECTION`. `Code/Server/`
-    does NOT import YOLO in this live mode. `Code/Server/detector.py` is used only
-    in demo mode (no robot).
-  - `server`: the Pi streams frames only; the PC runs YOLO (`Code/Server/detector.py`)
-    on them, sparing the Pi's CPU/battery. Here `Code/Server/` DOES run YOLO in
-    live mode — the sole exception to the "no YOLO on the server in live mode" rule,
-    and it is gated on `AIPipeline._server_detect`. The Pi keeps the ultrasonic
-    sensor as its local hard-stop safety regardless of this setting.
+- **ALL AI runs on the PC.** YOLOv8n (`Code/Server/detector.py`), V-JEPA 2 and
+  SSv2 all run in `Code/Server/` in every mode (live and demo). The Pi streams
+  camera frames (port 8004) and the PC detects on them. There is no on-Pi YOLO
+  and no `DETECTOR_LOCATION` switch. The Pi's only sensor report is the ultrasonic
+  distance (`CMD_SONIC`), its local hard-stop safety.
+- The Pi Docker image is therefore lightweight — **no torch / ultralytics**.
 - Motor mapping (action → PWM) happens on the **Pi** side in `main_robot.py`,
   not on the PC. The PC sends high-level `CMD_AIMOVE#FORWARD` etc.
 
@@ -39,20 +35,20 @@ assets/         ← Demo video clips
 | File | Purpose |
 |---|---|
 | `Code/Server/main_server.py` | PC entry point; starts AI pipeline + TCP servers |
-| `Code/Server/robot_connection.py` | Parses `CMD_DETECTION` from Pi; exposes `get_latest_detection()` and `send_aimove()` |
-| `Code/Server/ai_pipeline.py` | Orchestrates V-JEPA 2 → SSv2 → decision → broadcast |
+| `Code/Server/detector.py` | YOLOv8n — runs on the **PC** on the Pi's streamed frames (all modes) |
+| `Code/Server/robot_connection.py` | Parses `CMD_SONIC` from Pi; exposes `get_sonic_cm()` and `send_aimove()` |
+| `Code/Server/ai_pipeline.py` | Orchestrates YOLO → V-JEPA 2 → SSv2 → decision → broadcast |
 | `Code/Server/robot_control.py` | `TCPRobotController` sends `CMD_AIMOVE` to Pi |
-| `Code/Robot/main_robot.py` | Pi entry point; runs YOLO + camera + sonic + command loop |
-| `Code/Robot/detector_robot.py` | YOLOv8n wrapper for Pi; returns `DetectionPacket` |
-| `Code/Robot/tcp_robot_client.py` | Pi-side TCP client; `send_detection()` / `send_frame()` |
+| `Code/Robot/main_robot.py` | Pi entry point (thin client); camera stream + sonic + command loop |
+| `Code/Robot/tcp_robot_client.py` | Pi-side TCP client; `send_sonic()` / `send_frame()` |
 | `Code/Client/ai_viewer.py` | PyQt5 UI; AUTO mode (AI drives) / MANUAL mode (operator drives) |
 
 ## TCP protocol (summary)
 
 ```
-Pi → PC:  CMD_DETECTION#<risk_pct>#<in_center_0or1>#<area_pct>#<cx_pct>#<sonic_cm>#<top_label>
-          (top_label = YOLO class of the largest obstacle; fills the SSv2 "something" slot; may be empty)
-Pi → PC:  4-byte LE uint32 + JPEG  (camera stream, port 8004, for V-JEPA 2)
+Pi → PC:  CMD_SONIC#<sonic_cm>                        (ultrasonic distance; local hard-stop)
+Pi → PC:  4-byte LE uint32 + JPEG  (camera stream, port 8004, for ALL server-side AI)
+          (the server also still accepts legacy CMD_DETECTION for backward compat)
 PC → Pi:  CMD_AIMOVE#<FORWARD|SLOW|STOP|REROUTE>   (AI navigation action)
 PC → Pi:  CMD_MOTOR#<L>#<R>                         (manual from UI viewer)
 PC → Pi:  CMD_STOP / CMD_KILL / CMD_AIMODE#<0|1|2>
@@ -68,8 +64,8 @@ PC → UI:  4-byte LE uint32 + JPEG  (annotated HUD frames, port 8003)
 - `Code/Server/ssv2_model.py` runs a **real** Something-Something-V2 video
   classifier (VideoMAE, `MCG-NJU/videomae-base-finetuned-ssv2`) over the clip
   buffer. The predicted template's "something" slot is filled with the largest
-  obstacle's YOLO class (from `CMD_DETECTION#…#<top_label>`), e.g. "person
-  moving closer". Annotation/logging ONLY — it does NOT drive navigation (the
+  obstacle's YOLO class (from the PC's own detection on the streamed frame), e.g.
+  "person moving closer". Annotation/logging ONLY — it does NOT drive navigation (the
   fast heuristic in `temporal_action.py` still supplies `temporal_risk`).
   Falls back to a stub (still fills the object) when transformers/weights are absent.
 - **Device:** both heavy models (V-JEPA 2 + SSv2) use `device: auto` via
@@ -117,8 +113,7 @@ Always develop on `claude/freenove-predictive-navigation-tgo1v`.
 ## Do not
 
 - Import `picamera2`, `gpiozero`, or `lgpio` in server-side code (they are Pi-only).
-- Import `ultralytics` in server-side code during live mode **when
-  `detector.location: pi`** (handled by Pi). It IS allowed when
-  `detector.location: server` — that mode deliberately runs YOLO on the PC.
+- Import `torch`, `ultralytics`, or any AI framework in `Code/Robot/` — the Pi is
+  a thin client with no AI. All models (YOLO/V-JEPA 2/SSv2) live in `Code/Server/`.
 - Run blocking calls on the main thread in `AIPipeline` (it runs in a daemon thread).
 - Hardcode IP addresses; use config files or CLI flags.

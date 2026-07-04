@@ -1,10 +1,12 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Dockerfile.robot – Raspberry Pi 5 Robot Client
-# Supports:
-#   - Picamera2 + libcamera
-#   - GPIO via lgpio/gpiozero
-#   - YOLOv8n
-#   - OpenCV fallback
+# Dockerfile.robot – Raspberry Pi 5 Robot Client (thin client, no on-Pi AI)
+#
+# All AI (YOLOv8n + V-JEPA 2 + SSv2) runs on the PC server. This image is
+# deliberately lightweight: it carries NO torch / ultralytics. It provides:
+#   - Picamera2 + libcamera (camera streaming)
+#   - GPIO via lgpio/gpiozero (motors)
+#   - Ultrasonic sensor (local hard-stop safety)
+#   - OpenCV (JPEG encode/decode) + numpy
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM python:3.11-bookworm
@@ -80,40 +82,23 @@ COPY Code/Robot/ .
 # Python dependencies
 # ---------------------------------------------------------------------------
 
-# YOLO_ON_PI controls whether YOLOv8n runs on the Pi.
-#   1 (default) → install ultralytics/torch; the Pi can run YOLO locally
-#                 (DETECTOR_LOCATION=pi, classic split-inference).
-#   0           → SKIP ultralytics/torch entirely for a much smaller/faster Pi
-#                 image. Use with DETECTOR_LOCATION=server so the PC runs YOLO on
-#                 the streamed frames (saves the Pi's CPU/battery). Build with:
-#                   docker build --build-arg YOLO_ON_PI=0 -f Dockerfile.robot ...
-ARG YOLO_ON_PI=1
-
+# Lightweight dependency set — NO torch/ultralytics (all AI runs on the PC).
+#
 # numpy MUST be exactly the 1.26 line: the apt-built picamera2 helper `simplejpeg`
 # (in /usr/lib/python3/dist-packages) is compiled against numpy 1.26 (dtype struct
 # size 96). An older numpy 1.24 (size 88) or numpy 2.x (size 120) triggers
 #   "ValueError: numpy.dtype size changed ... Expected 96 ... got 88/120"
-# when picamera2 imports simplejpeg.
-#
-# Two hazards break the naive pin:
-#   1. Bookworm ships an apt numpy 1.24 in dist-packages. Relying only on sys.path
-#      order (the .pth append) to keep pip's 1.26 ahead is fragile — on the current
-#      apt/pip snapshot the apt 1.24 wins and simplejpeg aborts.
-#   2. `pip install ultralytics` can quietly move numpy off 1.26.
-# So we (a) pin numpy 1.26.4 LAST with --force-reinstall so nothing downgrades it,
-# and (b) delete the stale apt numpy from dist-packages so 1.26.4 is the ONLY numpy
-# importable — guaranteeing it matches what simplejpeg was compiled against.
+# when picamera2 imports simplejpeg. Bookworm ships an apt numpy 1.24 in
+# dist-packages, and relying on sys.path order (the .pth append) to keep pip's
+# 1.26 ahead is fragile. So we (a) pin numpy 1.26.4 LAST with --force-reinstall so
+# nothing downgrades it, and (b) delete the stale apt numpy from dist-packages so
+# 1.26.4 is the ONLY numpy importable — matching what simplejpeg was compiled with.
 RUN pip install --no-cache-dir \
     "lgpio>=0.2.2.0" \
     "gpiozero>=2.0" \
     "numpy>=1.26,<2" \
     "PyYAML>=6.0.0" \
     "opencv-python-headless>=4.8.0" \
-    && if [ "$YOLO_ON_PI" = "1" ]; then \
-         pip install --no-cache-dir "ultralytics>=8.0.0"; \
-       else \
-         echo "YOLO_ON_PI=0 – skipping ultralytics/torch (server-side detection)"; \
-       fi \
     && pip install --no-cache-dir --force-reinstall --no-deps "numpy==1.26.4" \
     && rm -rf /usr/lib/python3/dist-packages/numpy \
               /usr/lib/python3/dist-packages/numpy.libs \
@@ -133,20 +118,7 @@ RUN pip install --no-cache-dir \
 
 RUN python3 -c "import numpy, cv2, simplejpeg, libcamera, picamera2; from picamera2.encoders import JpegEncoder; print('camera stack import OK: numpy', numpy.__version__, '| cv2', cv2.__version__, '| simplejpeg + picamera2 + libcamera present')"
 
-# ---------------------------------------------------------------------------
-# Download YOLO weights during build (only when YOLO runs on the Pi)
-# ---------------------------------------------------------------------------
-
-RUN if [ "$YOLO_ON_PI" = "1" ]; then \
-      python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')" || true; \
-    fi
-
 ENV SERVER_IP=192.168.1.100
-# DETECTOR_LOCATION: where YOLO runs in live mode.
-#   pi     → Pi runs YOLOv8n locally (default; needs YOLO_ON_PI=1 image)
-#   server → Pi streams frames only; the PC runs YOLO (saves Pi battery)
-# Override at runtime: docker run -e DETECTOR_LOCATION=server nav-robot
-ENV DETECTOR_LOCATION=pi
 # GPIO_CHIP: override the gpiochip device number at runtime.
 # Pi 5 kernel ≥ 6.6 (pinctrl-rp1): GPIO_CHIP=0  (default)
 # Pi 5 kernel < 6.6 or if gpiodetect shows gpiochip4: GPIO_CHIP=4

@@ -127,44 +127,6 @@ def test_aistatus_six_field_back_compat():
     assert ssv2 == ""
 
 
-# ── Pi picks the largest obstacle's label ─────────────────────────────────────
-
-def test_detector_robot_top_label_is_largest_box():
-    import numpy as np
-    from detector_robot import DetectorRobot
-
-    class Box:
-        def __init__(self, xyxy, cls):
-            self.xyxy = [np.array(xyxy)]
-            self.cls = [cls]
-
-    class Res:
-        names = {0: "person", 1: "chair"}
-        boxes = [Box([10, 10, 50, 50], 1), Box([0, 0, 200, 200], 0)]  # person is bigger
-        def __call__(self, *a, **k):
-            return [self]
-
-    d = DetectorRobot({"detector": {"run_every_n_frames": 1}})
-    d._model = Res()
-    pkt = d.detect(np.zeros((300, 400, 3), np.uint8))
-    assert pkt.top_label == "person" and pkt.n_obstacles == 2
-
-
-def test_detector_robot_top_label_empty_when_no_detections():
-    import numpy as np
-    from detector_robot import DetectorRobot
-
-    class Res:
-        names = {}
-        boxes = []
-        def __call__(self, *a, **k):
-            return [self]
-
-    d = DetectorRobot({"detector": {"run_every_n_frames": 1}})
-    d._model = Res()
-    assert d.detect(np.zeros((300, 400, 3), np.uint8)).top_label == ""
-
-
 # ── Server-side run-logging toggle ────────────────────────────────────────────
 
 def test_pipeline_logging_toggle(cfg):
@@ -185,29 +147,6 @@ def test_pipeline_logging_initial_from_config(cfg):
     assert AIPipeline(cfg=cfg).is_logging_enabled() is True
 
 
-# ── Detector location: Pi vs server-side YOLO ─────────────────────────────────
-
-def test_detector_location_defaults_to_pi(cfg, monkeypatch):
-    from ai_pipeline import AIPipeline
-    monkeypatch.delenv("DETECTOR_LOCATION", raising=False)
-    cfg = dict(cfg); cfg["detector"] = dict(cfg["detector"]); cfg["detector"]["location"] = "pi"
-    assert AIPipeline(cfg=cfg)._server_detect is False
-
-
-def test_detector_location_server_enables_server_detect(cfg, monkeypatch):
-    from ai_pipeline import AIPipeline
-    monkeypatch.delenv("DETECTOR_LOCATION", raising=False)
-    cfg = dict(cfg); cfg["detector"] = dict(cfg["detector"]); cfg["detector"]["location"] = "server"
-    assert AIPipeline(cfg=cfg)._server_detect is True
-
-
-def test_detector_location_env_overrides_config(cfg, monkeypatch):
-    from ai_pipeline import AIPipeline
-    cfg = dict(cfg); cfg["detector"] = dict(cfg["detector"]); cfg["detector"]["location"] = "pi"
-    monkeypatch.setenv("DETECTOR_LOCATION", "server")
-    assert AIPipeline(cfg=cfg)._server_detect is True
-    monkeypatch.setenv("DETECTOR_LOCATION", "pi")
-    assert AIPipeline(cfg=cfg)._server_detect is False
 
 
 def test_resolve_logging_enabled_precedence(monkeypatch):

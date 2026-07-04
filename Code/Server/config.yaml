@@ -20,16 +20,10 @@ camera:
   ai_frame_size: 224
 
 # ── Detector (YOLOv8) ─────────────────────────────────────────────────────────
+# YOLO always runs HERE on the PC (both live and demo). The Pi is a thin client
+# that only streams camera frames + ultrasonic; it never runs YOLO.
 detector:
-  # Where YOLO runs in LIVE (split-inference) mode:
-  #   pi      → Pi runs YOLOv8n and sends CMD_DETECTION (classic split-inference)
-  #   server  → Pi streams frames only; the PC runs YOLO on them. This offloads
-  #             the biggest CPU/current draw from the Pi (fixes battery brownouts)
-  #             and uses the PC GPU. The Pi keeps ultrasonic as its local safety.
-  # Override at runtime with the DETECTOR_LOCATION env var. Ignored in demo mode
-  # (the server always runs YOLO locally there).
-  location: pi
-  model: "yolov8n.pt"             # nano for Pi; swap to yolov8s if you have a Pi 5
+  model: "yolov8n.pt"             # nano; swap to yolov8s/yolov8m for more accuracy on the PC
   confidence_threshold: 0.40
   iou_threshold: 0.45
   obstacle_classes:

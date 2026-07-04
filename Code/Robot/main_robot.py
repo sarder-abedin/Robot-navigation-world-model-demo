@@ -1,16 +1,20 @@
 """
-main_robot.py – Raspberry Pi robot client entry point (split-inference arch).
+main_robot.py – Raspberry Pi robot client entry point (thin client).
 
-Split-inference responsibilities
-─────────────────────────────────
+All AI runs on the PC server. The Pi is a thin client with no on-board AI, so
+its Docker image carries no torch/ultralytics.
+
+Responsibilities
+────────────────
   Pi (this machine):
-    • Streams JPEG camera frames to PC (port 8004) for V-JEPA 2 inference
-    • Runs YOLOv8n locally, sends CMD_DETECTION (fused detection + sonic) to PC
+    • Streams JPEG camera frames to PC (port 8004) for ALL server-side AI
+      (YOLOv8n + V-JEPA 2 + SSv2)
+    • Reads the ultrasonic sensor and sends CMD_SONIC (its local hard-stop safety)
     • Executes CMD_AIMOVE (AI-computed actions) and CMD_MOTOR (manual) commands
-    • Reads the ultrasonic sensor; distance is included in CMD_DETECTION
 
   PC server (main_server.py):
-    • Receives CMD_DETECTION → runs V-JEPA 2 + SSv2 + decision fusion
+    • Decodes the camera stream → runs YOLOv8n + V-JEPA 2 + SSv2 + decision fusion
+    • Reads CMD_SONIC for the ultrasonic hard-stop guard
     • Sends CMD_AIMOVE#<FORWARD|SLOW|STOP|REROUTE> (AI mode)
     • Sends CMD_MOTOR#<L>#<R> (manual mode from operator UI)
 
@@ -132,13 +136,11 @@ def main() -> None:
     camera = None
     motor = None
     ultrasonic = None
-    detector = None
 
     if mode == "live":
         from camera import Camera
         from motor import tankMotor
         from ultrasonic import Ultrasonic
-        from detector_robot import DetectorRobot
 
         cam_cfg = cfg.get("camera", {})
         # Orientation: default from config, but allow -e CAMERA_HFLIP / CAMERA_VFLIP
@@ -199,28 +201,10 @@ def main() -> None:
             logger.warning("Ultrasonic init failed (%s) – sensor disabled", exc)
             ultrasonic = None
 
-        # Detection location: run YOLO on the Pi ("pi") or offload it to the PC
-        # ("server"). In server mode the Pi skips YOLOv8n entirely (big CPU/current
-        # saving – fixes battery brownouts) and just streams frames + ultrasonic.
-        det_location = os.environ.get(
-            "DETECTOR_LOCATION", str(cfg.get("detector", {}).get("location", "pi"))
-        ).strip().lower()
-        if det_location == "server":
-            detector = None
-            logger.info(
-                "DETECTOR_LOCATION=server – YOLO runs on the PC. Pi skips YOLOv8n "
-                "to save power (still streams camera + reads ultrasonic)."
-            )
-        else:
-            detector = DetectorRobot(cfg)
-            try:
-                detector.load()
-                logger.info("YOLOv8n loaded on Pi")
-            except Exception as exc:
-                logger.warning("YOLOv8n load failed (%s) – detection disabled", exc)
-                detector = None
-
-        logger.info("Hardware initialised in live mode")
+        # No YOLO on the Pi. All AI (YOLOv8n, V-JEPA 2, SSv2, decision) runs on the
+        # PC server; the Pi is a thin client that streams the camera, drives the
+        # motors, and reports the ultrasonic distance (its local hard-stop safety).
+        logger.info("Hardware initialised in live mode (thin client – no on-Pi AI)")
     else:
         logger.info("Demo mode – stub hardware (no GPIO/camera)")
 
@@ -242,16 +226,11 @@ def main() -> None:
 
     logger.info("Connected to PC server – robot client running")
 
-    # Single capture point: ONLY camera_loop calls camera.get_frame(). The
-    # detection loop reads this cache instead of capturing again — two threads
-    # calling picamera2 capture_array() concurrently starves the (Docker-limited)
-    # buffer pool and deadlocks on the camera lock, hanging after the first frame.
-    _frame_cache = {"jpg": None}
-    _frame_cache_lock = threading.Lock()
-
     # ── Camera streaming thread ──────────────────────────────────────────────
+    # ONLY camera_loop calls camera.get_frame(); the PC decodes the stream and
+    # runs all detection, so the Pi never needs a second capture.
     def camera_loop():
-        """Continuously stream JPEG frames to the PC for V-JEPA 2 inference."""
+        """Continuously stream JPEG frames to the PC for server-side AI."""
         frames_sent = 0
         none_ticks = 0
         while not _shutdown and client.is_connected:
@@ -259,8 +238,6 @@ def main() -> None:
                 try:
                     jpg = camera.get_frame()
                     if jpg:
-                        with _frame_cache_lock:
-                            _frame_cache["jpg"] = jpg
                         client.send_frame(jpg)
                         frames_sent += 1
                         if frames_sent == 1:
@@ -307,38 +284,18 @@ def main() -> None:
     cam_thread = threading.Thread(target=camera_loop, daemon=True, name="CameraStream")
     cam_thread.start()
 
-    # ── Detection + sonic broadcast thread ──────────────────────────────────
+    # ── Ultrasonic broadcast thread ──────────────────────────────────────────
     sonic_interval = cfg.get("ultrasonic", {}).get("read_interval", 0.1)
 
-    def detection_loop():
+    def sonic_loop():
         """
-        Runs YOLOv8n on the latest camera frame and reads the ultrasonic sensor,
-        then sends a single CMD_DETECTION message per cycle to the PC.
+        Reads the ultrasonic sensor and sends a CMD_SONIC message per cycle to
+        the PC. This is the Pi's only sensor report — object detection runs on
+        the PC from the streamed camera frames.
         """
-        from detector_robot import DetectionPacket
-        last_packet = DetectionPacket()
         sonic_dead_ticks = 0   # consecutive max/error readings → sensor likely down
 
         while not _shutdown and client.is_connected:
-            # ── 1. YOLOv8n on the latest cached frame (live mode only) ────────
-            # Read the frame camera_loop already captured — do NOT call
-            # camera.get_frame() here (a second capture_array() would deadlock the
-            # camera buffer pool).
-            if mode == "live" and detector:
-                try:
-                    with _frame_cache_lock:
-                        jpg = _frame_cache["jpg"]
-                    if jpg:
-                        import cv2
-                        import numpy as np
-                        arr = np.frombuffer(jpg, dtype=np.uint8)
-                        frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                        if frame_bgr is not None:
-                            last_packet = detector.detect(frame_bgr)
-                except Exception as exc:
-                    logger.warning("YOLO detection error: %s", exc)
-
-            # ── 2. Ultrasonic distance ────────────────────────────────────────
             sonic_cm = -1.0
             if mode == "live" and ultrasonic:
                 try:
@@ -360,18 +317,10 @@ def main() -> None:
                 else:
                     sonic_dead_ticks = 0
 
-            # ── 3. Send fused CMD_DETECTION to PC ────────────────────────────
-            client.send_detection(
-                risk_pct=last_packet.yolo_risk_pct,
-                obs_in_center=last_packet.obs_in_center,
-                area_frac_pct=last_packet.area_frac_pct,
-                centroid_x_pct=last_packet.centroid_x_pct,
-                sonic_cm=sonic_cm,
-                top_label=last_packet.top_label,
-            )
+            client.send_sonic(sonic_cm)
             time.sleep(sonic_interval)
 
-    det_thread = threading.Thread(target=detection_loop, daemon=True, name="DetectionBroadcast")
+    det_thread = threading.Thread(target=sonic_loop, daemon=True, name="SonicBroadcast")
     det_thread.start()
 
     # ── Command receive loop (main thread) ───────────────────────────────────

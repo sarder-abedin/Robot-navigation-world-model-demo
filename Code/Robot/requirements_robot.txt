@@ -1,23 +1,17 @@
-# ── Raspberry Pi robot client dependencies ────────────────────────────────────
+# ── Raspberry Pi robot client dependencies (thin client — NO AI) ──────────────
 # Install with:  pip3 install -r requirements_robot.txt
+#
+# The Pi runs NO AI: all detection (YOLOv8n) and prediction (V-JEPA 2, SSv2) run
+# on the PC server. So there is deliberately no torch / ultralytics here — the Pi
+# only streams the camera, drives the motors, and reads the ultrasonic sensor.
 #
 # System packages must be installed first (run once on the Pi):
 #   sudo apt-get update
 #   sudo apt-get install -y \
 #     python3-picamera2 python3-libcamera python3-kms++ \
 #     python3-gpiozero python3-prctl libatlas-base-dev \
-#     libopenblas-dev                     # speeds up numpy / torch on arm64
+#     libopenblas-dev                     # speeds up numpy on arm64
 # ─────────────────────────────────────────────────────────────────────────────
-
-# ── AI – YOLOv8n (ONLY needed when DETECTOR_LOCATION=pi) ──────────────────────
-# ultralytics pulls in torch for arm64 automatically on Pi OS (Bookworm).
-# If pip cannot find a torch wheel for your platform, install it manually:
-#   pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-#
-# OPTIONAL: if you run YOLO on the PC instead (DETECTOR_LOCATION=server), the Pi
-# never imports torch/ultralytics — skip this line for a much smaller install.
-# The Docker image skips it automatically when built with --build-arg YOLO_ON_PI=0.
-ultralytics>=8.0.0
 
 # ── Pi camera ─────────────────────────────────────────────────────────────────
 # Prefer the apt package (python3-picamera2) which bundles libcamera bindings.
