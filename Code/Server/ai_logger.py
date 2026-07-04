@@ -63,6 +63,7 @@ class NavigationLogger:
         decision_result,
         detector_result,
         ultrasonic_cm: float = -1.0,
+        ssv2_sentence: str = "",
     ) -> None:
         """Legacy full-pipeline logging (kept for backward compat with tests)."""
         ts = time.time()
@@ -84,6 +85,7 @@ class NavigationLogger:
                 "in_center":       int(detector_result.obstacle_in_center),
                 "closest_area":    f"{detector_result.closest_area:.4f}",
                 "ultrasonic_cm":   f"{ultrasonic_cm:.1f}",
+                "ssv2":            ssv2_sentence,
                 "explanation":     decision_result.explanation,
             })
             if self._frame_idx % 20 == 0:
@@ -158,7 +160,7 @@ class NavigationLogger:
             "detector_risk", "world_model_risk", "temporal_risk",
             "wm_label", "temporal_pattern",
             "obstacles", "in_center", "closest_area",
-            "ultrasonic_cm", "explanation",
+            "ultrasonic_cm", "ssv2", "explanation",
         ]
         self._csv_file = open(self._csv_path, "w", newline="", encoding="utf-8")
         self._csv_writer = csv.DictWriter(self._csv_file, fieldnames=fieldnames)

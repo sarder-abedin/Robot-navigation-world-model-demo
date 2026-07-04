@@ -54,6 +54,7 @@ class _Backend:
         self._status  = {
             "action": "---", "risk_pct": 0,
             "wm_label": "UNKNOWN", "pattern": "UNKNOWN", "sonic": "---",
+            "ssv2": "",
         }
         self._cmd:  socket.socket | None = None
         self._vid:  socket.socket | None = None
@@ -151,6 +152,8 @@ class _Backend:
                                     "wm_label": p[3],
                                     "pattern":  p[4],
                                     "sonic":    p[5].strip(),
+                                    # 7th field (SSv2 sentence) is optional.
+                                    "ssv2":     p[6].strip() if len(p) >= 7 else "",
                                 }
                                 self.cmd_msgs += 1
             except Exception:
@@ -313,11 +316,17 @@ def _live_panel() -> None:
             sonic_str = sonic_raw
             sonic_c   = "#aaa"
 
+        ssv2 = s.get("ssv2", "")
+        ssv2_html = (
+            f"<br>SSv2: &nbsp;<span style='color:#00d0d0;font-weight:bold'>{ssv2}</span>"
+            if ssv2 else ""
+        )
         st.markdown(
             f"<div style='margin-top:10px;line-height:2.0;font-size:15px'>"
             f"V-JEPA 2: &nbsp;<span style='color:{wm_c};font-weight:bold'>{wm}</span><br>"
             f"Motion: &nbsp;<b>{s['pattern']}</b><br>"
             f"Ultrasonic: &nbsp;<span style='color:{sonic_c};font-weight:bold'>{sonic_str}</span>"
+            f"{ssv2_html}"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -390,6 +399,23 @@ if be.mode == "MANUAL":
             be.send(f"CMD_MOTOR#-{spd}#-{spd}\n")
 
     st.caption("Each button sends one motor command. For sustained motion, click repeatedly or hold the button.")
+
+st.divider()
+
+# ── Server-side run logging ─────────────────────────────────────────────────────
+st.subheader("📝  Run Logging (server PC)")
+_log_on = st.toggle(
+    "Record this run — CSV + annotated frames, written on the PC server",
+    value=st.session_state.get("logging_on", False),
+    key="_logging_toggle",
+    help="Logging runs entirely on the server PC. You can also start it before "
+         "the run with --logging on or NAV_LOGGING=1.",
+)
+if _log_on != st.session_state.get("logging_on", False):
+    st.session_state.logging_on = _log_on
+    be.send(f"CMD_LOGGING#{1 if _log_on else 0}\n")
+    be.log = f"Server logging {'ENABLED' if _log_on else 'disabled'}"
+st.caption("Logs are written to the server's `logs_rpi/` directory (not the robot).")
 
 st.divider()
 

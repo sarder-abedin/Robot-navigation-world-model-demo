@@ -62,9 +62,23 @@ def parse_args():
     p.add_argument("--video", default=None, help="Demo video path override")
     p.add_argument("--no-display", action="store_true",
                    help="Disable OpenCV HUD window")
+    p.add_argument("--logging", choices=["on", "off"], default=None,
+                   help="Initial run-logging state (CSV + annotated frames). "
+                        "Also settable via NAV_LOGGING=1/0; toggled live from the UI.")
     p.add_argument("--build-anchors", action="store_true",
                    help="Calibrate V-JEPA 2 anchors interactively then exit")
     return p.parse_args()
+
+
+def _resolve_logging_enabled(args, cfg) -> bool:
+    """Resolve the initial logging state: --logging flag > NAV_LOGGING env > config."""
+    import os
+    if args.logging is not None:
+        return args.logging == "on"
+    env = os.environ.get("NAV_LOGGING")
+    if env is not None:
+        return env.strip().lower() in ("1", "true", "on", "yes")
+    return bool(cfg.get("logging", {}).get("enabled", False))
 
 
 # ── PC Navigation Server ───────────────────────────────────────────────────────
@@ -77,9 +91,10 @@ class PCNavigationServer:
       3. Serves the UI viewer on ports 5003/8003 (same protocol as before)
     """
 
-    CMD_AIMODE = "CMD_AIMODE"
-    CMD_KILL   = "CMD_KILL"
-    CMD_MOTOR  = "CMD_MOTOR"
+    CMD_AIMODE  = "CMD_AIMODE"
+    CMD_KILL    = "CMD_KILL"
+    CMD_MOTOR   = "CMD_MOTOR"
+    CMD_LOGGING = "CMD_LOGGING"
 
     def __init__(self, cfg: dict, nav_mode: str):
         self._cfg = cfg
@@ -228,6 +243,11 @@ class PCNavigationServer:
             elif self._robot_conn:
                 logger.warning("CMD_MOTOR with unexpected format: %s", msg)
 
+        elif cmd == self.CMD_LOGGING:
+            # Operator toggled run logging (CSV + annotated frames) from the UI.
+            val = self._parser.intParameter[0] if self._parser.intParameter else 0
+            self._ai.set_logging_enabled(val == 1)
+
         elif cmd == self.CMD_KILL:
             logger.warning("CMD_KILL from UI viewer – shutting down")
             if self._robot_conn:
@@ -274,6 +294,8 @@ def main() -> None:
         cfg["visualization"]["show_window"] = False
     if args.nav:
         cfg["navigation_mode"] = args.nav
+    # Initial run-logging state: --logging flag > NAV_LOGGING env > config.
+    cfg.setdefault("logging", {})["enabled"] = _resolve_logging_enabled(args, cfg)
 
     nav_mode = args.nav or cfg.get("navigation_mode", "predictive")
 

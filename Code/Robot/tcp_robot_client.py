@@ -108,16 +108,21 @@ class RobotTCPClient:
         area_frac_pct: int,
         centroid_x_pct: int,
         sonic_cm: float,
+        top_label: str = "",
     ) -> bool:
         """
         Send fused detection + ultrasonic result to PC.
 
-        Format: CMD_DETECTION#<risk_pct>#<in_center 0|1>#<area_pct>#<cx_pct>#<sonic_cm>
+        Format: CMD_DETECTION#<risk_pct>#<in_center 0|1>#<area_pct>#<cx_pct>#<sonic_cm>#<top_label>
+        The trailing top_label (YOLO class of the largest obstacle) fills the
+        SSv2 "something" slot on the PC. It may be empty when nothing is detected.
         """
         in_center_val = 1 if obs_in_center else 0
+        # Strip '#' (the field separator) from the label just in case.
+        label = (top_label or "").replace("#", " ").strip()
         return self._send_cmd(
             f"CMD_DETECTION#{risk_pct}#{in_center_val}"
-            f"#{area_frac_pct}#{centroid_x_pct}#{sonic_cm:.1f}\r\n"
+            f"#{area_frac_pct}#{centroid_x_pct}#{sonic_cm:.1f}#{label}\r\n"
         )
 
     # ── Receive ───────────────────────────────────────────────────────────────
