@@ -98,7 +98,11 @@ class SSv2Recognizer:
                 VideoMAEForVideoClassification,
                 VideoMAEImageProcessor,
             )
-            self._device = torch.device(self._device_str)
+            from device_utils import is_gpu, resolve_device
+            self._device, dev_name = resolve_device(self._device_str)
+            # Classify more often when a GPU is available (cheap), less on CPU.
+            if is_gpu(dev_name):
+                self._run_every = max(1, self._run_every // 2)
             self._processor = VideoMAEImageProcessor.from_pretrained(self._model_id)
             self._model = VideoMAEForVideoClassification.from_pretrained(self._model_id)
             self._model.to(self._device)
@@ -107,8 +111,8 @@ class SSv2Recognizer:
             # VideoMAE checkpoints define how many frames they expect.
             self._num_frames = int(getattr(self._model.config, "num_frames", self._num_frames))
             logger.info(
-                "SSv2 model loaded: %s (%d classes, %d frames) on %s",
-                self._model_id, len(self._id2label), self._num_frames, self._device,
+                "SSv2 model loaded: %s (%d classes, %d frames) on %s (every %d frames)",
+                self._model_id, len(self._id2label), self._num_frames, dev_name, self._run_every,
             )
         except Exception as exc:
             logger.warning(

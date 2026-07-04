@@ -30,6 +30,15 @@ docker run --rm -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501
 
 > **V-JEPA 2 weights** (~300 MB) are downloaded from HuggingFace automatically
 > on first run.  No GPU required — CPU-only inference works out of the box.
+>
+> **Hardware acceleration** — both heavy models (V-JEPA 2 and SSv2) default to
+> `device: auto`, which picks the best available at load: **CUDA → MPS → CPU**.
+> On an NVIDIA host (incl. DGX) run the GPU image with `--gpus all` (see the GPU
+> build below) and they use CUDA; SSv2 also classifies ~2× more often on a GPU.
+> On a **native** Mac they use Apple **MPS**. Note that a Docker container **on a
+> Mac** has no Metal passthrough, so it stays on **CPU** even with unified memory —
+> for GPU on a Mac, run the server natively (`python main_server.py …`). Force a
+> device by setting `world_model.device` / `ssv2.device` to `cuda`/`mps`/`cpu`.
 
 ### Fastest path — Raspberry Pi robot (Docker)
 
@@ -133,11 +142,12 @@ with the **largest obstacle's YOLO class** (sent as the trailing field of
   navigation behaviour is unchanged.
 - Shown on the video HUD (`SSv2: …`) and as an `SSv2:` line in the AI-state panel,
   and written to the CSV log.
-- Runs every `ssv2.run_every_n_frames` (default 16) on CPU. First run downloads
-  the checkpoint (~350 MB) from HuggingFace (`transformers` is already a
-  dependency for V-JEPA 2). If the model/weights are unavailable it falls back to
-  a stub that still fills the object. Tune or disable it in `config.yaml`
-  (`ssv2.enabled: false`) if the CPU can't run two video transformers.
+- Runs every `ssv2.run_every_n_frames` (default 16) on CPU, auto-halved on a GPU;
+  uses `device: auto` (CUDA → MPS → CPU). First run downloads the checkpoint
+  (~350 MB) from HuggingFace (`transformers` is already a dependency for V-JEPA 2).
+  If the model/weights are unavailable it falls back to a stub that still fills
+  the object. Tune or disable it in `config.yaml` (`ssv2.enabled: false`) if a
+  CPU-only host can't run two video transformers.
 
 ### Run logging (server-side, operator-controlled)
 

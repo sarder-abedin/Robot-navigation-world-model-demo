@@ -65,6 +65,11 @@ PC → UI:  4-byte LE uint32 + JPEG  (annotated HUD frames, port 8003)
   moving closer". Annotation/logging ONLY — it does NOT drive navigation (the
   fast heuristic in `temporal_action.py` still supplies `temporal_risk`).
   Falls back to a stub (still fills the object) when transformers/weights are absent.
+- **Device:** both heavy models (V-JEPA 2 + SSv2) use `device: auto` via
+  `device_utils.resolve_device()` → CUDA → MPS → CPU. SSv2's `run_every_n_frames`
+  is auto-halved on a GPU. A Docker container on macOS has no Metal passthrough,
+  so it runs on CPU (run the server natively for MPS); NVIDIA/DGX uses CUDA with
+  `--gpus all`.
 - **Run logging is server-side only.** `NavigationLogger` writes CSV + annotated
   frames to the PC's `logs_rpi/`. Initial state: `--logging on|off` flag or
   `NAV_LOGGING=1/0` env; toggled live from the UI (`CMD_LOGGING`).
