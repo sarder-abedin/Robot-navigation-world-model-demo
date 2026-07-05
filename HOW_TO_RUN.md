@@ -379,6 +379,7 @@ thresholds + ultrasonic hard-stop.
 |---|---|---|
 | `navigation_mode` | `predictive` | Starting navigation mode |
 | `world_model.risk_similarity_threshold` | `0.55` | V-JEPA 2 BLOCKED sensitivity |
+| `world_model.label_margin` | `0.02` | Obstacle-vs-clear similarity gap for a BLOCKED/CLEAR label (relative test; below → MIXED). Calibrate anchors for meaningful labels |
 | `decision.weights.world_model` | `0.45` | V-JEPA 2 contribution to fused risk |
 | `decision.low_risk_max` | `0.25` | Below this → FORWARD |
 | `decision.medium_risk_max` | `0.50` | Below this → SLOW, above → active avoidance |
@@ -386,6 +387,8 @@ thresholds + ultrasonic hard-stop.
 | `decision.reroute.wait_timeout_seconds` | `2.0` | WAIT for a crossing obstacle at most this long, then TURN |
 | `decision.reroute.max_turn_seconds` | `4.0` | Keep turning at most this long, then STOP & reassess |
 | `decision.reroute.backup_distance_m` | `0.35` | Closer than this + approaching → BACKUP |
+| `decision.reroute.direction_margin_m` | `0.3` | A side must beat centre free-space by this to TURN (else STOP straight — don't turn into a wall) |
+| `temporal_action.depth_presence_range_m` | `1.5` | Depth obstacle within this range (m) feeds the motion recogniser when YOLO is blind (walls) |
 | `decision.reroute.dynamic_classes` | `[person, cat, dog]` | Obstacles likely to move out of the way (→ WAIT) |
 | `decision.governor.enabled` | `true` | Kinematic safe-speed governor (proactive, latency-aware) |
 | `decision.governor.forward_speed_mps` | `0.35` | **Calibrate** — robot speed at FORWARD (m/s) |

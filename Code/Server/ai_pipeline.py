@@ -77,6 +77,10 @@ class AIPipeline:
         # over-optimistic on a slow (CPU) pipeline.
         gov_cfg = (self._cfg.get("decision", {}) or {}).get("governor", {}) or {}
         self._reaction_ema = float(gov_cfg.get("min_reaction_s", 0.5))
+        # Depth distance within which a (non-YOLO) obstacle counts as "present"
+        # for the motion recogniser, so walls aren't invisible to it.
+        self._depth_presence_range = float(
+            (self._cfg.get("temporal_action", {}) or {}).get("depth_presence_range_m", 1.5))
 
         # Run logging (CSV + annotated frames) starts from config; toggled at
         # runtime from the UI (CMD_LOGGING) or at startup via env/CLI.
@@ -268,8 +272,25 @@ class AIPipeline:
             wm_risk = (wm_result.predicted_risk
                        if wm_result.buffer_ready else det_result.raw_risk)
 
-            # ── 4. Temporal motion pattern ────────────────────────────────────
+            # ── 4. Depth free-space (class-agnostic geometry) ─────────────────
+            # Metric distance ahead + which side is open. Sees walls the sonar and
+            # YOLO miss; feeds the governor, the motion recogniser and the reroute
+            # direction. Ignored (buffer_ready False) when the model isn't loaded.
+            depth_result = self._depth.estimate(frame_rgb)
+            depth_m = (depth_result.clear_distance_m
+                       if depth_result.buffer_ready and depth_result.clear_distance_m > 0 else None)
+            clear_direction = depth_result.clear_direction if depth_result.buffer_ready else None
+
+            # ── 4b. Temporal motion pattern ───────────────────────────────────
+            # Use YOLO's obstacle state; but if YOLO sees nothing while depth shows
+            # a close obstacle (e.g. a wall), synthesize a state from depth so the
+            # motion isn't blind (stuck at STATIC_CLEAR) to non-YOLO obstacles.
             obs_state = self._detection_to_state(det_result)
+            if not det_result.boxes and depth_result.buffer_ready:
+                from temporal_action import depth_to_obstacle_state
+                ds = depth_to_obstacle_state(depth_m, self._depth_presence_range)
+                if ds is not None:
+                    obs_state = ds
             self._temporal.push(obs_state)
             temporal_result = self._temporal.classify()
 
@@ -293,15 +314,6 @@ class AIPipeline:
                     sonic_cm = self._freenove_car.sonic.get_distance()
                 except Exception:
                     pass
-
-            # ── 5b. Depth free-space (class-agnostic geometry) ────────────────
-            # Metric distance ahead + which side is open. Sees walls the sonar
-            # misses and gives REROUTE a direction. Ignored (buffer_ready False)
-            # when the depth model isn't loaded.
-            depth_result = self._depth.estimate(frame_rgb)
-            depth_m = (depth_result.clear_distance_m
-                       if depth_result.buffer_ready and depth_result.clear_distance_m > 0 else None)
-            clear_direction = depth_result.clear_direction if depth_result.buffer_ready else None
 
             # ── 6. Decision fusion ────────────────────────────────────────────
             # clear_distance_m: the most conservative metric distance ahead for

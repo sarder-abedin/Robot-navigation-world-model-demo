@@ -193,7 +193,8 @@ Instead of a fixed back-up-then-spin, a high-risk obstacle now selects a
 |---|---|---|
 | Crossing / leaving obstacle, or a **person** approaching (not close) | temporal pattern `CROSSING`/`CLEARING`; YOLO class ∈ `dynamic_classes` | **WAIT** (`STOP`) — the path may clear itself; a timeout escalates to TURN |
 | Obstacle **rushing in**, too close to turn | `APPROACHING` + depth center < `backup_distance_m` | **BACKUP** (`CMD_AIMOVE#BACKUP`) — capped (no rear sensor) then STOP |
-| Static blockage / wall | otherwise | **TURN** toward the more open side (per-side depth), **keep turning until the gap opens** (a spin guard stops an endless rotation) |
+| Static blockage / wall, a **side clearly more open** than centre | otherwise | **TURN** toward the open side (per-side depth), **keep turning until the gap opens** (a spin guard stops an endless rotation) |
+| Blocked ahead but **centre is the clearest** direction | no side beats centre by `direction_margin_m` | **STOP** & reassess — don't turn into a side wall |
 
 The **direction** comes from the per-side depth free-space (`depth_left/right`),
 not a coarse hint; turning is re-evaluated every frame, so it stops the instant
@@ -202,6 +203,16 @@ the center clears. The motion signal is the **fast per-frame temporal pattern**
 `max_turn_seconds`, `max_backup_seconds`. Set `closed_loop: false` for the legacy
 one-shot reroute. The ultrasonic hard-stop and speed governor still sit
 underneath and can only make the action *more* cautious.
+
+**Two supporting fixes make this respond to walls** (which YOLO can't class):
+- The **motion recogniser is depth-aware** — when YOLO sees no box but depth
+  shows an obstacle within `temporal_action.depth_presence_range_m`, it feeds a
+  synthetic "present, centred" state so a wall registers as `APPROACHING`/
+  `BLOCKING` instead of being stuck at `STATIC_CLEAR`.
+- The **V-JEPA 2 label is relative** (`BLOCKED` iff obstacle-similarity exceeds
+  clear-similarity by `world_model.label_margin`), so it no longer sticks on
+  `BLOCKED` with uncalibrated/synthetic anchors — **calibrate the anchors** for
+  the label + risk to be meaningful.
 
 ---
 
