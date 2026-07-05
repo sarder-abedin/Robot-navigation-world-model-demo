@@ -149,6 +149,25 @@ def test_governor_never_speeds_up(cfg):
     assert r.action == Action.STOP
 
 
+def test_reroute_uses_depth_clear_direction(cfg):
+    f = DecisionFuser(cfg, "predictive")
+    r = f.decide(0.9, 0.9, 0.9, "BLOCKED", "BLOCKING", clear_direction="RIGHT")
+    assert r.action == Action.REROUTE and r.reroute_direction == "right"
+    f2 = DecisionFuser(cfg, "predictive")
+    r2 = f2.decide(0.9, 0.9, 0.9, "BLOCKED", "BLOCKING", clear_direction="LEFT")
+    assert r2.reroute_direction == "left"
+
+
+def test_reroute_direction_blank_when_center_or_none(cfg):
+    f = DecisionFuser(cfg, "predictive")
+    r = f.decide(0.9, 0.9, 0.9, "BLOCKED", "BLOCKING", clear_direction="CENTER")
+    assert r.action == Action.REROUTE and r.reroute_direction == ""
+    # and a non-reroute action never carries a direction
+    f2 = DecisionFuser(cfg, "predictive")
+    r2 = f2.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR", clear_direction="LEFT")
+    assert r2.reroute_direction == ""
+
+
 def test_governor_latency_forces_earlier_slowing(cfg):
     """Same distance, but a laggier pipeline (bigger reaction_s) is more cautious."""
     f_fast = DecisionFuser(cfg, "predictive")

@@ -35,6 +35,7 @@ API
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -61,6 +62,10 @@ class WorldModel:
         self._risk_thresh = wm_cfg["risk_similarity_threshold"]
         self._device_str = wm_cfg.get("device", "cpu")
         self._run_every = wm_cfg.get("run_every_n_frames", 8)
+        # Path to calibrated corridor anchors (built by calibrate_anchors.py from
+        # real "blocked"/"clear" frames). When set + present they replace the
+        # synthetic anchors, making BLOCKED/CLEAR reflect *your* environment.
+        self._anchors_path = wm_cfg.get("anchors_path", "") or ""
 
         self._model = None
         self._device = None
@@ -81,7 +86,32 @@ class WorldModel:
         except Exception as exc:
             logger.warning("V-JEPA 2 load failed (%s) – using stub encoder", exc)
             self._model = _StubEncoder(embed_dim=1024)
-        self._init_anchors()
+        # Prefer calibrated corridor anchors when available; else synthetic.
+        if self._anchors_path and os.path.exists(self._anchors_path):
+            try:
+                self.load_anchors(self._anchors_path)
+                logger.info("V-JEPA 2 anchors loaded from %s (calibrated)", self._anchors_path)
+            except Exception as exc:
+                logger.warning("Anchor load failed (%s) – using synthetic anchors", exc)
+                self._init_anchors()
+        else:
+            if self._anchors_path:
+                logger.warning("anchors_path %s not found – using synthetic anchors "
+                               "(run calibrate_anchors.py for your corridor)", self._anchors_path)
+            self._init_anchors()
+
+    def save_anchors(self, path: str) -> None:
+        """Persist the current obstacle/clear anchors to an .npz file."""
+        if self._obstacle_anchor is None or self._clear_anchor is None:
+            raise RuntimeError("anchors not built yet")
+        np.savez(path, obstacle=self._obstacle_anchor, clear=self._clear_anchor)
+        logger.info("Saved V-JEPA 2 anchors → %s", path)
+
+    def load_anchors(self, path: str) -> None:
+        """Load obstacle/clear anchors from an .npz file (see save_anchors)."""
+        data = np.load(path)
+        self._obstacle_anchor = data["obstacle"]
+        self._clear_anchor = data["clear"]
 
     def predict(self, clip: list[np.ndarray]) -> WorldModelResult:
         """

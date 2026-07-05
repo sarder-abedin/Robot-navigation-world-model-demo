@@ -150,6 +150,7 @@ docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpio
 |---|---|---|---|
 | **YOLOv8n** | "The Photographer" | Spots obstacles in the current frame; produces aggregated risk+position **and the largest obstacle's class label** | PC |
 | **V-JEPA 2** | "The Fortune Teller" | Predicts what the scene will look like 0.5 s from now in latent space | PC |
+| **Depth-Anything V2** | "The Surveyor" | Class-agnostic depth → free-space distance ahead + which side is open (sees walls YOLO can't); feeds the governor + REROUTE direction | PC (optional) |
 | **SSv2 temporal rules** | "The Behaviour Analyst" | Classifies the obstacle's motion pattern (APPROACHING / CROSSING / BLOCKING …) — drives `temporal_risk` | PC |
 | **SSv2 model (VideoMAE)** | "The Narrator" | A **real** Something-Something-V2 video classifier; its "something" slot is filled with YOLO's object → e.g. *"person moving closer"*. Annotation/log only | PC |
 | **Decision fuser** | "The Judge" | Combines all three risk signals into one action (FORWARD / SLOW / STOP / REROUTE) | PC |
@@ -287,6 +288,8 @@ Robot-navigation-world-model-demo/
 │   │   ├── ssv2_model.py         ← genuine SSv2 model (VideoMAE); YOLO-filled sentence for annotation/log
 │   │   ├── decision.py           ← risk fusion + hysteresis + safety layers
 │   │   ├── speed_governor.py     ← kinematic safe-speed governor (proactive, latency-aware)
+│   │   ├── depth_perception.py   ← Depth-Anything free-space + clear direction (class-agnostic)
+│   │   ├── calibrate_anchors.py  ← build V-JEPA 2 corridor anchors from frames
 │   │   ├── robot_control.py      ← motor controller (real / mock / TCP)
 │   │   ├── visualization.py      ← OpenCV HUD overlay
 │   │   ├── ai_logger.py          ← CSV + annotated JPEG archive
@@ -320,7 +323,7 @@ Robot-navigation-world-model-demo/
 | Command | Direction | Format | Meaning |
 |---|---|---|---|
 | `CMD_SONIC` | Pi → PC | `CMD_SONIC#<sonic_cm>` | Ultrasonic distance (the Pi's local hard-stop safety); the Pi runs no detection |
-| `CMD_AIMOVE` | PC → Pi | `CMD_AIMOVE#<FORWARD\|SLOW\|STOP\|REROUTE>` | AI-computed action; Pi maps to motor PWM |
+| `CMD_AIMOVE` | PC → Pi | `CMD_AIMOVE#<FORWARD\|SLOW\|STOP\|REROUTE>[#<LEFT\|RIGHT>]` | AI-computed action; Pi maps to motor PWM. REROUTE may carry a turn direction (from the depth channel's open side) |
 | `CMD_MOTOR` | UI → PC → Pi | `CMD_MOTOR#<L>#<R>` | Manual motor command relayed through PC |
 | `CMD_STOP` | PC → Pi | `CMD_STOP` | Emergency halt (hard safety) |
 | `CMD_KILL` | PC → Pi | `CMD_KILL` | Shutdown robot process |
@@ -636,17 +639,47 @@ available in the PyQt5 viewer.
 
 ## Calibrate V-JEPA 2 anchors for your corridor
 
-The default anchors work for most indoor corridors.  To recalibrate:
+V-JEPA 2 scores a scene by cosine similarity to a **blocked** and a **clear**
+anchor. By default those anchors are **synthetic** (a grey square vs a gradient),
+which barely matches a real corridor — so `BLOCKED`/`CLEAR` is coarse until you
+calibrate. This is the cheapest, highest-impact improvement.
+
+Collect a handful of images each (snapshots or frames grabbed from the demo
+video) into two folders, then build + save persistent anchors:
 
 ```bash
 cd Code/Server
-python main_server.py --build-anchors
-# 'o' → label frame as obstacle
-# 'c' → label frame as clear
-# 'q' → save and exit
+python calibrate_anchors.py --blocked ./blocked --clear ./clear --out anchors.npz
+# then point the server at them:
+#   config.yaml →  world_model.anchors_path: "anchors.npz"
 ```
 
-At least 10 frames per class is recommended.
+At least ~10 frames per class is recommended, captured on your robot in your
+space. Run it where V-JEPA 2 actually loads (the native GPU/MPS box) so the
+anchors come from the real encoder, not the stub. On startup the server logs
+`V-JEPA 2 anchors loaded from … (calibrated)` when they're in use.
+
+---
+
+## Depth free-space channel — genuinely "seeing" the wall
+
+YOLO only knows its 80 classes and V-JEPA 2 gives a single global risk scalar —
+neither can say *"there's a wall 0.4 m ahead and the left is open."* The optional
+**Depth-Anything V2** channel (`Code/Server/depth_perception.py`) adds
+**class-agnostic geometry**: a per-pixel depth map for *any* scene (walls, doors,
+furniture), from which the pipeline derives:
+
+- **`clear_distance_m`** — the nearest obstacle straight ahead (metric), fed to
+  the **speed governor** as the *more conservative* of {ultrasonic, depth}. This
+  catches the angled/soft walls the ultrasonic misses.
+- **`clear_direction`** (LEFT/CENTER/RIGHT) — the most open third, which gives
+  **REROUTE an actual direction** to turn toward (`CMD_AIMOVE#REROUTE#LEFT|RIGHT`).
+
+Combined with YOLO it "understands" obstacles: geometry from depth + a **label**
+from YOLO's closest object (`… SCENE: chair 0.42m ahead | open=LEFT`); walls with
+no YOLO class are still seen as `obstacle/wall`. It falls back to **off** when the
+model/weights are absent (ultrasonic + V-JEPA 2 keep working). Configure under
+`depth:` in `config.yaml`; a GPU/MPS box is recommended.
 
 ---
 
@@ -668,6 +701,10 @@ At least 10 frames per class is recommended.
 | `decision.governor.target_speed_mps` | `0.0` | Speed before contact (0 = stop; >0 = reduce impact) |
 | `robot.ultrasonic_stop_cm` | `30.0` | Ultrasonic hard-stop distance (cm) — deterministic reflex |
 | `camera.clip_length` / `camera.ai_frame_size` | `64` / `256` | Match the V-JEPA 2 checkpoint (`vitl-fpc64-256`) |
+| `world_model.anchors_path` | `""` | Calibrated corridor anchors (`calibrate_anchors.py`); empty = synthetic |
+| `depth.enabled` | `true` | Depth-Anything free-space channel (metric distance + clear direction) |
+| `depth.model_id` | `…Metric-Indoor-Small-hf` | Monocular depth checkpoint (metric indoor) |
+| `depth.run_every_n_frames` | `6` | Depth cadence (auto-raised on CPU) |
 | `world_model.run_every_n_frames` | `8` | V-JEPA 2 cadence (CPU saving) |
 | `server.cmd_port` | `5003` | UI viewer command port |
 | `server.video_port` | `8003` | UI viewer video port |

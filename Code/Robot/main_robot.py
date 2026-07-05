@@ -56,18 +56,24 @@ def _cancel_reroute() -> None:
     _reroute_thread = None
 
 
-def _start_reroute(motor, speed_slow: int, reroute_secs: float) -> None:
-    """Run the back-up + spin maneuver in a preemptible worker thread."""
+def _start_reroute(motor, speed_slow: int, reroute_secs: float,
+                   direction: str = "left") -> None:
+    """Run the back-up + spin maneuver in a preemptible worker thread.
+
+    direction ("left"/"right") comes from the PC depth channel's clear side.
+    """
     global _reroute_thread
     _cancel_reroute()
     _reroute_cancel.clear()
+    # Tank spin: left = (-L, +R), right = (+L, -R).
+    spin_l, spin_r = (-speed_slow, speed_slow) if direction != "right" else (speed_slow, -speed_slow)
 
     def _run():
         motor.setMotorModel(-speed_slow, -speed_slow)   # back up
         if _reroute_cancel.wait(0.3):                   # preempted?
             motor.setMotorModel(0, 0)
             return
-        motor.setMotorModel(-speed_slow, speed_slow)    # spin left
+        motor.setMotorModel(spin_l, spin_r)             # spin toward the open side
         if _reroute_cancel.wait(reroute_secs):
             motor.setMotorModel(0, 0)
             return
@@ -341,9 +347,11 @@ def main() -> None:
         command = parts[0].strip()
 
         if command == "CMD_AIMOVE" and len(parts) >= 2:
-            # AI-computed navigation action from the PC decision fuser
+            # AI-computed navigation action from the PC decision fuser.
+            # REROUTE may carry a turn direction: CMD_AIMOVE#REROUTE#LEFT|RIGHT
             action = parts[1].strip()
-            _execute_aimove(action, motor, speed_full, speed_slow, reroute_secs)
+            direction = parts[2].strip().lower() if len(parts) >= 3 else ""
+            _execute_aimove(action, motor, speed_full, speed_slow, reroute_secs, direction)
 
         elif command == "CMD_MOTOR" and len(parts) >= 3:
             # Manual motor command from the operator UI (relayed by PC)
@@ -381,7 +389,7 @@ def main() -> None:
 
 
 def _execute_aimove(action: str, motor, speed_full: int, speed_slow: int,
-                    reroute_secs: float) -> None:
+                    reroute_secs: float, direction: str = "") -> None:
     """Map an AI navigation action string to tankMotor calls."""
     # Any new action preempts an in-progress (non-blocking) reroute maneuver.
     if action != "REROUTE":
@@ -407,11 +415,13 @@ def _execute_aimove(action: str, motor, speed_full: int, speed_slow: int,
 
     elif action == "REROUTE":
         # Timed back-up + spin runs in a worker thread so STOP/KILL/MOTOR can
-        # preempt it instead of being ignored for the full maneuver.
+        # preempt it instead of being ignored for the full maneuver. The turn
+        # direction comes from the PC depth channel (open side); default left.
+        turn = direction if direction in ("left", "right") else "left"
         if motor:
-            _start_reroute(motor, speed_slow, reroute_secs)
+            _start_reroute(motor, speed_slow, reroute_secs, turn)
         else:
-            logger.info("[MockMotor] REROUTE (%.1f s)", reroute_secs)
+            logger.info("[MockMotor] REROUTE %s (%.1f s)", turn, reroute_secs)
 
     else:
         logger.warning("Unknown CMD_AIMOVE action: %s", action)
