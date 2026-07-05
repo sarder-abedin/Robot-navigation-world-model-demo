@@ -216,6 +216,47 @@ if self._mode == "predictive" and world_model_label == "BLOCKED" and action == A
 
 ---
 
+## Proactive collision avoidance — the speed governor
+
+On top of the risk logic, a **kinematic safe-speed governor**
+(`Code/Server/speed_governor.py`) makes the robot **never travel faster than it
+can stop** within the confirmed-clear distance ahead — accounting for how long
+the AI takes to react. It uses the driver's-ed *total stopping distance* model:
+
+```
+d_stop(v) = v · t_react  +  (v² − v_target²) / (2·a)  +  margin
+            └ thinking ┘    └──── braking ─────────┘    └ buffer ┘
+```
+
+Each cycle it picks the **fastest action that still fits**: if the clear distance
+`d ≥ d_stop(v_forward)` it allows FORWARD; else if `d ≥ d_stop(v_slow)` it caps to
+SLOW; else STOP. It only ever slows the robot down, and is skipped when the
+ultrasonic is blind (the hard-stop / blind-hold still apply).
+
+Why it matters:
+- **Proactive** — speed is a smooth function of distance, so it slows *early*, not at the last cm.
+- **Latency-aware** — the `v · t_react` term reserves braking room for the AI's decision time. `t_react` is measured live (EMA of per-frame processing), so a slow **V-JEPA 2 on CPU** automatically forces a lower safe speed instead of causing a crash.
+- **Reduce impact** — set `target_speed_mps > 0` to brake to a crawl rather than requiring a dead stop.
+
+### Calibrating the speed governor
+
+The math is in **SI units** (m, s, m/s, m/s²), but the robot speaks PWM. Measure
+these on your robot and put them in `Code/Server/config.yaml` under
+`decision.governor` (defaults are conservative guesses, **not** measured):
+
+| Constant | How to measure |
+|---|---|
+| `forward_speed_mps` | Drive at the FORWARD PWM over a tape-measured distance; speed = distance ÷ time. |
+| `slow_speed_mps` | Same at the SLOW PWM. |
+| `max_decel_mps2` | From `forward_speed_mps`, command STOP and measure the coast distance `d`; `a ≈ v² / (2d)`. |
+| `target_speed_mps` | `0` for a full stop, or a small crawl speed to only *reduce* impact. |
+| `safety_margin_m` | Fixed buffer (e.g. 0.10 m) for sensor/timing slop. |
+
+Leave `enabled: false` to turn the governor off and fall back to the fixed
+thresholds + ultrasonic hard-stop.
+
+---
+
 ## Baseline vs Predictive comparison
 
 | Feature | Baseline | Predictive |
@@ -244,7 +285,8 @@ Robot-navigation-world-model-demo/
 │   │   ├── world_model.py        ← V-JEPA 2
 │   │   ├── temporal_action.py    ← SSv2-style motion-pattern heuristic (drives temporal_risk)
 │   │   ├── ssv2_model.py         ← genuine SSv2 model (VideoMAE); YOLO-filled sentence for annotation/log
-│   │   ├── decision.py           ← risk fusion + hysteresis
+│   │   ├── decision.py           ← risk fusion + hysteresis + safety layers
+│   │   ├── speed_governor.py     ← kinematic safe-speed governor (proactive, latency-aware)
 │   │   ├── robot_control.py      ← motor controller (real / mock / TCP)
 │   │   ├── visualization.py      ← OpenCV HUD overlay
 │   │   ├── ai_logger.py          ← CSV + annotated JPEG archive
@@ -617,9 +659,15 @@ At least 10 frames per class is recommended.
 | `navigation_mode` | `predictive` | Starting navigation mode |
 | `world_model.risk_similarity_threshold` | `0.55` | V-JEPA 2 BLOCKED sensitivity |
 | `decision.weights.world_model` | `0.45` | V-JEPA 2 contribution to fused risk |
-| `decision.low_risk_max` | `0.30` | Below this → FORWARD |
-| `decision.medium_risk_max` | `0.60` | Below this → SLOW, above → STOP/REROUTE |
-| `robot.ultrasonic_stop_cm` | `15.0` | Hard stop distance (cm) from robot |
+| `decision.low_risk_max` | `0.25` | Below this → FORWARD |
+| `decision.medium_risk_max` | `0.50` | Below this → SLOW, above → STOP/REROUTE |
+| `decision.governor.enabled` | `true` | Kinematic safe-speed governor (proactive, latency-aware) |
+| `decision.governor.forward_speed_mps` | `0.35` | **Calibrate** — robot speed at FORWARD (m/s) |
+| `decision.governor.slow_speed_mps` | `0.18` | **Calibrate** — robot speed at SLOW (m/s) |
+| `decision.governor.max_decel_mps2` | `0.6` | **Calibrate** — hardest deceleration (m/s²) |
+| `decision.governor.target_speed_mps` | `0.0` | Speed before contact (0 = stop; >0 = reduce impact) |
+| `robot.ultrasonic_stop_cm` | `30.0` | Ultrasonic hard-stop distance (cm) — deterministic reflex |
+| `camera.clip_length` / `camera.ai_frame_size` | `64` / `256` | Match the V-JEPA 2 checkpoint (`vitl-fpc64-256`) |
 | `world_model.run_every_n_frames` | `8` | V-JEPA 2 cadence (CPU saving) |
 | `server.cmd_port` | `5003` | UI viewer command port |
 | `server.video_port` | `8003` | UI viewer video port |
