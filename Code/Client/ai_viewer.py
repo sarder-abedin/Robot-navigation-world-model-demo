@@ -65,6 +65,7 @@ ACTION_CSS = {
     "SLOW":     "background:#c8841a; color:white;",
     "STOP":     "background:#8b0000; color:white;",
     "REROUTE":  "background:#7a3a00; color:white;",
+    "BACKUP":   "background:#a0521a; color:white;",
     "---":      "background:#444;    color:#aaa;",
 }
 WM_CSS = {

@@ -83,6 +83,23 @@ def _start_reroute(motor, speed_slow: int, reroute_secs: float,
     _reroute_thread.start()
 
 
+def _start_backup(motor, speed_slow: int, secs: float = 0.4) -> None:
+    """Short reverse pulse in the preemptible maneuver thread (STOP/KILL can cut it)."""
+    global _reroute_thread
+    _cancel_reroute()
+    _reroute_cancel.clear()
+
+    def _run():
+        motor.setMotorModel(-speed_slow, -speed_slow)   # reverse
+        if _reroute_cancel.wait(secs):                  # preempted?
+            motor.setMotorModel(0, 0)
+            return
+        motor.setMotorModel(0, 0)
+
+    _reroute_thread = threading.Thread(target=_run, daemon=True, name="Backup")
+    _reroute_thread.start()
+
+
 def _env_bool(name: str, default: bool) -> bool:
     """Read a truthy/falsy env var (1/0/true/false/yes/no); fall back to default."""
     v = os.environ.get(name)
@@ -412,6 +429,14 @@ def _execute_aimove(action: str, motor, speed_full: int, speed_slow: int,
             motor.setMotorModel(0, 0)
         else:
             logger.info("[MockMotor] STOP")
+
+    elif action == "BACKUP":
+        # Short reverse pulse (PC decided the obstacle is too close to turn). Runs
+        # in the preemptible maneuver thread so a STOP/KILL isn't blocked by it.
+        if motor:
+            _start_backup(motor, speed_slow)
+        else:
+            logger.info("[MockMotor] BACKUP")
 
     elif action == "REROUTE":
         # Timed back-up + spin runs in a worker thread so STOP/KILL/MOTOR can

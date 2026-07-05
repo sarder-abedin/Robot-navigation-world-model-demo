@@ -24,6 +24,10 @@ future obstacles — not just react to what is currently visible.
   decelerating frames before a YOLO-only baseline would.
 - **Depth gives class-agnostic geometry** — it sees walls YOLO has no class for,
   and yields a real REROUTE direction (which side is open).
+- **SSv2 reads behaviour** — a real Something-Something-V2 video model classifies
+  what the obstacle is *doing* and fills in YOLO's object (e.g. *"person moving
+  closer"*), giving the operator and logs a human-readable read of the scene
+  (annotation only — it does not drive control).
 - **The latency-aware governor** reserves braking room for the AI's decision
   time, so the robot never outruns its own perception (e.g. slow V-JEPA 2 on CPU).
 - **The thin-client Pi stays lightweight** — no torch/ultralytics on the robot.

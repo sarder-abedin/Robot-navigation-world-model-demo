@@ -115,6 +115,20 @@ decision:
   hysteresis: 0.05
   stop_hold_seconds: 1.5
 
+  # ── Closed-loop, context-aware reroute ─────────────────────────────────────
+  # When closed_loop is on, a high-risk obstacle no longer triggers a fixed
+  # back-up+spin. Instead the robot picks a behaviour from motion + object +
+  # depth geometry: WAIT out a crossing/leaving obstacle (a person may move),
+  # BACK UP from one rushing in, or TURN toward the more open side and keep
+  # turning until the gap opens. Set closed_loop: false for the legacy one-shot.
+  reroute:
+    closed_loop: true
+    wait_timeout_seconds: 2.0   # WAIT at most this long for a crossing obstacle, then TURN
+    max_turn_seconds: 4.0       # keep turning at most this long, then STOP & reassess
+    backup_distance_m: 0.35     # closer than this + approaching → BACK UP (don't turn into it)
+    max_backup_seconds: 1.0     # cap reversing (no rear sensor) then STOP & reassess
+    dynamic_classes: ["person", "cat", "dog"]   # obstacles likely to move out of the way
+
   # ── Kinematic safe-speed governor (proactive collision avoidance) ──────────
   # Caps the action so the robot can always stop within the confirmed-clear
   # distance ahead, accounting for the AI's reaction latency:

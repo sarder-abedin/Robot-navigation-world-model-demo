@@ -100,11 +100,13 @@ def test_vision_reroutes_on_wm_blocked(cfg):
     assert r.action == Action.REROUTE
 
 
-def test_high_risk_without_vision_block_stops(cfg):
-    """High AI risk but no vision block signal → STOP (can't know where to turn)."""
+def test_high_risk_triggers_active_avoidance(cfg):
+    """With closed-loop reroute (default), high risk engages active avoidance
+    (turn toward the open side) rather than a passive STOP."""
     f = DecisionFuser(cfg, "predictive")
     r = f.decide(0.9, 0.9, 0.9, "MIXED", "APPROACHING")
-    assert r.action == Action.STOP
+    assert r.action == Action.REROUTE           # blind → default-direction turn
+    assert r.action != Action.FORWARD
 
 
 # ── Speed governor caps forward motion by stopping distance ───────────────────
@@ -142,25 +144,30 @@ def test_governor_skipped_when_blind(cfg):
 
 
 def test_governor_never_speeds_up(cfg):
-    """A STOP from high vision risk is not turned into FORWARD by lots of room."""
+    """A high-risk decision is never turned into FORWARD by lots of room — the
+    governor only ever caps FORWARD/SLOW, never accelerates."""
     f = DecisionFuser(cfg, "predictive")
     r = f.decide(0.9, 0.9, 0.9, "MIXED", "APPROACHING",
                  clear_distance_m=10.0, reaction_s=0.2)
-    assert r.action == Action.STOP
+    assert r.action != Action.FORWARD
 
 
-def test_reroute_uses_depth_clear_direction(cfg):
+def test_reroute_turns_toward_open_depth_side(cfg):
+    """Closed-loop reroute takes its turn direction from the per-side depth
+    free-space (the more open side), not the coarse clear_direction hint."""
     f = DecisionFuser(cfg, "predictive")
-    r = f.decide(0.9, 0.9, 0.9, "BLOCKED", "BLOCKING", clear_direction="RIGHT")
+    r = f.decide(0.9, 0.9, 0.9, "BLOCKED", "BLOCKING",
+                 depth_left_m=1.0, depth_center_m=0.4, depth_right_m=3.0)
     assert r.action == Action.REROUTE and r.reroute_direction == "right"
     f2 = DecisionFuser(cfg, "predictive")
-    r2 = f2.decide(0.9, 0.9, 0.9, "BLOCKED", "BLOCKING", clear_direction="LEFT")
+    r2 = f2.decide(0.9, 0.9, 0.9, "BLOCKED", "BLOCKING",
+                   depth_left_m=3.0, depth_center_m=0.4, depth_right_m=1.0)
     assert r2.reroute_direction == "left"
 
 
-def test_reroute_direction_blank_when_center_or_none(cfg):
+def test_reroute_direction_blank_when_depth_unknown(cfg):
     f = DecisionFuser(cfg, "predictive")
-    r = f.decide(0.9, 0.9, 0.9, "BLOCKED", "BLOCKING", clear_direction="CENTER")
+    r = f.decide(0.9, 0.9, 0.9, "BLOCKED", "BLOCKING")  # no depth regions
     assert r.action == Action.REROUTE and r.reroute_direction == ""
     # and a non-reroute action never carries a direction
     f2 = DecisionFuser(cfg, "predictive")

@@ -43,6 +43,7 @@ ACTION_COLOURS = {
     "SLOW":    ( 0, 200, 255),
     "STOP":    ( 0,   0, 220),
     "REROUTE": ( 0, 100, 255),
+    "BACKUP":  ( 0, 165, 255),   # orange
 }
 
 WM_COLOURS = {

@@ -310,6 +310,9 @@ class AIPipeline:
             sonic_m = sonic_cm / 100.0 if sonic_cm and sonic_cm > 0 else None
             candidates = [d for d in (sonic_m, depth_m) if d is not None]
             clear_distance_m = min(candidates) if candidates else None
+            # Per-side depth free-space + the closest obstacle's YOLO label feed the
+            # closed-loop reroute (wait / turn toward the open side / back up).
+            regions = depth_result.region_distances_m if depth_result.buffer_ready else {}
             decision = self._fuser.decide(
                 detector_risk=det_result.raw_risk,
                 world_model_risk=wm_risk,
@@ -320,6 +323,10 @@ class AIPipeline:
                 clear_distance_m=clear_distance_m,
                 reaction_s=self._reaction_ema,
                 clear_direction=clear_direction,
+                obstacle_label=getattr(det_result, "closest_label", "") or "",
+                depth_left_m=regions.get("LEFT"),
+                depth_center_m=regions.get("CENTER"),
+                depth_right_m=regions.get("RIGHT"),
             )
 
             # Scene understanding: metric geometry (depth, class-agnostic → sees

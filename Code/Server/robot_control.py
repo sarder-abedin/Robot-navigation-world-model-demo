@@ -118,6 +118,12 @@ class RobotController:
         time.sleep(self._reroute_secs)
         self.stop()
 
+    def backup(self) -> None:
+        """Short reverse pulse (obstacle too close / rushing in), then stop."""
+        self._set(-self._speed_slow, -self._speed_slow)
+        time.sleep(0.4)
+        self.stop()
+
     def safe_stop(self) -> None:
         self._set(0, 0)
         logger.warning("SAFE STOP – motors halted")
@@ -176,6 +182,10 @@ class MockRobotController:
     def reroute(self, direction: str = "") -> None:
         turn = (direction or "").strip().lower() or self._reroute_dir
         self.last_command = f"REROUTE({turn})"
+        logger.info("[MockRobot] %s", self.last_command)
+
+    def backup(self) -> None:
+        self.last_command = "BACKUP"
         logger.info("[MockRobot] %s", self.last_command)
 
     def safe_stop(self) -> None:
@@ -249,6 +259,10 @@ class TCPRobotController:
         d = (direction or "").strip().lower()
         self._send(f"REROUTE#{d.upper()}" if d in ("left", "right") else "REROUTE")
 
+    def backup(self) -> None:
+        # Short reverse pulse executed on the Pi.
+        self._send("BACKUP")
+
     def safe_stop(self) -> None:
         self._conn.send_stop()
         logger.warning("SAFE STOP – CMD_STOP sent to robot")
@@ -299,6 +313,7 @@ def execute_action(controller, action: str, reroute_direction: str = "") -> None
         Action.FORWARD:  controller.forward,
         Action.SLOW:     controller.slow_forward,
         Action.STOP:     controller.stop,
+        Action.BACKUP:   getattr(controller, "backup", controller.stop),
     }
     fn = dispatch.get(action)
     if fn:
