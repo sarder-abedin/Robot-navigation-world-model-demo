@@ -32,6 +32,7 @@ ACTION_BG = {
     "SLOW":    "#c8841a",
     "STOP":    "#8b0000",
     "REROUTE": "#7a3a00",
+    "BACKUP":  "#a0521a",
     "---":     "#444444",
 }
 WM_COLOR = {

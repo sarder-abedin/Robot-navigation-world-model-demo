@@ -36,11 +36,15 @@ class Action(str, Enum):
     SLOW = "SLOW"
     STOP = "STOP"
     REROUTE = "REROUTE"
+    BACKUP = "BACKUP"      # short reverse (obstacle too close / rushing in to turn)
 
 
 # How cautious each action is (higher = more cautious). Used to cap a forward
 # action to a more conservative one without ever speeding the robot up.
-_CAUTION = {Action.FORWARD: 0, Action.SLOW: 1, Action.STOP: 2, Action.REROUTE: 2}
+_CAUTION = {
+    Action.FORWARD: 0, Action.SLOW: 1,
+    Action.STOP: 2, Action.REROUTE: 2, Action.BACKUP: 2,
+}
 
 
 @dataclass
@@ -72,6 +76,18 @@ class DecisionFuser:
         self._last_risk = 0.0
         self._stop_until: float = 0.0
 
+        # Closed-loop, context-aware reroute (wait / turn-until-clear / backup).
+        rr = dec.get("reroute", {}) or {}
+        self._rr_closed_loop = bool(rr.get("closed_loop", True))
+        self._rr_wait_timeout = float(rr.get("wait_timeout_seconds", 2.0))
+        self._rr_max_turn = float(rr.get("max_turn_seconds", 4.0))
+        self._rr_backup_m = float(rr.get("backup_distance_m", 0.35))
+        self._rr_backup_max = float(rr.get("max_backup_seconds", 1.0))
+        self._rr_dynamic = set(rr.get("dynamic_classes", ["person", "cat", "dog"]))
+        self._wait_since: float = 0.0   # when the current WAIT started (0 = not waiting)
+        self._turn_since: float = 0.0   # when the current TURN started (0 = not turning)
+        self._backup_since: float = 0.0 # when the current BACKUP run started
+
         # Kinematic safe-speed governor (proactive, latency-aware). Lazy import
         # keeps decision.py free of a top-level dependency cycle (speed_governor
         # imports Action from here).
@@ -100,6 +116,10 @@ class DecisionFuser:
         clear_distance_m: float | None = None,
         reaction_s: float = 0.0,
         clear_direction: str | None = None,
+        obstacle_label: str = "",
+        depth_left_m: float | None = None,
+        depth_center_m: float | None = None,
+        depth_right_m: float | None = None,
     ) -> DecisionResult:
         # ── AI risk fusion (vision only) ──────────────────────────────────────
         # The ultrasonic is NOT mixed in here — it is a separate deterministic
@@ -143,17 +163,23 @@ class DecisionFuser:
             action, explanation = Action.STOP, "Stop hold active"
         elif smoothed <= self._low_max:
             action, explanation = Action.FORWARD, f"Low risk ({smoothed:.2f}) – forward"
+            self._wait_since = self._turn_since = self._backup_since = 0.0     # path clear → reset avoidance
         elif smoothed <= self._med_max:
             action, explanation = Action.SLOW, f"Medium risk ({smoothed:.2f}) – slowing"
+            self._wait_since = self._turn_since = self._backup_since = 0.0
+        elif self._rr_closed_loop:
+            # High vision risk → closed-loop, context-aware avoidance: wait out a
+            # crossing obstacle, back off from one rushing in, or turn toward the
+            # open side and keep turning until the gap opens.
+            action, reroute_dir, explanation = self._avoidance(
+                now, temporal_pattern, obstacle_label,
+                depth_left_m, depth_center_m, depth_right_m,
+            )
         else:
-            # High vision risk → the CAMERA decides stop vs turn. Reroute only
-            # when vision indicates a blocking obstacle (V-JEPA 2 BLOCKED or a
-            # temporal BLOCKING pattern), since the ultrasonic can't say which
-            # way is clear.
+            # Legacy one-shot reroute: turn only when vision confirms a blocking
+            # obstacle (V-JEPA 2 BLOCKED / temporal BLOCKING); else stop.
             if temporal_pattern == "BLOCKING" or world_model_label == "BLOCKED":
                 action = Action.REROUTE
-                # Depth's clear direction (LEFT/RIGHT) tells the robot WHICH way
-                # to turn; CENTER/None → "" so the Pi uses its default spin.
                 reroute_dir = {"LEFT": "left", "RIGHT": "right"}.get(
                     (clear_direction or "").upper(), "")
                 explanation = (
@@ -200,6 +226,72 @@ class DecisionFuser:
             world_model_label, temporal_pattern, explanation,
             reroute_direction=reroute_dir if action == Action.REROUTE else "",
         )
+
+    # ── Closed-loop, context-aware avoidance ──────────────────────────────────
+
+    @staticmethod
+    def _open_side(dl, dr) -> str:
+        """Which side has more free-space: 'left'/'right', or '' if unknown."""
+        if dl is None or dr is None:
+            return ""
+        return "left" if dl > dr else "right"
+
+    def _select_behaviour(self, pattern, obj_label, dc, dl, dr):
+        """Choose an avoidance INTENT from motion + object + geometry.
+
+        Returns (intent, direction) with intent in {WAIT, TURN, BACKUP}.
+          • too close + approaching → BACKUP (turning would steer into it)
+          • crossing / clearing, or a dynamic obstacle (person) approaching but
+            not close → WAIT (the path is likely to clear itself)
+          • otherwise → TURN toward the more open side (static blockage / wall)
+        """
+        close = dc is not None and 0 <= dc < self._rr_backup_m
+        if pattern == "APPROACHING" and close:
+            return "BACKUP", ""
+        if pattern in ("CROSSING", "CLEARING"):
+            return "WAIT", ""
+        if pattern == "APPROACHING" and obj_label in self._rr_dynamic and not close:
+            return "WAIT", ""   # e.g. a person ahead — pause, they may move aside
+        return "TURN", self._open_side(dl, dr)
+
+    def _avoidance(self, now, pattern, obj_label, dl, dc, dr):
+        """Stateful closed-loop maneuver: WAIT (with timeout) / TURN-until-clear
+        (with a spin guard) / BACKUP. Returns (action, reroute_dir, explanation)."""
+        intent, direction = self._select_behaviour(pattern, obj_label, dc, dl, dr)
+
+        if intent == "WAIT":
+            if self._wait_since == 0.0:
+                self._wait_since = now
+            if now - self._wait_since <= self._rr_wait_timeout:
+                self._turn_since = self._backup_since = 0.0
+                return Action.STOP, "", f"wait ({pattern.lower()} — path may clear)"
+            # waited long enough and still blocked → commit to a turn
+            intent, direction = "TURN", self._open_side(dl, dr)
+        self._wait_since = 0.0
+
+        if intent == "BACKUP":
+            self._turn_since = 0.0
+            # The robot has no rear sensor, so don't reverse blindly forever: cap
+            # the backup run, then STOP and reassess (front sensors take over).
+            if self._backup_since == 0.0:
+                self._backup_since = now
+            if now - self._backup_since > self._rr_backup_max:
+                self._backup_since = 0.0
+                self._stop_until = now + self._stop_hold
+                return Action.STOP, "", "backed up enough (no rear sensor) — stop & reassess"
+            return Action.BACKUP, "", "backup (obstacle too close / approaching to turn)"
+        self._backup_since = 0.0
+
+        # TURN, closed-loop: keep turning toward the open side until the gap opens
+        # (the FORWARD/SLOW branch resets _turn_since when it clears); a guard
+        # stops an endless spin if no gap is ever found.
+        if self._turn_since == 0.0:
+            self._turn_since = now
+        if now - self._turn_since > self._rr_max_turn:
+            self._turn_since = 0.0
+            self._stop_until = now + self._stop_hold
+            return Action.STOP, "", "turned too long without a gap — stop & reassess"
+        return Action.REROUTE, direction, f"turn {direction or 'default'} until gap opens"
 
     @staticmethod
     def _result(action, risk, det, wm, ta, wm_label, pattern, explanation,

@@ -381,7 +381,12 @@ thresholds + ultrasonic hard-stop.
 | `world_model.risk_similarity_threshold` | `0.55` | V-JEPA 2 BLOCKED sensitivity |
 | `decision.weights.world_model` | `0.45` | V-JEPA 2 contribution to fused risk |
 | `decision.low_risk_max` | `0.25` | Below this → FORWARD |
-| `decision.medium_risk_max` | `0.50` | Below this → SLOW, above → STOP/REROUTE |
+| `decision.medium_risk_max` | `0.50` | Below this → SLOW, above → active avoidance |
+| `decision.reroute.closed_loop` | `true` | Dynamic wait/turn-until-clear/backup avoidance (vs legacy one-shot reroute) |
+| `decision.reroute.wait_timeout_seconds` | `2.0` | WAIT for a crossing obstacle at most this long, then TURN |
+| `decision.reroute.max_turn_seconds` | `4.0` | Keep turning at most this long, then STOP & reassess |
+| `decision.reroute.backup_distance_m` | `0.35` | Closer than this + approaching → BACKUP |
+| `decision.reroute.dynamic_classes` | `[person, cat, dog]` | Obstacles likely to move out of the way (→ WAIT) |
 | `decision.governor.enabled` | `true` | Kinematic safe-speed governor (proactive, latency-aware) |
 | `decision.governor.forward_speed_mps` | `0.35` | **Calibrate** — robot speed at FORWARD (m/s) |
 | `decision.governor.slow_speed_mps` | `0.18` | **Calibrate** — robot speed at SLOW (m/s) |

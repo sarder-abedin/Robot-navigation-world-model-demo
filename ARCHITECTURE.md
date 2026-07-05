@@ -68,7 +68,7 @@ model contributes, the safety layers, and the TCP wire protocol.
 | **Depth-Anything V2** | "The Surveyor" | Class-agnostic depth → free-space distance ahead + which side is open (sees walls YOLO can't); feeds the governor + REROUTE direction | PC (optional) |
 | **SSv2 temporal rules** | "The Behaviour Analyst" | Classifies the obstacle's motion pattern (APPROACHING / CROSSING / BLOCKING …) — drives `temporal_risk` | PC |
 | **SSv2 model (VideoMAE)** | "The Narrator" | A **real** Something-Something-V2 video classifier; its "something" slot is filled with YOLO's object → e.g. *"person moving closer"*. Annotation/log only | PC |
-| **Decision fuser** | "The Judge" | Combines all three risk signals into one action (FORWARD / SLOW / STOP / REROUTE) | PC |
+| **Decision fuser** | "The Judge" | Combines all risk signals into one action (FORWARD / SLOW / STOP / REROUTE / BACKUP) + closed-loop, context-aware avoidance | PC |
 
 ### Genuine SSv2 action recognition (YOLO-filled)
 
@@ -183,6 +183,28 @@ model/weights are absent (ultrasonic + V-JEPA 2 keep working). Configure under
 
 ---
 
+## Dynamic reroute — closed-loop, context-aware avoidance
+
+Instead of a fixed back-up-then-spin, a high-risk obstacle now selects a
+**behaviour** from motion + object + geometry, and turns are **closed-loop**
+(`decision.py`, `decision.reroute.closed_loop`, default on):
+
+| Situation | Signals | Action |
+|---|---|---|
+| Crossing / leaving obstacle, or a **person** approaching (not close) | temporal pattern `CROSSING`/`CLEARING`; YOLO class ∈ `dynamic_classes` | **WAIT** (`STOP`) — the path may clear itself; a timeout escalates to TURN |
+| Obstacle **rushing in**, too close to turn | `APPROACHING` + depth center < `backup_distance_m` | **BACKUP** (`CMD_AIMOVE#BACKUP`) — capped (no rear sensor) then STOP |
+| Static blockage / wall | otherwise | **TURN** toward the more open side (per-side depth), **keep turning until the gap opens** (a spin guard stops an endless rotation) |
+
+The **direction** comes from the per-side depth free-space (`depth_left/right`),
+not a coarse hint; turning is re-evaluated every frame, so it stops the instant
+the center clears. The motion signal is the **fast per-frame temporal pattern**
+(SSv2's heavy VideoMAE stays annotation-only). Guards: `wait_timeout_seconds`,
+`max_turn_seconds`, `max_backup_seconds`. Set `closed_loop: false` for the legacy
+one-shot reroute. The ultrasonic hard-stop and speed governor still sit
+underneath and can only make the action *more* cautious.
+
+---
+
 ## Baseline vs Predictive comparison
 
 | Feature | Baseline | Predictive |
@@ -202,7 +224,7 @@ Both modes run on the **same code path** — only the weight vector changes.
 | Command | Direction | Format | Meaning |
 |---|---|---|---|
 | `CMD_SONIC` | Pi → PC | `CMD_SONIC#<sonic_cm>` | Ultrasonic distance (the Pi's local hard-stop safety); the Pi runs no detection |
-| `CMD_AIMOVE` | PC → Pi | `CMD_AIMOVE#<FORWARD\|SLOW\|STOP\|REROUTE>[#<LEFT\|RIGHT>]` | AI-computed action; Pi maps to motor PWM. REROUTE may carry a turn direction (from the depth channel's open side) |
+| `CMD_AIMOVE` | PC → Pi | `CMD_AIMOVE#<FORWARD\|SLOW\|STOP\|REROUTE\|BACKUP>[#<LEFT\|RIGHT>]` | AI-computed action; Pi maps to motor PWM. REROUTE carries a turn direction (depth's open side); BACKUP is a short reverse pulse |
 | `CMD_MOTOR` | UI → PC → Pi | `CMD_MOTOR#<L>#<R>` | Manual motor command relayed through PC |
 | `CMD_STOP` | PC → Pi | `CMD_STOP` | Emergency halt (hard safety) |
 | `CMD_KILL` | PC → Pi | `CMD_KILL` | Shutdown robot process |
