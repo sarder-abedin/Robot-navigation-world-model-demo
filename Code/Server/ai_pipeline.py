@@ -71,6 +71,13 @@ class AIPipeline:
 
         self._nav_mode = self._cfg.get("navigation_mode", "predictive")
 
+        # EMA of the per-frame processing time (perception + decision), used as
+        # the "reaction time" the speed governor reserves braking distance for.
+        # Seeded from the governor's min_reaction so the first frames aren't
+        # over-optimistic on a slow (CPU) pipeline.
+        gov_cfg = (self._cfg.get("decision", {}) or {}).get("governor", {}) or {}
+        self._reaction_ema = float(gov_cfg.get("min_reaction_s", 0.5))
+
         # Run logging (CSV + annotated frames) starts from config; toggled at
         # runtime from the UI (CMD_LOGGING) or at startup via env/CLI.
         self._logging_enabled = bool(self._cfg.get("logging", {}).get("enabled", False))
@@ -232,6 +239,7 @@ class AIPipeline:
                 time.sleep(0.02)
 
     def _process_frame(self, frame_rgb, frame_idx: int) -> None:
+            proc_t0 = time.monotonic()
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
             # ── 2. Detection – always the PC's local YOLO on the streamed frame.
@@ -286,6 +294,10 @@ class AIPipeline:
                     pass
 
             # ── 6. Decision fusion ────────────────────────────────────────────
+            # clear_distance_m: metric distance ahead for the speed governor.
+            # Only valid ultrasonic readings count (>0); -1.0 = blind → None, so
+            # the governor is skipped and the hard-stop/blind-hold layer applies.
+            clear_distance_m = sonic_cm / 100.0 if sonic_cm and sonic_cm > 0 else None
             decision = self._fuser.decide(
                 detector_risk=det_result.raw_risk,
                 world_model_risk=wm_risk,
@@ -293,6 +305,8 @@ class AIPipeline:
                 world_model_label=wm_result.label,
                 temporal_pattern=temporal_result.pattern,
                 ultrasonic_risk=sonic_risk,
+                clear_distance_m=clear_distance_m,
+                reaction_s=self._reaction_ema,
             )
 
             if ssv2_sentence:
@@ -347,6 +361,13 @@ class AIPipeline:
                 self._state.frame_count = frame_idx
                 self._state.ssv2_sentence = ssv2_sentence
                 self._state.ssv2_confidence = ssv2_conf
+
+            # ── 12. Update the reaction-time estimate (governor input) ────────
+            # EMA of the wall-clock time this frame took; the speed governor uses
+            # it as the AI's reaction latency. Biased toward recent frames so a
+            # heavy V-JEPA 2 tick raises it (→ more cautious speed) quickly.
+            proc_dt = time.monotonic() - proc_t0
+            self._reaction_ema = 0.4 * proc_dt + 0.6 * self._reaction_ema
 
     # ── Component construction ────────────────────────────────────────────────
 

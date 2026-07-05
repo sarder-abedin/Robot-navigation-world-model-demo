@@ -38,6 +38,11 @@ class Action(str, Enum):
     REROUTE = "REROUTE"
 
 
+# How cautious each action is (higher = more cautious). Used to cap a forward
+# action to a more conservative one without ever speeding the robot up.
+_CAUTION = {Action.FORWARD: 0, Action.SLOW: 1, Action.STOP: 2, Action.REROUTE: 2}
+
+
 @dataclass
 class DecisionResult:
     action: Action
@@ -66,6 +71,12 @@ class DecisionFuser:
         self._last_risk = 0.0
         self._stop_until: float = 0.0
 
+        # Kinematic safe-speed governor (proactive, latency-aware). Lazy import
+        # keeps decision.py free of a top-level dependency cycle (speed_governor
+        # imports Action from here).
+        from speed_governor import SpeedGovernor
+        self._governor = SpeedGovernor(cfg)
+
         if navigation_mode == "baseline":
             # Zero out the predictive signals so comparison is fair
             self._w_wm = 0.0
@@ -85,6 +96,8 @@ class DecisionFuser:
         world_model_label: str = "UNKNOWN",
         temporal_pattern: str = "UNKNOWN",
         ultrasonic_risk: float = 0.0,
+        clear_distance_m: float | None = None,
+        reaction_s: float = 0.0,
     ) -> DecisionResult:
         # ── AI risk fusion (vision only) ──────────────────────────────────────
         # The ultrasonic is NOT mixed in here — it is a separate deterministic
@@ -154,6 +167,25 @@ class DecisionFuser:
         ):
             action = Action.SLOW
             explanation += " [WM early-warning]"
+
+        # ── 3. Kinematic safe-speed governor (proactive, latency-aware) ───────
+        # Only ever downgrades a forward-motion action so the robot can always
+        # stop within the confirmed-clear distance given the AI's reaction time.
+        # Needs a valid distance (metres); when the sensor is blind it's skipped
+        # and the ultrasonic hard-stop / blind-hold above still apply.
+        if (
+            self._governor.enabled
+            and clear_distance_m is not None
+            and clear_distance_m >= 0
+            and action in (Action.FORWARD, Action.SLOW)
+        ):
+            gov = self._governor.max_action(clear_distance_m, reaction_s)
+            if _CAUTION[gov] > _CAUTION[action]:
+                action = gov
+                explanation += (
+                    f" [governor→{gov.value}: d={clear_distance_m:.2f}m "
+                    f"t_react={reaction_s:.2f}s]"
+                )
 
         return self._result(
             action, smoothed, detector_risk, world_model_risk, temporal_risk,

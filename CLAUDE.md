@@ -30,6 +30,13 @@ assets/         ← Demo video clips
 - The Pi Docker image is therefore lightweight — **no torch / ultralytics**.
 - Motor mapping (action → PWM) happens on the **Pi** side in `main_robot.py`,
   not on the PC. The PC sends high-level `CMD_AIMOVE#FORWARD` etc.
+- **Navigation safety layers (in `decision.py`, in order):** (1) ultrasonic
+  **hard-stop** — deterministic, distance-only, *separate* from the fused AI
+  risk; (2) **vision** action from fused det+wm+temporal risk (reroute only on
+  V-JEPA 2 `BLOCKED` / temporal `BLOCKING`); (3) **speed governor**
+  (`speed_governor.py`) — caps FORWARD/SLOW so the robot can stop within the
+  clear distance given the measured reaction latency. Each layer only ever makes
+  the action **more** cautious. Governor speeds are SI m/s and must be calibrated.
 
 ## Key files
 
@@ -38,8 +45,10 @@ assets/         ← Demo video clips
 | `Code/Server/main_server.py` | PC entry point; starts AI pipeline + TCP servers |
 | `Code/Server/detector.py` | YOLOv8n — runs on the **PC** on the Pi's streamed frames (all modes) |
 | `Code/Server/robot_connection.py` | Parses `CMD_SONIC` from Pi; exposes `get_sonic_cm()` and `send_aimove()` |
-| `Code/Server/ai_pipeline.py` | Orchestrates YOLO → V-JEPA 2 → SSv2 → decision → broadcast |
-| `Code/Server/robot_control.py` | `TCPRobotController` sends `CMD_AIMOVE` to Pi |
+| `Code/Server/ai_pipeline.py` | Orchestrates YOLO → V-JEPA 2 → SSv2 → decision → broadcast; measures reaction latency for the governor |
+| `Code/Server/decision.py` | Risk fusion + hysteresis; ultrasonic hard-stop (separate); vision reroute; applies the speed governor |
+| `Code/Server/speed_governor.py` | Kinematic safe-speed governor: caps action to `d_stop(v)=v·t_react+v²/(2a)+margin` |
+| `Code/Server/robot_control.py` | `TCPRobotController` sends `CMD_AIMOVE` to Pi; ultrasonic risk (fail-safe on no-echo) |
 | `Code/Robot/main_robot.py` | Pi entry point (thin client); camera stream + sonic + command loop |
 | `Code/Robot/tcp_robot_client.py` | Pi-side TCP client; `send_sonic()` / `send_frame()` |
 | `Code/Client/streamlit_viewer.py` | Browser UI (port 8501); bundled in the server Docker image |

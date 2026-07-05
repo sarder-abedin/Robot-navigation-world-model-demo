@@ -95,6 +95,25 @@ decision:
   hysteresis: 0.05
   stop_hold_seconds: 1.5
 
+  # ── Kinematic safe-speed governor (proactive collision avoidance) ──────────
+  # Caps the action so the robot can always stop within the confirmed-clear
+  # distance ahead, accounting for the AI's reaction latency:
+  #   d_stop(v) = v*t_react + (v^2 - v_target^2)/(2*a) + margin
+  # It only ever slows the robot down (FORWARD→SLOW→STOP), never speeds it up,
+  # and is skipped when the ultrasonic is blind (the hard-stop still applies).
+  #
+  # CALIBRATE these on the real robot (see README "Calibrating the speed
+  # governor") — the defaults are conservative guesses, not measured values:
+  governor:
+    enabled: true
+    forward_speed_mps: 0.35    # measured robot speed at the FORWARD action (m/s)
+    slow_speed_mps: 0.18       # measured robot speed at the SLOW action (m/s)
+    max_decel_mps2: 0.6        # measured hardest deceleration the robot achieves
+    target_speed_mps: 0.0      # speed to reach before contact (0 = full stop; >0 = reduce impact)
+    safety_margin_m: 0.10      # extra buffer added to every stopping distance
+    min_reaction_s: 0.2        # floor on the measured pipeline latency
+    max_reaction_s: 3.0        # cap on it (a stalled pipeline → near-stop, bounded)
+
 # ── Robot motor control ────────────────────────────────────────────────────────
 robot:
   # tankMotor.setMotorModel(left, right) — range −4095 … +4095

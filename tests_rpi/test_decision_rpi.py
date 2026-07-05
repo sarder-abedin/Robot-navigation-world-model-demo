@@ -105,3 +105,57 @@ def test_high_risk_without_vision_block_stops(cfg):
     f = DecisionFuser(cfg, "predictive")
     r = f.decide(0.9, 0.9, 0.9, "MIXED", "APPROACHING")
     assert r.action == Action.STOP
+
+
+# ── Speed governor caps forward motion by stopping distance ───────────────────
+
+def test_governor_caps_forward_to_slow_when_close(cfg):
+    """Vision is clear (would be FORWARD) but the confirmed-clear distance only
+    allows a safe SLOW → the governor downgrades to SLOW."""
+    f = DecisionFuser(cfg, "predictive")
+    r = f.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR",
+                 clear_distance_m=0.5, reaction_s=1.0)
+    assert r.action == Action.SLOW
+
+
+def test_governor_caps_to_stop_when_too_close(cfg):
+    f = DecisionFuser(cfg, "predictive")
+    r = f.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR",
+                 clear_distance_m=0.2, reaction_s=1.0)
+    assert r.action == Action.STOP
+
+
+def test_governor_allows_forward_with_room(cfg):
+    f = DecisionFuser(cfg, "predictive")
+    r = f.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR",
+                 clear_distance_m=3.0, reaction_s=1.0)
+    assert r.action == Action.FORWARD
+
+
+def test_governor_skipped_when_blind(cfg):
+    """No metric distance (blind sensor) → governor does not act; FORWARD stands
+    (the ultrasonic hard-stop / blind-hold handles the safety instead)."""
+    f = DecisionFuser(cfg, "predictive")
+    r = f.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR",
+                 clear_distance_m=None, reaction_s=1.0)
+    assert r.action == Action.FORWARD
+
+
+def test_governor_never_speeds_up(cfg):
+    """A STOP from high vision risk is not turned into FORWARD by lots of room."""
+    f = DecisionFuser(cfg, "predictive")
+    r = f.decide(0.9, 0.9, 0.9, "MIXED", "APPROACHING",
+                 clear_distance_m=10.0, reaction_s=0.2)
+    assert r.action == Action.STOP
+
+
+def test_governor_latency_forces_earlier_slowing(cfg):
+    """Same distance, but a laggier pipeline (bigger reaction_s) is more cautious."""
+    f_fast = DecisionFuser(cfg, "predictive")
+    fast = f_fast.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR",
+                         clear_distance_m=0.6, reaction_s=0.2)
+    f_slow = DecisionFuser(cfg, "predictive")
+    slow = f_slow.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR",
+                         clear_distance_m=0.6, reaction_s=2.0)
+    order = {Action.FORWARD: 0, Action.SLOW: 1, Action.STOP: 2}
+    assert order[slow.action] >= order[fast.action]
