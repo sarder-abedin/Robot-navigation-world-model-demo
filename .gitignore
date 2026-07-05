@@ -7,6 +7,11 @@ dist/
 build/
 .venv/
 venv/
+env/
+roboenv/
+# Any Python virtual environment created inside the repo (never commit these)
+pyvenv.cfg
+**/site-packages/
 *.pt
 *.pth
 *.bin
