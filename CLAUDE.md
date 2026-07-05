@@ -58,6 +58,8 @@ assets/         ← Demo video clips
 | `Code/Server/speed_governor.py` | Kinematic safe-speed governor: caps action to `d_stop(v)=v·t_react+v²/(2a)+margin` |
 | `Code/Server/depth_perception.py` | Depth-Anything V2 → free-space distance ahead + clear direction (LEFT/CENTER/RIGHT); class-agnostic (sees walls) |
 | `Code/Server/calibrate_anchors.py` | Builds V-JEPA 2 corridor anchors from blocked/clear frame folders → `anchors.npz` |
+| `Code/Robot/calibrate_governor.py` | On-robot: measures governor m/s constants (sonar+motors), safely patches `config.yaml` |
+| `Code/Server/visualization.py` | HUD overlay incl. depth free-space (distance + open direction bars) |
 | `Code/Server/robot_control.py` | `TCPRobotController` sends `CMD_AIMOVE` to Pi; ultrasonic risk (fail-safe on no-echo) |
 | `Code/Robot/main_robot.py` | Pi entry point (thin client); camera stream + sonic + command loop |
 | `Code/Robot/tcp_robot_client.py` | Pi-side TCP client; `send_sonic()` / `send_frame()` |

@@ -77,6 +77,7 @@ class Visualizer:
         temporal_result,
         ultrasonic_cm: float = -1.0,
         ssv2_sentence: str = "",
+        depth=None,
     ) -> np.ndarray:
         """Annotate a BGR frame with full AI pipeline state."""
         vis = frame_bgr.copy()
@@ -106,10 +107,40 @@ class Visualizer:
         self._draw_sonic(vis, ultrasonic_cm, w)
         self._draw_mode_badge(vis, w)
         self._draw_fps(vis, fps)
+        if depth is not None and getattr(depth, "buffer_ready", False):
+            self._draw_depth(vis, depth, w, h)
         if ssv2_sentence:
             self._draw_ssv2(vis, ssv2_sentence, w, h)
 
         return vis
+
+    def _draw_depth(self, vis, depth, w: int, h: int) -> None:
+        """Depth free-space HUD: distance ahead, open direction, L/C/R region bars."""
+        regions = getattr(depth, "region_distances_m", {}) or {}
+        direction = getattr(depth, "clear_direction", "CENTER")
+        ahead = getattr(depth, "clear_distance_m", -1.0)
+
+        # Text line near the top-left, under the WM/motion labels.
+        text = f"Depth: {ahead:.2f}m ahead  |  open: {direction}"
+        font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+        (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+        y = 78
+        cv2.rectangle(vis, (6, y - th - 5), (6 + tw + 6, y + 5), (0, 0, 0), -1)
+        cv2.putText(vis, text, (9, y), font, scale, (0, 220, 255), thick, cv2.LINE_AA)
+
+        # Three small bars (LEFT/CENTER/RIGHT), longer = more open; the chosen
+        # direction is highlighted green.
+        bx, by, bw, gap = 9, y + 10, 46, 6
+        max_m = max([1.0] + [v for v in regions.values()])
+        for i, name in enumerate(("LEFT", "CENTER", "RIGHT")):
+            d = float(regions.get(name, 0.0))
+            fill = int(bw * min(d / max_m, 1.0))
+            x0 = bx + i * (bw + gap)
+            colour = (0, 200, 0) if name == direction else (180, 180, 180)
+            cv2.rectangle(vis, (x0, by), (x0 + bw, by + 8), (50, 50, 50), -1)
+            cv2.rectangle(vis, (x0, by), (x0 + fill, by + 8), colour, -1)
+            cv2.putText(vis, name[0], (x0 + bw // 2 - 3, by + 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, colour, 1, cv2.LINE_AA)
 
     def _draw_ssv2(self, vis, sentence: str, w: int, h: int) -> None:
         """Draw the genuine SSv2 action sentence (YOLO-filled) near the bottom."""

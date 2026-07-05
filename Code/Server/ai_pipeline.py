@@ -358,7 +358,7 @@ class AIPipeline:
             # ── 8. Visualise ──────────────────────────────────────────────────
             annotated = self._visualizer.annotate(
                 frame_bgr, det_result, decision, temporal_result, sonic_cm,
-                ssv2_sentence=ssv2_sentence,
+                ssv2_sentence=ssv2_sentence, depth=depth_result,
             )
             with self._annotated_lock:
                 self._last_annotated_bgr = annotated
