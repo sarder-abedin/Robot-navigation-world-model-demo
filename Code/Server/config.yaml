@@ -52,6 +52,10 @@ world_model:
   # The system falls back to a lightweight stub when the weights are absent.
   model_id: "facebook/vjepa2-vitl-fpc64-256"
   input_size: 256              # MUST match the checkpoint (…-256); frames resized to this
+  # BLOCKED/CLEAR label needs the obstacle-similarity to exceed clear-similarity
+  # by this margin (relative test); below it → MIXED. Keeps the label off a
+  # permanent BLOCKED when anchors are synthetic/uncalibrated.
+  label_margin: 0.02
   # Calibrated corridor anchors (from calibrate_anchors.py). Empty = use the
   # synthetic grey-wall / open-corridor anchors (coarse). Point this at your
   # anchors.npz so BLOCKED/CLEAR reflects YOUR environment. See README.
@@ -68,6 +72,9 @@ temporal_action:
   approach_ratio: 0.6          # fraction of centre-zone frames → APPROACHING
   clear_ratio: 0.7             # fraction of absent frames → CLEARING
   movement_speed_threshold: 5.0  # px/frame to distinguish moving vs static
+  # When YOLO sees no object but depth shows an obstacle within this distance (m)
+  # ahead, feed it to the motion recogniser so walls aren't stuck at STATIC_CLEAR.
+  depth_presence_range_m: 1.5
 
 # ── Genuine SSv2 action recognition (VideoMAE, annotation/log only) ──────────
 # Runs a real Something-Something-V2 video classifier over a clip; the
@@ -127,6 +134,7 @@ decision:
     max_turn_seconds: 4.0       # keep turning at most this long, then STOP & reassess
     backup_distance_m: 0.35     # closer than this + approaching → BACK UP (don't turn into it)
     max_backup_seconds: 1.0     # cap reversing (no rear sensor) then STOP & reassess
+    direction_margin_m: 0.3     # a side must beat centre free-space by this to TURN (else STOP straight)
     dynamic_classes: ["person", "cat", "dog"]   # obstacles likely to move out of the way
 
   # ── Kinematic safe-speed governor (proactive collision avoidance) ──────────

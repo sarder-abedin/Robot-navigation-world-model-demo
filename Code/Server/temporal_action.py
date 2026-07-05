@@ -166,6 +166,26 @@ def detection_to_state(det_result, assumed_width: int = 400) -> FrameObstacleSta
     )
 
 
+def depth_to_obstacle_state(
+    depth_center_m: float | None, presence_range_m: float = 1.5,
+) -> FrameObstacleState | None:
+    """Synthesize an obstacle state from the depth center distance.
+
+    YOLO can't classify a wall, so `detection_to_state` reports "no obstacle" and
+    the motion sticks at STATIC_CLEAR even with a wall right ahead. When YOLO is
+    empty, feed the depth free-space instead: an obstacle within presence_range is
+    "present" and centered, with a pseudo-area that grows as it gets closer — so
+    the recogniser tracks its approach (APPROACHING/BLOCKING) class-agnostically.
+    Returns None if there's nothing within range (→ genuinely STATIC_CLEAR).
+    """
+    if depth_center_m is None or depth_center_m <= 0 or depth_center_m >= presence_range_m:
+        return None
+    area = float(np.clip((presence_range_m - depth_center_m) / presence_range_m, 0.0, 1.0))
+    return FrameObstacleState(
+        obstacle_present=True, in_center=True, area_frac=area, centroid_x=0.5,
+    )
+
+
 def _result(pattern: MotionPattern, desc: str) -> TemporalResult:
     return TemporalResult(
         pattern=pattern,

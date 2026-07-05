@@ -83,6 +83,9 @@ class DecisionFuser:
         self._rr_max_turn = float(rr.get("max_turn_seconds", 4.0))
         self._rr_backup_m = float(rr.get("backup_distance_m", 0.35))
         self._rr_backup_max = float(rr.get("max_backup_seconds", 1.0))
+        # A side must beat the centre free-space by this much to turn toward it;
+        # otherwise straight ahead is the clearest → STOP (don't turn into a wall).
+        self._rr_dir_margin = float(rr.get("direction_margin_m", 0.3))
         self._rr_dynamic = set(rr.get("dynamic_classes", ["person", "cat", "dog"]))
         self._wait_since: float = 0.0   # when the current WAIT started (0 = not waiting)
         self._turn_since: float = 0.0   # when the current TURN started (0 = not turning)
@@ -229,21 +232,27 @@ class DecisionFuser:
 
     # ── Closed-loop, context-aware avoidance ──────────────────────────────────
 
-    @staticmethod
-    def _open_side(dl, dr) -> str:
-        """Which side has more free-space: 'left'/'right', or '' if unknown."""
-        if dl is None or dr is None:
-            return ""
-        return "left" if dl > dr else "right"
+    def _turn_side(self, dl, dc, dr):
+        """Pick a turn side from per-side depth. Returns (side, mode):
+          • ("left"/"right", "turn") — that side is clearly more open than centre
+          • ("", "turn") — geometry unknown (blind) → caller's default spin
+          • ("", "stop") — straight ahead is the clearest → don't turn into a wall
+        """
+        if dl is None or dr is None or dc is None:
+            return "", "turn"                       # unknown → legacy default turn
+        if max(dl, dr) > dc + self._rr_dir_margin:
+            return ("left" if dl >= dr else "right"), "turn"
+        return "", "stop"                           # centre is the most open
 
     def _select_behaviour(self, pattern, obj_label, dc, dl, dr):
         """Choose an avoidance INTENT from motion + object + geometry.
 
-        Returns (intent, direction) with intent in {WAIT, TURN, BACKUP}.
+        Returns (intent, direction) with intent in {WAIT, TURN, BACKUP, STOP_BLOCKED}:
           • too close + approaching → BACKUP (turning would steer into it)
           • crossing / clearing, or a dynamic obstacle (person) approaching but
             not close → WAIT (the path is likely to clear itself)
-          • otherwise → TURN toward the more open side (static blockage / wall)
+          • a side clearly more open than centre → TURN toward it
+          • otherwise (straight ahead is the clearest, but blocked) → STOP_BLOCKED
         """
         close = dc is not None and 0 <= dc < self._rr_backup_m
         if pattern == "APPROACHING" and close:
@@ -252,11 +261,13 @@ class DecisionFuser:
             return "WAIT", ""
         if pattern == "APPROACHING" and obj_label in self._rr_dynamic and not close:
             return "WAIT", ""   # e.g. a person ahead — pause, they may move aside
-        return "TURN", self._open_side(dl, dr)
+        side, mode = self._turn_side(dl, dc, dr)
+        return ("TURN", side) if mode == "turn" else ("STOP_BLOCKED", "")
 
     def _avoidance(self, now, pattern, obj_label, dl, dc, dr):
         """Stateful closed-loop maneuver: WAIT (with timeout) / TURN-until-clear
-        (with a spin guard) / BACKUP. Returns (action, reroute_dir, explanation)."""
+        (with a spin guard) / BACKUP / STOP-when-blocked-with-no-clearer-side.
+        Returns (action, reroute_dir, explanation)."""
         intent, direction = self._select_behaviour(pattern, obj_label, dc, dl, dr)
 
         if intent == "WAIT":
@@ -265,9 +276,15 @@ class DecisionFuser:
             if now - self._wait_since <= self._rr_wait_timeout:
                 self._turn_since = self._backup_since = 0.0
                 return Action.STOP, "", f"wait ({pattern.lower()} — path may clear)"
-            # waited long enough and still blocked → commit to a turn
-            intent, direction = "TURN", self._open_side(dl, dr)
+            # waited long enough and still blocked → turn if a side is open, else stop
+            side, mode = self._turn_side(dl, dc, dr)
+            intent, direction = ("TURN", side) if mode == "turn" else ("STOP_BLOCKED", "")
         self._wait_since = 0.0
+
+        if intent == "STOP_BLOCKED":
+            self._turn_since = self._backup_since = 0.0
+            self._stop_until = now + self._stop_hold
+            return Action.STOP, "", "blocked ahead, no clearer side — stop & reassess"
 
         if intent == "BACKUP":
             self._turn_since = 0.0

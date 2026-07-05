@@ -85,6 +85,34 @@ def test_turn_guard_stops_after_too_long(cfg):
     assert r.action == Action.STOP and "reassess" in r.explanation.lower()
 
 
+def test_blocked_with_center_clearest_stops_not_turns(cfg):
+    """If straight ahead is the most open direction, don't turn into a side wall —
+    STOP and reassess."""
+    f = DecisionFuser(cfg, "predictive")
+    r = _hi(f, pattern="BLOCKING", dl=0.5, dc=3.0, dr=0.5)
+    assert r.action == Action.STOP and "no clearer side" in r.explanation.lower()
+
+
+def test_turn_only_when_side_clearly_more_open(cfg):
+    f = DecisionFuser(cfg, "predictive")
+    # a side beats centre by more than the margin → TURN toward it
+    r = _hi(f, pattern="BLOCKING", dl=2.0, dc=0.4, dr=0.6)
+    assert r.action == Action.REROUTE and r.reroute_direction == "left"
+
+
+def test_depth_motion_state_from_close_wall():
+    """A close obstacle in depth (no YOLO box) becomes a 'present, centered' state
+    so the motion recogniser isn't blind to walls."""
+    from temporal_action import depth_to_obstacle_state
+    near = depth_to_obstacle_state(0.4, presence_range_m=1.5)
+    assert near is not None and near.obstacle_present and near.in_center
+    far = depth_to_obstacle_state(3.0, presence_range_m=1.5)
+    assert far is None                       # nothing within range → STATIC_CLEAR
+    assert depth_to_obstacle_state(None) is None
+    # closer → larger pseudo-area (so the recogniser can see it "grow"/approach)
+    assert depth_to_obstacle_state(0.3).area_frac > depth_to_obstacle_state(1.0).area_frac
+
+
 def test_backup_capped_when_no_rear_progress(cfg):
     """The robot has no rear sensor, so a sustained BACKUP is capped → STOP."""
     f = DecisionFuser(cfg, "predictive")

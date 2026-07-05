@@ -60,6 +60,9 @@ class WorldModel:
         self._horizon = wm_cfg["prediction_horizon"]
         self._input_size = wm_cfg["input_size"]
         self._risk_thresh = wm_cfg["risk_similarity_threshold"]
+        # Min gap between obstacle- and clear-similarity to commit to a label
+        # (below it → MIXED). Relative test, robust to uncalibrated anchors.
+        self._label_margin = float(wm_cfg.get("label_margin", 0.02))
         self._device_str = wm_cfg.get("device", "cpu")
         self._run_every = wm_cfg.get("run_every_n_frames", 8)
         # Path to calibrated corridor anchors (built by calibrate_anchors.py from
@@ -138,9 +141,15 @@ class WorldModel:
         sim_clr = float(_cosine_sim(emb, self._clear_anchor))
         predicted_risk = _sigmoid_scale(sim_obs - sim_clr)
 
-        if sim_obs > self._risk_thresh:
+        # Label from the RELATIVE similarity (which anchor the scene is closer to),
+        # not an absolute threshold. An absolute test (sim_obs > thresh) sticks on
+        # BLOCKED with the synthetic/uncalibrated anchors, because a real indoor
+        # scene is cosine-close to the grey "obstacle" anchor regardless. The
+        # relative test matches how predicted_risk is already computed.
+        diff = sim_obs - sim_clr
+        if diff > self._label_margin:
             label = "BLOCKED"
-        elif sim_clr > self._risk_thresh:
+        elif diff < -self._label_margin:
             label = "CLEAR"
         else:
             label = "MIXED"
