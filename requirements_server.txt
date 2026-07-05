@@ -11,7 +11,8 @@
 # The GPU build path (TORCH_INDEX build-arg) bypasses this cap via a separate install.
 torch>=2.1.0,<2.8.0
 torchvision>=0.16.0,<0.23.0  # required by ultralytics; V-JEPA 2 uses torch only
-transformers>=4.40.0         # HuggingFace AutoModel for V-JEPA 2 weights
+transformers>=4.45.0         # AutoModel for V-JEPA 2; AutoModelForDepthEstimation
+                             # for the Depth-Anything V2 free-space channel + SSv2
 accelerate>=0.27.0           # fast model loading for transformers
 
 # ── Object detection ──────────────────────────────────────────────────────────

@@ -53,6 +53,7 @@ class DecisionResult:
     world_model_label: str
     temporal_pattern: str
     explanation: str
+    reroute_direction: str = ""   # "left"/"right" for REROUTE (from depth), else ""
 
 
 class DecisionFuser:
@@ -98,6 +99,7 @@ class DecisionFuser:
         ultrasonic_risk: float = 0.0,
         clear_distance_m: float | None = None,
         reaction_s: float = 0.0,
+        clear_direction: str | None = None,
     ) -> DecisionResult:
         # ── AI risk fusion (vision only) ──────────────────────────────────────
         # The ultrasonic is NOT mixed in here — it is a separate deterministic
@@ -136,6 +138,7 @@ class DecisionFuser:
             )
 
         # ── 2. Vision-driven action from the fused AI risk ────────────────────
+        reroute_dir = ""
         if now < self._stop_until:
             action, explanation = Action.STOP, "Stop hold active"
         elif smoothed <= self._low_max:
@@ -149,9 +152,14 @@ class DecisionFuser:
             # way is clear.
             if temporal_pattern == "BLOCKING" or world_model_label == "BLOCKED":
                 action = Action.REROUTE
+                # Depth's clear direction (LEFT/RIGHT) tells the robot WHICH way
+                # to turn; CENTER/None → "" so the Pi uses its default spin.
+                reroute_dir = {"LEFT": "left", "RIGHT": "right"}.get(
+                    (clear_direction or "").upper(), "")
                 explanation = (
                     f"High risk ({smoothed:.2f}) – vision reroute "
-                    f"(wm={world_model_label}, pattern={temporal_pattern})"
+                    f"(wm={world_model_label}, pattern={temporal_pattern}, "
+                    f"turn={reroute_dir or 'default'})"
                 )
             else:
                 action = Action.STOP
@@ -190,10 +198,12 @@ class DecisionFuser:
         return self._result(
             action, smoothed, detector_risk, world_model_risk, temporal_risk,
             world_model_label, temporal_pattern, explanation,
+            reroute_direction=reroute_dir if action == Action.REROUTE else "",
         )
 
     @staticmethod
-    def _result(action, risk, det, wm, ta, wm_label, pattern, explanation):
+    def _result(action, risk, det, wm, ta, wm_label, pattern, explanation,
+                reroute_direction=""):
         return DecisionResult(
             action=action,
             risk_score=risk,
@@ -203,4 +213,5 @@ class DecisionFuser:
             world_model_label=wm_label,
             temporal_pattern=pattern,
             explanation=explanation,
+            reroute_direction=reroute_direction,
         )

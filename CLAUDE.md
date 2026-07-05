@@ -37,6 +37,14 @@ assets/         ← Demo video clips
   (`speed_governor.py`) — caps FORWARD/SLOW so the robot can stop within the
   clear distance given the measured reaction latency. Each layer only ever makes
   the action **more** cautious. Governor speeds are SI m/s and must be calibrated.
+- **Depth free-space** (`depth_perception.py`, optional Depth-Anything V2): gives
+  the governor a metric `clear_distance_m` (fused as the *nearer* of ultrasonic +
+  depth, so it catches angled walls the sonar misses) and a `clear_direction`
+  (LEFT/CENTER/RIGHT) that supplies the REROUTE turn direction. Class-agnostic —
+  combined with YOLO's `closest_label` for "obstacle 0.4m ahead (chair)". Degrades
+  to off (stub) when transformers/weights are absent.
+- **V-JEPA 2 anchors** default to synthetic; calibrate real ones with
+  `calibrate_anchors.py` and set `world_model.anchors_path`.
 
 ## Key files
 
@@ -48,6 +56,8 @@ assets/         ← Demo video clips
 | `Code/Server/ai_pipeline.py` | Orchestrates YOLO → V-JEPA 2 → SSv2 → decision → broadcast; measures reaction latency for the governor |
 | `Code/Server/decision.py` | Risk fusion + hysteresis; ultrasonic hard-stop (separate); vision reroute; applies the speed governor |
 | `Code/Server/speed_governor.py` | Kinematic safe-speed governor: caps action to `d_stop(v)=v·t_react+v²/(2a)+margin` |
+| `Code/Server/depth_perception.py` | Depth-Anything V2 → free-space distance ahead + clear direction (LEFT/CENTER/RIGHT); class-agnostic (sees walls) |
+| `Code/Server/calibrate_anchors.py` | Builds V-JEPA 2 corridor anchors from blocked/clear frame folders → `anchors.npz` |
 | `Code/Server/robot_control.py` | `TCPRobotController` sends `CMD_AIMOVE` to Pi; ultrasonic risk (fail-safe on no-echo) |
 | `Code/Robot/main_robot.py` | Pi entry point (thin client); camera stream + sonic + command loop |
 | `Code/Robot/tcp_robot_client.py` | Pi-side TCP client; `send_sonic()` / `send_frame()` |
@@ -61,7 +71,7 @@ assets/         ← Demo video clips
 Pi → PC:  CMD_SONIC#<sonic_cm>                        (ultrasonic distance; local hard-stop)
 Pi → PC:  4-byte LE uint32 + JPEG  (camera stream, port 8004, for ALL server-side AI)
           (the server also still accepts legacy CMD_DETECTION for backward compat)
-PC → Pi:  CMD_AIMOVE#<FORWARD|SLOW|STOP|REROUTE>   (AI navigation action)
+PC → Pi:  CMD_AIMOVE#<FORWARD|SLOW|STOP|REROUTE>[#<LEFT|RIGHT>]  (AI action; REROUTE carries the depth-derived turn direction)
 PC → Pi:  CMD_MOTOR#<L>#<R>                         (manual from UI viewer)
 PC → Pi:  CMD_STOP / CMD_KILL / CMD_AIMODE#<0|1|2>
 UI → PC:  CMD_AIMODE#<0|1|2>  |  CMD_MOTOR#<L>#<R>  |  CMD_KILL#0

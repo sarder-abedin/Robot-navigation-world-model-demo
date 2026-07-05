@@ -102,11 +102,16 @@ class RobotController:
     def stop(self) -> None:
         self._set(0, 0)
 
-    def reroute(self) -> None:
-        """Stop, turn to avoid obstacle, then resume slow forward."""
+    def reroute(self, direction: str = "") -> None:
+        """Stop, turn to avoid obstacle, then resume slow forward.
+
+        direction ("left"/"right", from the depth channel) overrides the
+        configured default so the robot turns toward the open side.
+        """
+        turn = (direction or "").strip().lower() or self._reroute_dir
         self.stop()
         time.sleep(0.2)
-        if self._reroute_dir == "left":
+        if turn == "left":
             self._set(-self._speed_slow, self._speed_slow)
         else:
             self._set(self._speed_slow, -self._speed_slow)
@@ -168,8 +173,9 @@ class MockRobotController:
         self.last_command = "STOP"
         logger.info("[MockRobot] %s", self.last_command)
 
-    def reroute(self) -> None:
-        self.last_command = f"REROUTE({self._reroute_dir})"
+    def reroute(self, direction: str = "") -> None:
+        turn = (direction or "").strip().lower() or self._reroute_dir
+        self.last_command = f"REROUTE({turn})"
         logger.info("[MockRobot] %s", self.last_command)
 
     def safe_stop(self) -> None:
@@ -237,9 +243,11 @@ class TCPRobotController:
     def stop(self) -> None:
         self._send("STOP")
 
-    def reroute(self) -> None:
-        # Timed manoeuvre executes on the Pi; we just send the action
-        self._send("REROUTE")
+    def reroute(self, direction: str = "") -> None:
+        # Timed manoeuvre executes on the Pi; append the turn direction (from the
+        # depth channel) so it turns toward the open side. Empty → Pi default.
+        d = (direction or "").strip().lower()
+        self._send(f"REROUTE#{d.upper()}" if d in ("left", "right") else "REROUTE")
 
     def safe_stop(self) -> None:
         self._conn.send_stop()
@@ -277,14 +285,20 @@ def build_robot_controller(cfg: dict, car=None, robot_conn=None):
     return MockRobotController(cfg)
 
 
-def execute_action(controller, action: str) -> None:
-    """Map a Decision Action enum value to a controller method."""
+def execute_action(controller, action: str, reroute_direction: str = "") -> None:
+    """Map a Decision Action enum value to a controller method.
+
+    reroute_direction ("left"/"right", from the depth free-space channel) tells
+    REROUTE which way to turn toward the open side.
+    """
     from decision import Action
+    if action == Action.REROUTE:
+        controller.reroute(reroute_direction)
+        return
     dispatch = {
         Action.FORWARD:  controller.forward,
         Action.SLOW:     controller.slow_forward,
         Action.STOP:     controller.stop,
-        Action.REROUTE:  controller.reroute,
     }
     fn = dispatch.get(action)
     if fn:

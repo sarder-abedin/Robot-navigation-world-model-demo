@@ -99,6 +99,7 @@ class AIPipeline:
         self._world_model = None
         self._temporal = None
         self._ssv2 = None
+        self._depth = None
         self._fuser = None
         self._robot = None
         self._nav_logger = None
@@ -293,11 +294,22 @@ class AIPipeline:
                 except Exception:
                     pass
 
+            # ── 5b. Depth free-space (class-agnostic geometry) ────────────────
+            # Metric distance ahead + which side is open. Sees walls the sonar
+            # misses and gives REROUTE a direction. Ignored (buffer_ready False)
+            # when the depth model isn't loaded.
+            depth_result = self._depth.estimate(frame_rgb)
+            depth_m = (depth_result.clear_distance_m
+                       if depth_result.buffer_ready and depth_result.clear_distance_m > 0 else None)
+            clear_direction = depth_result.clear_direction if depth_result.buffer_ready else None
+
             # ── 6. Decision fusion ────────────────────────────────────────────
-            # clear_distance_m: metric distance ahead for the speed governor.
-            # Only valid ultrasonic readings count (>0); -1.0 = blind → None, so
-            # the governor is skipped and the hard-stop/blind-hold layer applies.
-            clear_distance_m = sonic_cm / 100.0 if sonic_cm and sonic_cm > 0 else None
+            # clear_distance_m: the most conservative metric distance ahead for
+            # the governor — the nearer of the ultrasonic and the depth free-space
+            # (either may be None: sonar blind, or depth model absent).
+            sonic_m = sonic_cm / 100.0 if sonic_cm and sonic_cm > 0 else None
+            candidates = [d for d in (sonic_m, depth_m) if d is not None]
+            clear_distance_m = min(candidates) if candidates else None
             decision = self._fuser.decide(
                 detector_risk=det_result.raw_risk,
                 world_model_risk=wm_risk,
@@ -307,7 +319,18 @@ class AIPipeline:
                 ultrasonic_risk=sonic_risk,
                 clear_distance_m=clear_distance_m,
                 reaction_s=self._reaction_ema,
+                clear_direction=clear_direction,
             )
+
+            # Scene understanding: metric geometry (depth, class-agnostic → sees
+            # walls) + the object's YOLO label when it's a known class.
+            if depth_result.buffer_ready:
+                obj = det_result.closest_label or "obstacle/wall"
+                logger.info(
+                    "[%05d] SCENE: %s %.2fm ahead | open=%s | regions=%s",
+                    frame_idx, obj, depth_result.clear_distance_m,
+                    depth_result.clear_direction, depth_result.region_distances_m,
+                )
 
             if ssv2_sentence:
                 logger.info(
@@ -329,7 +352,8 @@ class AIPipeline:
                 motor_enabled = self._motor_enabled
                 logging_enabled = self._logging_enabled
             if motor_enabled:
-                self._execute_action(self._robot, decision.action)
+                self._execute_action(self._robot, decision.action,
+                                     getattr(decision, "reroute_direction", ""))
 
             # ── 8. Visualise ──────────────────────────────────────────────────
             annotated = self._visualizer.annotate(
@@ -410,6 +434,10 @@ class AIPipeline:
         from ssv2_model import SSv2Recognizer
         self._ssv2 = SSv2Recognizer(cfg)
         self._ssv2.load()
+
+        from depth_perception import DepthEstimator
+        self._depth = DepthEstimator(cfg)
+        self._depth.load()
 
         self._temporal = TemporalActionRecognizer(cfg)
         self._fuser = DecisionFuser(cfg, self._nav_mode)
