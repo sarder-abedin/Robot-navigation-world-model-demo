@@ -61,6 +61,35 @@ def test_estimator_stub_reports_not_ready():
     assert res.buffer_ready is False and res.is_stub is True
 
 
+def test_hud_draws_depth_overlay():
+    """annotate() accepts a DepthResult and renders without error."""
+    import yaml
+    from visualization import Visualizer
+    from decision import Action
+
+    cfg_path = os.path.join(os.path.dirname(__file__), "..", "Code", "Server", "config.yaml")
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+
+    class Det:
+        boxes, labels, confidences = [], [], []
+    class Dec:
+        action = Action.REROUTE
+        risk_score = 0.7
+        world_model_label = "BLOCKED"
+    class Temp:
+        pattern = "BLOCKING"
+
+    depth = freespace_from_depth(_depth(5.0, 0.4, 2.0), path_band_frac=1.0)
+    vis = Visualizer(cfg, "predictive")
+    frame = np.zeros((300, 400, 3), np.uint8)
+    out = vis.annotate(frame, Det(), Dec(), Temp(), ultrasonic_cm=40.0, depth=depth)
+    assert out.shape == frame.shape
+    # a None / not-ready depth must also be safe
+    out2 = vis.annotate(frame, Det(), Dec(), Temp(), depth=None)
+    assert out2.shape == frame.shape
+
+
 # ── CMD_AIMOVE#REROUTE#<dir> protocol ─────────────────────────────────────────
 
 def test_execute_action_reroute_passes_direction():

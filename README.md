@@ -241,9 +241,28 @@ Why it matters:
 
 ### Calibrating the speed governor
 
-The math is in **SI units** (m, s, m/s, m/s²), but the robot speaks PWM. Measure
-these on your robot and put them in `Code/Server/config.yaml` under
-`decision.governor` (defaults are conservative guesses, **not** measured):
+The math is in **SI units** (m, s, m/s, m/s²), but the robot speaks PWM — so
+measure the constants on the real robot. The easiest way is the on-robot script,
+which uses the motors + forward ultrasonic (point it at a flat wall with ~2–3 m
+of clear runway):
+
+```bash
+# ON THE ROBOT:
+cd Code/Robot
+python calibrate_governor.py                          # measure + print the block
+python calibrate_governor.py --apply ../Server/config.yaml   # measure + patch safely
+```
+
+It drives at the FORWARD/SLOW PWM, fits distance-vs-time from the sonar for the
+speeds, and uses the STOP coast distance for `max_decel_mps2` (`a = v²/2d`). It
+takes the **median of several runs**, **aborts** if the wall gets too close, and
+**refuses to emit/apply implausible values**. `--apply` is safe: it sanity-checks,
+backs up the config, patches only the governor numerics (comments preserved),
+re-validates the YAML, and restores the backup on any failure. (The script runs on
+the Pi; the governor lives in the PC's `config.yaml`, so either patch a synced
+copy with `--apply` or paste the printed block on the PC.)
+
+Or measure by hand and edit `Code/Server/config.yaml → decision.governor`:
 
 | Constant | How to measure |
 |---|---|
@@ -300,6 +319,7 @@ Robot-navigation-world-model-demo/
 │   │   ├── camera.py             ← picamera2 streaming
 │   │   ├── motor.py              ← tankMotor (gpiozero)
 │   │   ├── ultrasonic.py         ← distance sensor
+│   │   ├── calibrate_governor.py ← measure the governor's m/s constants on the robot
 │   │   ├── parameter.py          ← Pi hardware version detection
 │   │   ├── requirements_robot.txt← Pi Python deps (lightweight, no torch/ultralytics)
 │   │   └── config_robot.yaml     ← Pi-side configuration
@@ -676,7 +696,9 @@ furniture), from which the pipeline derives:
   **REROUTE an actual direction** to turn toward (`CMD_AIMOVE#REROUTE#LEFT|RIGHT`).
 
 Combined with YOLO it "understands" obstacles: geometry from depth + a **label**
-from YOLO's closest object (`… SCENE: chair 0.42m ahead | open=LEFT`); walls with
+from YOLO's closest object (`… SCENE: chair 0.42m ahead | open=LEFT`). The
+operator HUD shows this live too — a **"Depth: 0.42m ahead | open: LEFT"** line
+with LEFT/CENTER/RIGHT free-space bars (the open side highlighted). Walls with
 no YOLO class are still seen as `obstacle/wall`. It falls back to **off** when the
 model/weights are absent (ultrasonic + V-JEPA 2 keep working). Configure under
 `depth:` in `config.yaml`; a GPU/MPS box is recommended.
