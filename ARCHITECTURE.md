@@ -225,6 +225,20 @@ underneath and can only make the action *more* cautious.
   `BLOCKED` with uncalibrated/synthetic anchors — **calibrate the anchors** for
   the label + risk to be meaningful.
 
+**The ultrasonic hard-stop also drives reroute.** A bare wall the *sonar* sees
+often never raises the *vision* risk (YOLO can't class it → `det=0`; motion
+`STATIC_CLEAR` → `ta=0`), so the vision path alone would sit stopped forever. The
+ultrasonic hard-stop is an immediate reflex `STOP`, but if the obstacle won't
+clear within `ultrasonic_escalate_seconds` it **escalates into the same avoidance
+maneuver** (turn/back-up/rotate-to-search) to go around it. Once maneuvering, a
+**hysteresis** keeps the robot committed until the front is clear by a margin
+(`ultrasonic_resume_risk`) before resuming `FORWARD` — otherwise a momentary
+clear (the back-up phase, or the obstacle grazing the threshold) flips it to
+`FORWARD` and it drives straight back in, oscillating forward/backward. On the Pi
+a continuous stream of `REROUTE` frames does **not** restart the back-up+spin each
+frame (that would trap it in the back-up phase); the in-progress maneuver runs to
+completion.
+
 ---
 
 ## Baseline vs Predictive comparison

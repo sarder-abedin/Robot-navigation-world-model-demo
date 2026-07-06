@@ -389,6 +389,8 @@ thresholds + ultrasonic hard-stop.
 | `decision.reroute.backup_distance_m` | `0.35` | Closer than this + approaching → BACKUP |
 | `decision.reroute.direction_margin_m` | `0.05` | A side must beat centre free-space by this **absolute** distance to TURN toward it (else STOP/search) |
 | `decision.reroute.direction_margin_frac` | `0.10` | …OR by this **relative** fraction of the centre distance. The relative test makes reroute work on **uncalibrated** depth (per-side gaps of a few cm/percent); the old absolute-only 0.3 m was unreachable, so the robot never turned and sat in STOP |
+| `decision.reroute.ultrasonic_escalate_seconds` | `1.5` | Hold the ultrasonic reflex STOP this long; if the obstacle won't clear, escalate to a maneuver (turn/back-up/search) — a wall the sonar sees never raises the *vision* risk, so without this the robot just sits stopped |
+| `decision.reroute.ultrasonic_resume_risk` | `0.5` | Once maneuvering around a sonar obstacle, resume FORWARD only when ultrasonic risk drops below this (front clear by a margin). Hysteresis that stops the forward/backward oscillation at the stop threshold; lower = require more clearance |
 | `temporal_action.depth_presence_range_m` | `1.5` | Depth obstacle within this range (m) feeds the motion recogniser when YOLO is blind — but only if the centre is clearly nearer than the sides (a real obstacle, not a uniformly-close/mis-scaled reading) |
 | `decision.reroute.dynamic_classes` | `[person, cat, dog]` | Obstacles likely to move out of the way (→ WAIT) |
 | `decision.governor.enabled` | `true` | Kinematic safe-speed governor (proactive, latency-aware) |

@@ -32,7 +32,11 @@ assets/         ← Demo video clips
   not on the PC. The PC sends high-level `CMD_AIMOVE#FORWARD` etc.
 - **Navigation safety layers (in `decision.py`, in order):** (1) ultrasonic
   **hard-stop** — deterministic, distance-only, *separate* from the fused AI
-  risk; (2) **vision** action from fused det+wm+temporal risk; on high risk a
+  risk; a persistent block (obstacle won't clear within
+  `reroute.ultrasonic_escalate_seconds`) escalates into the closed-loop avoidance
+  so a sonar-seen wall (which never raises the vision risk) is rerouted around,
+  with `reroute.ultrasonic_resume_risk` hysteresis to avoid forward/backward
+  oscillation; (2) **vision** action from fused det+wm+temporal risk; on high risk a
   **closed-loop, context-aware avoidance** picks WAIT (crossing/person — path may
   clear) / TURN-toward-open-side-until-clear / BACKUP (rushing in) — direction
   from per-side depth, motion from the fast temporal pattern; guards:

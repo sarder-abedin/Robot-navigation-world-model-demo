@@ -216,6 +216,12 @@ decision:
     # sonar-seen obstacle often never raises the vision risk (YOLO can't classify a
     # wall), so without this the robot just sits stopped and never reroutes.
     ultrasonic_escalate_seconds: 1.5
+    # Once maneuvering around a sonar obstacle, keep clearing it until the
+    # ultrasonic risk drops below this before resuming FORWARD (hysteresis).
+    # 1.0 = resume the instant we're at the stop distance (causes forward/backward
+    # oscillation); lower = require more clearance first. 0.5 ≈ clear to ~2× the
+    # stop distance before driving forward again.
+    ultrasonic_resume_risk: 0.5
     # A side must beat the centre free-space to TURN toward it — by this absolute
     # margin OR by direction_margin_frac (relative). The relative test is what
     # makes reroute work on UNCALIBRATED depth, whose per-side gaps are only a few
