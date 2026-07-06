@@ -29,7 +29,7 @@ temporal_action:
 # ── Decision fusion ────────────────────────────────────────────────────────────
 decision:
   weights:
-    detector: 0.35              # YOLOv8 risk (computed on Pi, sent via CMD_DETECTION)
+    detector: 0.35              # YOLO11 risk (computed on Pi, sent via CMD_DETECTION)
     world_model: 0.45           # V-JEPA 2 risk (computed here)
     temporal: 0.20              # SSv2-style temporal risk (computed here)
   low_risk_max: 0.30            # below → FORWARD

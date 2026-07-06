@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Dockerfile.robot – Raspberry Pi 5 Robot Client (thin client, no on-Pi AI)
 #
-# All AI (YOLOv8n + V-JEPA 2 + SSv2) runs on the PC server. This image is
+# All AI (YOLO11n + V-JEPA 2 + SSv2) runs on the PC server. This image is
 # deliberately lightweight: it carries NO torch / ultralytics. It provides:
 #   - Picamera2 + libcamera (camera streaming)
 #   - GPIO via lgpio/gpiozero (motors)

@@ -2,7 +2,7 @@
 decision.py – Risk fusion and navigation action selection.
 
 Three signals are combined into a single risk score:
-  1. detector_risk   – instantaneous, from YOLOv8 bounding boxes
+  1. detector_risk   – instantaneous, from YOLO11 bounding boxes
   2. world_model_risk – predictive, from V-JEPA 2 future-latent comparison
   3. temporal_risk   – motion-pattern, from SSv2-style trajectory analysis
 

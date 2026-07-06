@@ -22,23 +22,99 @@ camera:
   # (SSv2/VideoMAE downsamples to its own 224 internally.)
   ai_frame_size: 256
 
-# ── Detector (YOLOv8) ─────────────────────────────────────────────────────────
+# ── Detector (YOLO11) ─────────────────────────────────────────────────────────
 # YOLO always runs HERE on the PC (both live and demo). The Pi is a thin client
 # that only streams camera frames + ultrasonic; it never runs YOLO.
 detector:
-  model: "yolov8n.pt"             # nano; swap to yolov8s/yolov8m for more accuracy on the PC
+  model: "yolo11n.pt"             # nano; swap to yolo11s/yolo11m for more accuracy on the PC
   confidence_threshold: 0.40
   iou_threshold: 0.45
+  # All 80 COCO classes the YOLO11 model can recognise are treated as obstacles,
+  # so the robot classifies/avoids anything it detects (not just furniture).
+  # Shorthand: set this to ["all"] (or []) to match every class without listing
+  # them — handy if you swap in a model with a different class set.
+  # To restrict avoidance to a subset, delete the classes you want to ignore.
   obstacle_classes:
     - "person"
+    - "bicycle"
+    - "car"
+    - "motorcycle"
+    - "airplane"
+    - "bus"
+    - "train"
+    - "truck"
+    - "boat"
+    - "traffic light"
+    - "fire hydrant"
+    - "stop sign"
+    - "parking meter"
+    - "bench"
+    - "bird"
+    - "cat"
+    - "dog"
+    - "horse"
+    - "sheep"
+    - "cow"
+    - "elephant"
+    - "bear"
+    - "zebra"
+    - "giraffe"
+    - "backpack"
+    - "umbrella"
+    - "handbag"
+    - "tie"
+    - "suitcase"
+    - "frisbee"
+    - "skis"
+    - "snowboard"
+    - "sports ball"
+    - "kite"
+    - "baseball bat"
+    - "baseball glove"
+    - "skateboard"
+    - "surfboard"
+    - "tennis racket"
+    - "bottle"
+    - "wine glass"
+    - "cup"
+    - "fork"
+    - "knife"
+    - "spoon"
+    - "bowl"
+    - "banana"
+    - "apple"
+    - "sandwich"
+    - "orange"
+    - "broccoli"
+    - "carrot"
+    - "hot dog"
+    - "pizza"
+    - "donut"
+    - "cake"
     - "chair"
     - "couch"
-    - "dining table"
     - "potted plant"
-    - "suitcase"
-    - "backpack"
-    - "bottle"
+    - "bed"
+    - "dining table"
+    - "toilet"
+    - "tv"
+    - "laptop"
+    - "mouse"
+    - "remote"
+    - "keyboard"
+    - "cell phone"
+    - "microwave"
+    - "oven"
+    - "toaster"
+    - "sink"
+    - "refrigerator"
     - "book"
+    - "clock"
+    - "vase"
+    - "scissors"
+    - "teddy bear"
+    - "hair drier"
+    - "toothbrush"
   # Fraction of frame width that counts as the "center danger zone"
   center_zone_ratio: 0.40
   # An obstacle is "close" when its bbox area exceeds this fraction of the frame

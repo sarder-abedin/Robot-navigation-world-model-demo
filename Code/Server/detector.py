@@ -1,5 +1,5 @@
 """
-detector.py – Per-frame object detection (YOLOv8) for the Raspberry Pi server.
+detector.py – Per-frame object detection (YOLO11) for the Raspberry Pi server.
 
 Only obstacle-class detections are returned.  The output is a DetectionResult
 that also carries a quick heuristic risk score suitable for the decision fuser.
@@ -34,7 +34,7 @@ class DetectionResult:
 
 class Detector:
     """
-    Thin YOLOv8 wrapper.
+    Thin YOLO11 wrapper.
 
     In the predictive pipeline the detector provides the *instantaneous* risk
     signal.  V-JEPA 2 provides the *future* risk signal.  Decision.py fuses both.
@@ -45,7 +45,14 @@ class Detector:
         self._model_name = det_cfg["model"]
         self._conf = det_cfg["confidence_threshold"]
         self._iou = det_cfg["iou_threshold"]
-        self._obstacle_classes = set(det_cfg["obstacle_classes"])
+        # obstacle_classes filters which YOLO classes count as obstacles. An
+        # empty list or the sentinel "all"/"*" disables the filter so *every*
+        # detected class is treated as an obstacle (None → match everything).
+        _classes = det_cfg.get("obstacle_classes") or []
+        if any(str(c).strip().lower() in ("all", "*") for c in _classes):
+            self._obstacle_classes = None
+        else:
+            self._obstacle_classes = set(_classes) or None
         self._center_ratio = det_cfg["center_zone_ratio"]
         self._close_area_thresh = max(1e-6, float(det_cfg["close_area_threshold"]))
         self._run_every = det_cfg.get("run_every_n_frames", 2)
@@ -56,7 +63,7 @@ class Detector:
     def load(self) -> None:
         from ultralytics import YOLO  # type: ignore
         self._model = YOLO(self._model_name)
-        logger.info("YOLOv8 loaded: %s", self._model_name)
+        logger.info("YOLO11 loaded: %s", self._model_name)
 
     def detect(self, frame: np.ndarray) -> DetectionResult:
         """
@@ -87,7 +94,7 @@ class Detector:
 
         for box in results.boxes:
             cls_name = results.names[int(box.cls[0])]
-            if cls_name not in self._obstacle_classes:
+            if self._obstacle_classes is not None and cls_name not in self._obstacle_classes:
                 continue
             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
             conf = float(box.conf[0])

@@ -105,7 +105,7 @@ class NavigationLogger:
         """
         Pi-side detection logging (post-refactor).
 
-        Records YOLOv8 detection data and the last action received from the
+        Records YOLO11 detection data and the last action received from the
         client PC.  V-JEPA 2 / temporal / decision columns are omitted because
         those computations now run on the client.
         """

@@ -3,7 +3,7 @@ torch>=2.1.0
 torchvision>=0.16.0
 transformers>=4.40.0          # V-JEPA 2 via HuggingFace
 accelerate>=0.27.0            # Efficient model loading on CPU/GPU
-ultralytics>=8.1.0            # YOLOv8
+ultralytics>=8.3.0            # YOLO11 (yolo11n.pt)
 
 # ── Robot / Hardware ─────────────────────────────────────────────────────────
 pyserial>=3.5                 # Serial communication with Freenove ESP32

@@ -1,5 +1,5 @@
 """
-detector.py – Per-frame object detection using YOLOv8.
+detector.py – Per-frame object detection using YOLO11.
 
 Outputs:
   DetectionResult
@@ -36,7 +36,7 @@ class DetectionResult:
 
 class Detector:
     """
-    Thin wrapper around a YOLOv8 model.
+    Thin wrapper around a YOLO11 model.
 
     Only classes listed in config obstacle_classes are treated as obstacles.
     The detector also marks whether any obstacle sits in the center horizontal
@@ -56,7 +56,7 @@ class Detector:
     def load(self) -> None:
         from ultralytics import YOLO  # type: ignore
         self._model = YOLO(self._model_name)
-        logger.info("YOLOv8 model loaded: %s", self._model_name)
+        logger.info("YOLO11 model loaded: %s", self._model_name)
 
     def detect(self, frame: np.ndarray) -> DetectionResult:
         if self._model is None:

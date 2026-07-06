@@ -8,12 +8,12 @@ Responsibilities
 ────────────────
   Pi (this machine):
     • Streams JPEG camera frames to PC (port 8004) for ALL server-side AI
-      (YOLOv8n + V-JEPA 2 + SSv2)
+      (YOLO11n + V-JEPA 2 + SSv2)
     • Reads the ultrasonic sensor and sends CMD_SONIC (its local hard-stop safety)
     • Executes CMD_AIMOVE (AI-computed actions) and CMD_MOTOR (manual) commands
 
   PC server (main_server.py):
-    • Decodes the camera stream → runs YOLOv8n + V-JEPA 2 + SSv2 + decision fusion
+    • Decodes the camera stream → runs YOLO11n + V-JEPA 2 + SSv2 + decision fusion
     • Reads CMD_SONIC for the ultrasonic hard-stop guard
     • Sends CMD_AIMOVE#<FORWARD|SLOW|STOP|REROUTE> (AI mode)
     • Sends CMD_MOTOR#<L>#<R> (manual mode from operator UI)
@@ -224,7 +224,7 @@ def main() -> None:
             logger.warning("Ultrasonic init failed (%s) – sensor disabled", exc)
             ultrasonic = None
 
-        # No YOLO on the Pi. All AI (YOLOv8n, V-JEPA 2, SSv2, decision) runs on the
+        # No YOLO on the Pi. All AI (YOLO11n, V-JEPA 2, SSv2, decision) runs on the
         # PC server; the Pi is a thin client that streams the camera, drives the
         # motors, and reports the ultrasonic distance (its local hard-stop safety).
         logger.info("Hardware initialised in live mode (thin client – no on-Pi AI)")

@@ -14,7 +14,7 @@ robot_cmd_port: 5004
 robot_video_port: 8004
 
 # ── Object detection ─────────────────────────────────────────────────────────
-# There is NO detector on the Pi. All AI (YOLOv8n, V-JEPA 2, SSv2) runs on the PC
+# There is NO detector on the Pi. All AI (YOLO11n, V-JEPA 2, SSv2) runs on the PC
 # server, which detects on the camera frames the Pi streams. The Pi only sends
 # the ultrasonic distance (CMD_SONIC) as its local hard-stop safety. Detector
 # settings live in the server's config.yaml.

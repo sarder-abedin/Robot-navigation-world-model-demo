@@ -1,7 +1,7 @@
 # ── Raspberry Pi robot client dependencies (thin client — NO AI) ──────────────
 # Install with:  pip3 install -r requirements_robot.txt
 #
-# The Pi runs NO AI: all detection (YOLOv8n) and prediction (V-JEPA 2, SSv2) run
+# The Pi runs NO AI: all detection (YOLO11n) and prediction (V-JEPA 2, SSv2) run
 # on the PC server. So there is deliberately no torch / ultralytics here — the Pi
 # only streams the camera, drives the motors, and reads the ultrasonic sensor.
 #
