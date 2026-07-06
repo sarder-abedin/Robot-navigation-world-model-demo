@@ -4,7 +4,7 @@ main_server.py – PC/Laptop server entry point (split-inference architecture).
 In this architecture the PC is the SERVER and the Raspberry Pi robot is the CLIENT:
 
   PC (this machine):
-    • Runs all AI  (YOLOv8 + V-JEPA 2 + SSv2 temporal + decision fusion)
+    • Runs all AI  (YOLO11 + V-JEPA 2 + SSv2 temporal + decision fusion)
     • Listens on ports 5003/8003  for the operator UI viewer (ai_viewer.py)
     • Listens on ports 5004/8004  for the robot (Pi) to connect
     • Shows the OpenCV HUD overlay window (optional)

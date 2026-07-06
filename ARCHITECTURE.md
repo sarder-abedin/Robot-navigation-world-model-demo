@@ -14,7 +14,7 @@ model contributes, the safety layers, and the TCP wire protocol.
 │  PC / Laptop  (TCP SERVER – runs ALL AI)    [venv OR Docker]    │
 │                                                                 │
 │  main_server.py              ← entry point                      │
-│  ├── YOLOv8n                 ← object detection (all modes)      │
+│  ├── YOLO11n                 ← object detection (all modes)      │
 │  ├── V-JEPA 2                ← future-scene prediction          │
 │  ├── SSv2 (VideoMAE)         ← genuine action recognition       │
 │  ├── Decision fuser          ← weighted risk fusion + hysteresis│
@@ -51,7 +51,7 @@ model contributes, the safety layers, and the TCP wire protocol.
 **Key design decisions:**
 - The PC is the TCP *server* (binds and listens); the robot and UI viewer are
   TCP *clients* (connect outbound to the PC).
-- **All AI runs on the PC** — YOLOv8n object detection, V-JEPA 2, SSv2 and the
+- **All AI runs on the PC** — YOLO11n object detection, V-JEPA 2, SSv2 and the
   decision fuser (GPU-capable heavy inference). The Pi runs no AI.
 - The Pi is a **thin client**: it streams JPEG camera frames to the PC and sends
   `CMD_SONIC` (its ultrasonic reading, the local hard-stop safety); the PC runs
@@ -69,7 +69,7 @@ model contributes, the safety layers, and the TCP wire protocol.
 
 | Model | Nickname | What it does | Where it runs |
 |---|---|---|---|
-| **YOLOv8n** | "The Photographer" | Spots obstacles in the current frame; produces aggregated risk+position **and the largest obstacle's class label** | PC |
+| **YOLO11n** | "The Photographer" | Spots obstacles in the current frame; produces aggregated risk+position **and the largest obstacle's class label** | PC |
 | **V-JEPA 2** | "The Fortune Teller" | Predicts what the scene will look like 0.5 s from now in latent space | PC |
 | **Depth-Anything V2** | "The Surveyor" | Class-agnostic depth → free-space distance ahead + which side is open (sees walls YOLO can't); feeds the governor + REROUTE direction | PC (optional) |
 | **SSv2 temporal rules** | "The Behaviour Analyst" | Classifies the obstacle's motion pattern (APPROACHING / CROSSING / BLOCKING …) — drives `temporal_risk` | PC |
@@ -226,7 +226,7 @@ underneath and can only make the action *more* cautious.
 
 | Feature | Baseline | Predictive |
 |---|---|---|
-| YOLOv8 detection (on PC) | ✓ | ✓ |
+| YOLO11 detection (on PC) | ✓ | ✓ |
 | V-JEPA 2 future prediction | ✗ (weight = 0) | ✓ (weight = 0.45) |
 | SSv2 temporal patterns | ½ weight | full weight |
 | Ultrasonic guard | ✓ | ✓ |
@@ -264,7 +264,7 @@ Robot-navigation-world-model-demo/
 │   │   ├── robot_connection.py   ← accepts robot TCP connection; parses CMD_SONIC
 │   │   ├── ai_pipeline.py        ← AI orchestration loop
 │   │   ├── camera_buffer.py      ← rolling frame buffer (demo / live / tcp modes)
-│   │   ├── detector.py           ← YOLOv8n (runs on the PC in all modes)
+│   │   ├── detector.py           ← YOLO11n (runs on the PC in all modes)
 │   │   ├── world_model.py        ← V-JEPA 2
 │   │   ├── temporal_action.py    ← SSv2-style motion-pattern heuristic (drives temporal_risk)
 │   │   ├── ssv2_model.py         ← genuine SSv2 model (VideoMAE); YOLO-filled sentence for annotation/log

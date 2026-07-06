@@ -9,7 +9,7 @@ the TCP layer can broadcast live status to connected clients without races.
 
 Pipeline per frame:
   1. Get latest frame from CameraBuffer
-  2. Detector.detect()      → DetectionResult  (YOLOv8, every N frames)
+  2. Detector.detect()      → DetectionResult  (YOLO11, every N frames)
   3. WorldModel.predict()   → WorldModelResult (V-JEPA 2, every M frames)
   4. TemporalAction.push()  → TemporalResult   (rules, every frame)
   5. DecisionFuser.decide() → DecisionResult   (weighted fusion + hysteresis)
@@ -440,7 +440,7 @@ class AIPipeline:
         self._detector = Detector(cfg)
         try:
             self._detector.load()
-            logger.info("YOLOv8n loaded on the server (all AI runs on the PC)")
+            logger.info("YOLO11n loaded on the server (all AI runs on the PC)")
         except Exception as exc:
             logger.error(
                 "YOLO failed to load on the server (%s) – detection disabled. "

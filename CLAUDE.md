@@ -3,14 +3,14 @@
 ## Project overview
 
 Predictive indoor navigation system for the Freenove FNK0077 Tank Robot.
-Split-inference architecture: Pi runs fast AI (YOLOv8n), PC runs heavy AI
+Split-inference architecture: Pi runs fast AI (YOLO11n), PC runs heavy AI
 (V-JEPA 2 + SSv2 + decision fusion), UI viewer runs on any laptop.
 
 ## Repository layout
 
 ```
 Code/Server/    ← PC AI server (V-JEPA 2, SSv2, decision, TCP server)
-Code/Robot/     ← Raspberry Pi client (YOLOv8n, camera, motors, ultrasonic)
+Code/Robot/     ← Raspberry Pi client (YOLO11n, camera, motors, ultrasonic)
 Code/Client/    ← Operator UI viewers (display-only, NO AI): Streamlit browser,
                   desktop_viewer.py (native window via pywebview), PyQt5 ai_viewer.py
 tests_rpi/      ← Unit tests (no GPU/hardware required)
@@ -22,7 +22,7 @@ assets/         ← Demo video clips
 - **PC = TCP server** (binds ports 5003/8003 for UI, 5004/8004 for robot)
 - **Pi = TCP client** (connects outbound; **thin client — runs NO AI**)
 - **UI viewer = TCP client** (connects to PC only)
-- **ALL AI runs on the PC.** YOLOv8n (`Code/Server/detector.py`), V-JEPA 2 and
+- **ALL AI runs on the PC.** YOLO11n (`Code/Server/detector.py`), V-JEPA 2 and
   SSv2 all run in `Code/Server/` in every mode (live and demo). The Pi streams
   camera frames (port 8004) and the PC detects on them. There is no on-Pi YOLO
   and no `DETECTOR_LOCATION` switch. The Pi's only sensor report is the ultrasonic
@@ -55,7 +55,7 @@ assets/         ← Demo video clips
 | File | Purpose |
 |---|---|
 | `Code/Server/main_server.py` | PC entry point; starts AI pipeline + TCP servers |
-| `Code/Server/detector.py` | YOLOv8n — runs on the **PC** on the Pi's streamed frames (all modes) |
+| `Code/Server/detector.py` | YOLO11n — runs on the **PC** on the Pi's streamed frames (all modes) |
 | `Code/Server/robot_connection.py` | Parses `CMD_SONIC` from Pi; exposes `get_sonic_cm()` and `send_aimove()` |
 | `Code/Server/ai_pipeline.py` | Orchestrates YOLO → V-JEPA 2 → SSv2 → decision → broadcast; measures reaction latency for the governor |
 | `Code/Server/decision.py` | Risk fusion + hysteresis; ultrasonic hard-stop (separate); closed-loop context-aware reroute (wait/turn/backup); applies the speed governor |

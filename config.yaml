@@ -14,9 +14,9 @@ camera:
   frame_height: 480
   fps: 30
 
-# ── Detector (YOLOv8) ────────────────────────────────────────────────────────
+# ── Detector (YOLO11) ────────────────────────────────────────────────────────
 detector:
-  model: "yolov8n.pt"       # nano is fine for embedded; swap to yolov8s for accuracy
+  model: "yolo11n.pt"       # nano is fine for embedded; swap to yolo11s for accuracy
   confidence_threshold: 0.40
   iou_threshold: 0.45
   # Classes that count as obstacles in a corridor

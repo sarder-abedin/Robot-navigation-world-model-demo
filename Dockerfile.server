@@ -8,7 +8,7 @@
 #   • OpenCV HUD overlay + TCP servers for UI viewer and robot connection
 #   • Streamlit browser-based operator UI on port 8501
 #
-# YOLOv8n also runs here (ALL AI is on the PC). The Pi is a thin client that only
+# YOLO11n also runs here (ALL AI is on the PC). The Pi is a thin client that only
 # streams camera frames + ultrasonic, so the server runs detection on those frames
 # in every mode. ultralytics is included in requirements_server.txt.
 #

@@ -13,7 +13,7 @@ What this viewer does
 
 Architecture
 ────────────
-  Pi (client)   → runs YOLOv8n + camera + motors; sends CMD_DETECTION
+  Pi (client)   → runs YOLO11n + camera + motors; sends CMD_DETECTION
   PC (server)   → runs V-JEPA 2 + SSv2 + decision; listens on 5003/8003
   This viewer   → connects to PC on 5003/8003; shows AI state + video
 

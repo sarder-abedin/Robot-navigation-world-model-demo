@@ -10,7 +10,7 @@ future obstacles — not just react to what is currently visible.
 
 - Predictive indoor navigation for the **Freenove FNK0077** tank robot.
 - **Split-inference** architecture: the Pi is a thin client that only streams
-  camera frames + ultrasonic distance; **all AI runs on the PC** — YOLOv8n +
+  camera frames + ultrasonic distance; **all AI runs on the PC** — YOLO11n +
   V-JEPA 2 + SSv2 + Depth-Anything V2.
 - **Multi-layer safety**, each layer only ever making the robot *more* cautious:
   ultrasonic hard-stop → vision reroute → kinematic speed governor → depth
@@ -69,7 +69,7 @@ For live mode, the native venv path, GPU builds and the full Docker flags, see
 
 - Robot reaches the goal point reliably in both modes
 - Predictive mode visibly begins decelerating **earlier** than baseline mode
-- The V-JEPA 2 label shows `BLOCKED` before the YOLOv8 detector fills the risk bar
+- The V-JEPA 2 label shows `BLOCKED` before the YOLO11 detector fills the risk bar
 - Motion is smoother in predictive mode (fewer full stops from a cold start)
 - System runs stably at ≥ 8 FPS in demo mode
 - All signals are logged to CSV for post-run analysis

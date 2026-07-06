@@ -94,7 +94,7 @@ python main_server.py --mode demo --video /path/to/my_video.mp4
 python main_server.py --mode demo --no-display
 ```
 
-In demo mode the server runs local YOLOv8n (no Pi needed).
+In demo mode the server runs local YOLO11n (no Pi needed).
 
 **Step 3 (optional)** – Open the operator UI viewer.
 
@@ -174,7 +174,7 @@ full flags):
 SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up --build
 ```
 The robot:
-1. Streams JPEG frames to the PC (the PC runs YOLOv8n + V-JEPA 2 on them)
+1. Streams JPEG frames to the PC (the PC runs YOLO11n + V-JEPA 2 on them)
 2. Reads the ultrasonic sensor and sends `CMD_SONIC#<cm>` (its local hard-stop
    safety) — it runs **no** AI itself
 3. Awaits `CMD_AIMOVE` (AI actions) and `CMD_MOTOR` (manual commands) and drives
