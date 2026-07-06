@@ -97,6 +97,7 @@ _DRIVE_STOP_BTN = ("background:#550000; color:white; font-size:14px; "
 
 CMD_PORT   = 5003
 VIDEO_PORT = 8003
+MAX_FRAME_BYTES = 10 * 1024 * 1024   # reject a desynced/garbage frame length
 
 SPEED_FULL = 1500
 SPEED_SLOW = 600
@@ -105,6 +106,8 @@ SPEED_SLOW = 600
 class AIViewer(QMainWindow):
     # Qt signal so the network recv thread can safely update the UI thread
     status_received = pyqtSignal(str)
+    frame_received = pyqtSignal(object)   # QImage from the video thread → main thread
+    disconnected = pyqtSignal()           # worker thread requests teardown on the GUI thread
 
     def __init__(self):
         super().__init__()
@@ -129,6 +132,8 @@ class AIViewer(QMainWindow):
         self._ui_timer.start(200)
 
         self.status_received.connect(self._process_status)
+        self.frame_received.connect(self._show_frame)   # GUI-thread pixmap update
+        self.disconnected.connect(self._disconnect)     # GUI-thread teardown
 
     # ── UI ─────────────────────────────────────────────────────────────────────
 
@@ -492,7 +497,7 @@ class AIViewer(QMainWindow):
                 "Space/Esc = stop   Ctrl+Q = shutdown   Ctrl+M = manual"
             )
             self._recv_thread = threading.Thread(
-                target=self._recv_loop, daemon=True, name="CmdRecv"
+                target=self._recv_loop, args=(self._cmd_sock,), daemon=True, name="CmdRecv"
             )
             self._recv_thread.start()
 
@@ -503,14 +508,23 @@ class AIViewer(QMainWindow):
                 self._video_sock.connect((ip, VIDEO_PORT))
                 self._video_sock.settimeout(1.0)
                 self._video_thread = threading.Thread(
-                    target=self._video_loop, daemon=True, name="VideoRecv"
+                    target=self._video_loop, args=(self._video_sock,), daemon=True, name="VideoRecv"
                 )
                 self._video_thread.start()
             except Exception:
+                try:
+                    self._video_sock.close()
+                except Exception:
+                    pass
                 self._video_sock = None
                 self._video_label.setText("[ Video unavailable ]")
 
         except Exception as exc:
+            try:
+                if self._cmd_sock:
+                    self._cmd_sock.close()
+            except Exception:
+                pass
             self._cmd_sock = None
             self._status_bar.setText(f"Connection failed: {exc}")
 
@@ -530,11 +544,13 @@ class AIViewer(QMainWindow):
 
     # ── Network threads ────────────────────────────────────────────────────────
 
-    def _recv_loop(self) -> None:
+    def _recv_loop(self, sock) -> None:
+        # Bind to the socket this thread was started with; if a reconnect swaps
+        # self._cmd_sock, this stale thread stops instead of clobbering the new one.
         buf = ""
-        while self._connected and self._cmd_sock:
+        while self._connected and sock is self._cmd_sock:
             try:
-                raw = self._cmd_sock.recv(1024)
+                raw = sock.recv(1024)
                 if not raw:
                     break
                 buf += raw.decode("utf-8", errors="replace")
@@ -545,41 +561,57 @@ class AIViewer(QMainWindow):
                         self.status_received.emit(line)
             except Exception:
                 break
-        self._disconnect()
+        if sock is self._cmd_sock:            # only tear down the CURRENT connection
+            self.disconnected.emit()          # marshalled to the GUI thread
 
-    def _video_loop(self) -> None:
-        while self._connected and self._video_sock:
+    def _video_loop(self, sock) -> None:
+        while self._connected and sock is self._video_sock:
+            header = self._recv_exact(sock, 4)
+            if header is None:
+                break
+            n = struct.unpack("<I", header)[0]
+            if not (0 < n <= MAX_FRAME_BYTES):   # desynced/garbage length → give up
+                break
+            jpg = self._recv_exact(sock, n)
+            if jpg is None:
+                break
             try:
-                header = self._recv_exact(4)
-                if not header:
-                    break
-                n = struct.unpack("<I", header)[0]
-                jpg = self._recv_exact(n)
-                if not jpg:
-                    break
                 arr = np.frombuffer(jpg, dtype=np.uint8)
                 bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                if bgr is not None:
-                    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                    h, w, ch = rgb.shape
-                    qimg = QImage(rgb.data, w, h, w * ch, QImage.Format_RGB888)
-                    pix = QPixmap.fromImage(qimg).scaled(
-                        420, 315, Qt.KeepAspectRatio, Qt.SmoothTransformation
-                    )
-                    self._video_label.setPixmap(pix)
+                if bgr is None:
+                    continue
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb.shape
+                # .copy() so the QImage owns its buffer (rgb goes out of scope) and
+                # is safe to hand to the GUI thread, which builds the QPixmap.
+                qimg = QImage(rgb.data, w, h, w * ch, QImage.Format_RGB888).copy()
+                self.frame_received.emit(qimg)
             except Exception:
-                break
+                continue
 
-    def _recv_exact(self, n: int) -> bytes | None:
+    def _show_frame(self, qimg) -> None:
+        """GUI-thread slot: turn the QImage into a scaled pixmap."""
+        pix = QPixmap.fromImage(qimg).scaled(
+            420, 315, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        self._video_label.setPixmap(pix)
+
+    def _recv_exact(self, sock, n: int) -> bytes | None:
         buf = b""
         while len(buf) < n:
             try:
-                chunk = self._video_sock.recv(n - len(buf))
-                if not chunk:
-                    return None
-                buf += chunk
+                chunk = sock.recv(n - len(buf))
+            except socket.timeout:
+                # The pipeline can be slow to emit the first frame; keep waiting as
+                # long as we're still the active connection instead of dying.
+                if self._connected and sock is self._video_sock:
+                    continue
+                return None
             except Exception:
                 return None
+            if not chunk:
+                return None
+            buf += chunk
         return buf
 
     # ── Status display ─────────────────────────────────────────────────────────
@@ -613,10 +645,15 @@ class AIViewer(QMainWindow):
         sonic = sonic.strip()
         try:
             cm = float(sonic)
-            self._sonic_val.setText(f"{cm:.1f} cm")
-            self._sonic_val.setStyleSheet(
-                "color:#ff4444;" if cm < 20 else "color:#44cc44;"
-            )
+            if cm < 0:
+                # -1 = no echo / sensor blind — don't render it as a 0 cm obstacle.
+                self._sonic_val.setText("--- (no echo)")
+                self._sonic_val.setStyleSheet("color:#888;")
+            else:
+                self._sonic_val.setText(f"{cm:.1f} cm")
+                self._sonic_val.setStyleSheet(
+                    "color:#ff4444;" if cm < 20 else "color:#44cc44;"
+                )
         except ValueError:
             self._sonic_val.setText(sonic)
 

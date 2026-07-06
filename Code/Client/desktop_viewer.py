@@ -92,7 +92,13 @@ def main(argv: list[str] | None = None) -> int:
         try:
             proc.wait(timeout=5)
         except Exception:
+            # terminate() didn't land in time – force-kill and reap the child so
+            # it doesn't linger as a zombie holding the Streamlit port.
             proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

@@ -53,6 +53,13 @@ robot:
   # Ramp PWM on big jumps so the motor inrush current doesn't brown out the Pi
   # (symptom: the Pi drops off the network the instant it starts to drive).
   soft_start: true
+  # Motor watchdog (failsafe): if no command arrives from the PC for this many
+  # seconds — a pipeline/server stall, a stalled video stream, or a silently
+  # half-open TCP link — the last drive command would otherwise keep the motors
+  # running into an obstacle. The Pi stops the motors after this timeout. Set to
+  # 0 to disable. Keep it comfortably above the PC's decision interval.
+  command_watchdog_seconds: 1.5
+  reroute_turn_seconds: 1.2
 
 # ── Ultrasonic sensor ─────────────────────────────────────────────────────────
 ultrasonic:

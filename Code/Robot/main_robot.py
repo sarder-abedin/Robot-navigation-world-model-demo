@@ -235,19 +235,18 @@ def main() -> None:
     from tcp_robot_client import RobotTCPClient
     client = RobotTCPClient(server_ip, cmd_port, video_port)
 
-    logger.info("Connecting to PC server at %s (cmd=%d, video=%d)…",
-                server_ip, cmd_port, video_port)
-    while not _shutdown:
-        if client.connect(timeout=5.0):
-            break
-        logger.warning("Connection failed – retrying in 2 s…")
-        time.sleep(2.0)
-
-    if _shutdown:
-        _cleanup(motor, camera, ultrasonic, client)
-        return
-
-    logger.info("Connected to PC server – robot client running")
+    # Motor / command parameters (read once; threads and the command loop below
+    # close over these across reconnects).
+    robot_cfg = cfg.get("robot", {})
+    # Speeds are PWM duty out of 4095. Keep them slow for a reactive demo. Tune
+    # at runtime without rebuilding via -e SPEED_FULL=<n> / -e SPEED_SLOW=<n>.
+    speed_full = _env_int("SPEED_FULL", robot_cfg.get("speed_full", 1600))
+    speed_slow = _env_int("SPEED_SLOW", robot_cfg.get("speed_slow", 1000))
+    reroute_secs = robot_cfg.get("reroute_turn_seconds", 1.2)
+    watchdog_timeout = float(robot_cfg.get("command_watchdog_seconds", 1.5))
+    sonic_interval = cfg.get("ultrasonic", {}).get("read_interval", 0.1)
+    sonic_cfg = cfg.get("ultrasonic", {})
+    logger.info("Motor speeds: FORWARD=%d  SLOW=%d  (of 4095 max)", speed_full, speed_slow)
 
     # ── Camera streaming thread ──────────────────────────────────────────────
     # ONLY camera_loop calls camera.get_frame(); the PC decodes the stream and
@@ -304,12 +303,7 @@ def main() -> None:
                 client.send_frame(buf.tobytes())
                 time.sleep(0.1)
 
-    cam_thread = threading.Thread(target=camera_loop, daemon=True, name="CameraStream")
-    cam_thread.start()
-
     # ── Ultrasonic broadcast thread ──────────────────────────────────────────
-    sonic_interval = cfg.get("ultrasonic", {}).get("read_interval", 0.1)
-
     def sonic_loop():
         """
         Reads the ultrasonic sensor and sends a CMD_SONIC message per cycle to
@@ -343,22 +337,81 @@ def main() -> None:
             client.send_sonic(sonic_cm)
             time.sleep(sonic_interval)
 
-    det_thread = threading.Thread(target=sonic_loop, daemon=True, name="SonicBroadcast")
-    det_thread.start()
+    # ── Connect + run, with an outer reconnect loop ──────────────────────────
+    # A transient network blip (Wi-Fi hiccup, PC restart) should drop the robot
+    # back to (re)connecting — with the motors stopped — instead of killing the
+    # client permanently. Each successful connection spins up fresh streaming
+    # threads and runs the command loop until the link drops or we shut down.
+    while not _shutdown:
+        logger.info("Connecting to PC server at %s (cmd=%d, video=%d)…",
+                    server_ip, cmd_port, video_port)
+        connected = False
+        while not _shutdown:
+            if client.connect(timeout=5.0):
+                connected = True
+                break
+            logger.warning("Connection failed – retrying in 2 s…")
+            time.sleep(2.0)
+        if not connected:
+            break   # _shutdown requested while (re)connecting
 
-    # ── Command receive loop (main thread) ───────────────────────────────────
-    robot_cfg = cfg.get("robot", {})
-    # Speeds are PWM duty out of 4095. Keep them slow for a reactive demo. Tune
-    # at runtime without rebuilding via -e SPEED_FULL=<n> / -e SPEED_SLOW=<n>.
-    speed_full = _env_int("SPEED_FULL", robot_cfg.get("speed_full", 1600))
-    speed_slow = _env_int("SPEED_SLOW", robot_cfg.get("speed_slow", 1000))
-    reroute_secs = robot_cfg.get("reroute_turn_seconds", 1.2)
-    logger.info("Motor speeds: FORWARD=%d  SLOW=%d  (of 4095 max)", speed_full, speed_slow)
+        logger.info("Connected to PC server – robot client running")
+        cam_thread = threading.Thread(target=camera_loop, daemon=True, name="CameraStream")
+        cam_thread.start()
+        det_thread = threading.Thread(target=sonic_loop, daemon=True, name="SonicBroadcast")
+        det_thread.start()
+
+        _command_loop(client, motor, speed_full, speed_slow, reroute_secs, watchdog_timeout)
+
+        # Command loop returned: link dropped or shutdown requested. Fail safe —
+        # stop the motors and any maneuver — before winding threads down.
+        _cancel_reroute()
+        if motor:
+            motor.setMotorModel(0, 0)
+        cam_thread.join(timeout=2.0)
+        det_thread.join(timeout=2.0)
+        if not _shutdown:
+            logger.warning("Lost connection to PC – reconnecting…")
+            client.disconnect()   # reset socket state before the next connect()
+            time.sleep(1.0)
+
+    # ── Shutdown ─────────────────────────────────────────────────────────────
+    _cleanup(motor, camera, ultrasonic, client)
+
+
+def _command_loop(client, motor, speed_full: int, speed_slow: int,
+                  reroute_secs: float, watchdog_timeout: float) -> None:
+    """Run the PC→Pi command loop until the link drops or shutdown is requested.
+
+    Motor watchdog (failsafe): if no command arrives from the PC within
+    watchdog_timeout seconds — a stalled pipeline/server, a stalled video
+    stream, or a silently half-open TCP link — the last drive command would
+    otherwise keep the motors running into an obstacle. Stop them until traffic
+    resumes. TCP keepalive (see tcp_robot_client) eventually tears down a truly
+    dead socket so the loop exits and the outer loop reconnects.
+    """
+    global _shutdown
+    last_cmd_time = time.monotonic()
+    watchdog_tripped = False
 
     while not _shutdown and client.is_connected:
         cmd = client.get_command(timeout=0.5)
         if cmd is None:
+            if (watchdog_timeout > 0 and not watchdog_tripped
+                    and (time.monotonic() - last_cmd_time) > watchdog_timeout):
+                _cancel_reroute()
+                if motor:
+                    motor.setMotorModel(0, 0)
+                watchdog_tripped = True
+                logger.warning(
+                    "No command from PC for %.1fs – motor watchdog STOP (failsafe).",
+                    watchdog_timeout,
+                )
             continue
+
+        # Any command means the PC is alive and driving us again.
+        last_cmd_time = time.monotonic()
+        watchdog_tripped = False
 
         parts = cmd.split("#")
         command = parts[0].strip()
@@ -400,9 +453,6 @@ def main() -> None:
             logger.warning("CMD_KILL received – robot shutting down")
             _cancel_reroute()
             _shutdown = True
-
-    # ── Shutdown ─────────────────────────────────────────────────────────────
-    _cleanup(motor, camera, ultrasonic, client)
 
 
 def _execute_aimove(action: str, motor, speed_full: int, speed_slow: int,

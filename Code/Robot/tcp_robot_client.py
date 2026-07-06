@@ -48,12 +48,14 @@ class RobotTCPClient:
             self._cmd_sock.settimeout(timeout)
             self._cmd_sock.connect((self._server_ip, self._cmd_port))
             self._cmd_sock.settimeout(None)
+            self._enable_keepalive(self._cmd_sock)
             logger.info("Connected to PC server cmd port %d", self._cmd_port)
 
             self._video_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._video_sock.settimeout(timeout)
             self._video_sock.connect((self._server_ip, self._video_port))
             self._video_sock.settimeout(None)
+            self._enable_keepalive(self._video_sock)
             logger.info("Connected to PC server video port %d", self._video_port)
 
             self._connected = True
@@ -80,6 +82,25 @@ class RobotTCPClient:
                 pass
         self._cmd_sock = None
         self._video_sock = None
+
+    @staticmethod
+    def _enable_keepalive(sock: socket.socket) -> None:
+        """Turn on TCP keepalive so a silently dropped link (cable pull, PC
+        crash) is eventually surfaced as a socket error instead of hanging the
+        half-open connection forever. Tuning params are best-effort (Linux)."""
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            # Linux-specific tuning: first probe after 5s idle, then every 3s,
+            # drop after 3 failed probes (~14s total to detect a dead peer).
+            for opt, val in (
+                ("TCP_KEEPIDLE", 5),
+                ("TCP_KEEPINTVL", 3),
+                ("TCP_KEEPCNT", 3),
+            ):
+                if hasattr(socket, opt):
+                    sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), val)
+        except OSError as exc:
+            logger.debug("Could not set TCP keepalive options: %s", exc)
 
     # ── Send ──────────────────────────────────────────────────────────────────
 
