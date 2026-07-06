@@ -71,9 +71,15 @@ class DecisionFuser:
         self._med_max = dec["medium_risk_max"]
         self._hysteresis = dec["hysteresis"]
         self._stop_hold = dec["stop_hold_seconds"]
+        # Risk-drop decay rate (risk units/second): how fast caution is released
+        # after the vision risk falls. A brief detection dropout decays slowly
+        # instead of snapping to clear, which kills the FORWARD↔STOP stutter from a
+        # flickering YOLO detection. Large value → old immediate-drop behaviour.
+        self._risk_decay_per_s = float(dec.get("risk_decay_per_s", 0.6))
 
         self._mode = navigation_mode
         self._last_risk = 0.0
+        self._risk_ts = time.monotonic()
         self._stop_until: float = 0.0
 
         # Closed-loop, context-aware reroute (wait / turn-until-clear / backup).
@@ -152,18 +158,23 @@ class DecisionFuser:
         )
         fused = float(min(max(fused, 0.0), 1.0))
 
-        # Hysteresis: allow risk to climb immediately, require margin to drop
-        if fused > self._last_risk:
-            smoothed = fused
-        else:
-            smoothed = (
-                fused
-                if (self._last_risk - fused) > self._hysteresis
-                else self._last_risk
-            )
-        self._last_risk = smoothed
-
         now = time.monotonic()
+        # Risk smoothing: climb immediately (react fast to a new obstacle), but on
+        # a DROP hold and DECAY the risk over time instead of snapping to clear.
+        # This absorbs a flickering YOLO detection (det spikes to ~0.87 for a frame
+        # then vanishes): without it the fused risk bounces across the threshold and
+        # the robot stutters FORWARD↔STOP and never lets its avoidance run; with it
+        # the elevated risk persists ~risk_decay_per_s so the robot commits to a
+        # steady SLOW/STOP/reroute. Tiny fluctuations below `hysteresis` are ignored.
+        dt = max(0.0, now - self._risk_ts)
+        self._risk_ts = now
+        if fused >= self._last_risk:
+            smoothed = fused
+        elif (self._last_risk - fused) <= self._hysteresis:
+            smoothed = self._last_risk
+        else:
+            smoothed = max(fused, self._last_risk - self._risk_decay_per_s * dt)
+        self._last_risk = smoothed
 
         # ── 1. Ultrasonic hard-stop (deterministic safety override) ───────────
         # ultrasonic_risk reaches 1.0 only when the sensor reports an obstacle

@@ -89,8 +89,8 @@ UI → PC:  CMD_AIMODE#<0|1|2>  |  CMD_MOTOR#<L>#<R>  |  CMD_KILL#0
 UI → PC:  CMD_LOGGING#<0|1>                         (toggle server-side run logging)
 UI → PC:  CMD_GOAL#<x_permille>#<y_permille>        (set goal at normalized image coords ×1000; Phase 2: tracked marker + bearing/depth on HUD, no motion yet)
 UI → PC:  CMD_GOAL_CLEAR                            (clear the goal)
-PC → UI:  CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>#<clear_dist_m>#<clear_dir>
-          (ssv2_sentence = genuine SSv2 label with the YOLO object filled in; depth fields appended for the UI panel; trailing fields optional for old clients)
+PC → UI:  CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>#<clear_dist_m>#<clear_dir>#<goal_status>
+          (ssv2 + depth + goal_status appended for the UI panel; goal_status ∈ none|tracking|lost|reached; on `reached` the PC stops the robot and waits for a new UI command; trailing fields optional for old clients)
 PC → UI:  4-byte LE uint32 + JPEG  (annotated HUD frames, port 8003)
 ```
 

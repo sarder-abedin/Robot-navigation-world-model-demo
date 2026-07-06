@@ -175,18 +175,23 @@ class AIViewer(QMainWindow):
         root.addWidget(self._video_label, alignment=Qt.AlignHCenter)
 
         # ── Goal point (click on the video) ───────────────────────────────────
-        goal_box = QGroupBox("Navigation Goal  (Phase 1: marker only, no motion)")
-        goal_row = QHBoxLayout(goal_box)
+        goal_box = QGroupBox("Navigation Goal  (tracked bearing/depth; no motion)")
+        goal_col = QVBoxLayout(goal_box)
+        goal_row = QHBoxLayout()
         self._btn_set_goal = QPushButton("🎯  Set Goal (click video)")
         self._btn_set_goal.setCheckable(True)
         self._btn_set_goal.setToolTip(
-            "Arm goal selection, then click a point on the video. Sends CMD_GOAL; "
-            "the server draws a GOAL marker on the HUD. Does not move the robot yet."
+            "Arm goal selection, then click a point on the video. The server tracks "
+            "it and shows its bearing/depth on the HUD. Does not steer the robot yet."
         )
         goal_row.addWidget(self._btn_set_goal)
         self._btn_clear_goal = QPushButton("Clear Goal")
         self._btn_clear_goal.clicked.connect(self._clear_goal)
         goal_row.addWidget(self._btn_clear_goal)
+        goal_col.addLayout(goal_row)
+        self._goal_status_lbl = QLabel("")
+        self._goal_status_lbl.setAlignment(Qt.AlignCenter)
+        goal_col.addWidget(self._goal_status_lbl)
         root.addWidget(goal_box)
 
         # ── AI state panel ────────────────────────────────────────────────────
@@ -743,6 +748,8 @@ class AIViewer(QMainWindow):
         ssv2 = parts[6] if len(parts) > 6 else ""
         clear_dist = parts[7] if len(parts) > 7 else ""
         clear_dir = parts[8] if len(parts) > 8 else ""
+        goal_status = parts[9] if len(parts) > 9 else "none"
+        self._apply_goal_status(goal_status)
 
         self._action_label.setText(action)
         self._action_label.setStyleSheet(ACTION_CSS.get(action, ACTION_CSS["---"]))
@@ -807,6 +814,24 @@ class AIViewer(QMainWindow):
             self._cmd_sock.sendall(f"CMD_AIMODE#{mode}\n".encode("utf-8"))
         except Exception as exc:
             self._status_bar.setText(f"Send error: {exc}")
+
+    def _apply_goal_status(self, status: str) -> None:
+        """Reflect the server's goal status (none|tracking|lost|reached) in the UI."""
+        if status == "reached":
+            # The server has stopped the robot on arrival; it waits for a new
+            # command (set a new goal, or re-activate AI).
+            self._goal_status_lbl.setText(
+                "✅ GOAL REACHED — robot stopped.\nSet a new goal or re-activate AI."
+            )
+            self._goal_status_lbl.setStyleSheet("color:#33cc33; font-weight:bold;")
+        elif status == "lost":
+            self._goal_status_lbl.setText("⚠ Goal lost — re-select it on the video.")
+            self._goal_status_lbl.setStyleSheet("color:#e0a000;")
+        elif status == "tracking":
+            self._goal_status_lbl.setText("Tracking goal…")
+            self._goal_status_lbl.setStyleSheet("color:#33aaff;")
+        else:
+            self._goal_status_lbl.setText("")
 
     def _update_activation_gate(self) -> None:
         """AI activation (AUTO/PREDICTIVE/BASELINE) is enabled only once connected

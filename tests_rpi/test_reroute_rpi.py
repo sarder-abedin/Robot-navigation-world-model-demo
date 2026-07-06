@@ -203,9 +203,13 @@ def test_blind_depth_still_decides_without_crash(cfg):
 
 
 def test_avoidance_resets_when_path_clears(cfg):
+    import time
     f = DecisionFuser(cfg, "predictive")
     _hi(f, pattern="CROSSING", label="person", dc=0.6)   # start waiting
     assert f._wait_since != 0.0
+    # Let the held risk decay (path stays clear for a moment), then a clear frame
+    # → FORWARD resets the avoidance timers.
+    f._risk_ts -= 3.0                                     # simulate time so risk decays
     f.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR")     # low risk → forward
     assert f._wait_since == 0.0 and f._turn_since == 0.0
 

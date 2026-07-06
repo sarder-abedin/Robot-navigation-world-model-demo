@@ -105,6 +105,22 @@ def test_tracker_depth_sampler_used():
     assert st.distance_m == pytest.approx(1.7)
 
 
+def test_tracker_marks_reached_within_arrival_distance():
+    trk = GoalTracker({"goal": {"arrival_distance_m": 0.4}})
+    trk.set_target(0.5, 0.5)
+    far = trk.update(_frame_with_patch(200, 150), depth_sampler=lambda x, y: 1.2)
+    assert not far.reached
+    near = trk.update(_frame_with_patch(200, 150), depth_sampler=lambda x, y: 0.3)
+    assert near.reached
+    # Latched: a noisy far reading doesn't un-reach it.
+    noisy = trk.update(_frame_with_patch(200, 150), depth_sampler=lambda x, y: 2.0)
+    assert noisy.reached
+    # A new target re-arms arrival.
+    trk.set_target(0.5, 0.5)
+    again = trk.update(_frame_with_patch(200, 150), depth_sampler=lambda x, y: 1.2)
+    assert not again.reached
+
+
 def test_cleared_tracker_is_inactive():
     trk = GoalTracker()
     trk.set_target(0.5, 0.5)
@@ -186,11 +202,20 @@ def test_hud_depth_bars_drawn_without_text():
     assert out[88:120, 9:170].sum() > 0     # L/C/R bars still drawn (spatial cue kept)
 
 
-def test_extended_aistatus_parses_with_depth_and_ssv2():
+def test_extended_aistatus_parses_with_depth_ssv2_and_goal():
     # Mirrors ai_viewer._process_status field layout for the extended message.
-    line = "CMD_AISTATUS#FORWARD#12#MIXED#STATIC_CLEAR#62.2#person moving closer#0.45#RIGHT"
+    line = "CMD_AISTATUS#FORWARD#12#MIXED#STATIC_CLEAR#62.2#person moving closer#0.45#RIGHT#reached"
     parts = line.split("#")
     assert parts[6] == "person moving closer"    # ssv2
     assert float(parts[7]) == 0.45 and parts[8] == "RIGHT"   # depth dist + dir
+    assert parts[9] == "reached"                 # goal status
     # Old 6-field client still parses the core fields.
     assert parts[:6] == ["CMD_AISTATUS", "FORWARD", "12", "MIXED", "STATIC_CLEAR", "62.2"]
+
+
+def test_hud_reached_goal_renders_green_banner():
+    out = _viz().annotate(np.zeros((300, 400, 3), np.uint8), _Det(), _Decision(),
+                          _Temporal(), goal=GoalState(active=True, reached=True, x=0.5, y=0.5,
+                                                      distance_m=0.3))
+    assert out.shape == (300, 400, 3)            # renders the reached state without error
+    assert out[130:170, 180:220].sum() > 0       # marker drawn at the goal
