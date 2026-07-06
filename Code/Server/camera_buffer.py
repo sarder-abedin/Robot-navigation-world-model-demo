@@ -51,6 +51,14 @@ class CameraBuffer:
         # pipeline can skip re-processing the same frame thousands of times.
         self._seq = 0
 
+        # Network / stream statistics (for the run log). Recorded wherever raw
+        # JPEG bytes arrive (TCP push_frame, live StreamingOutput).
+        self._net_lock = threading.Lock()
+        self._net_frames = 0            # total frames received/decoded
+        self._net_bytes = 0             # cumulative JPEG bytes received
+        self._net_last_bytes = 0        # size of the most recent JPEG frame
+        self._net_times: deque[float] = deque(maxlen=30)   # recent arrival timestamps
+
         self._thread: threading.Thread | None = None
         self._running = False
 
@@ -145,6 +153,41 @@ class CameraBuffer:
             with self._lock:
                 self._buf.append(frame)
                 self._seq += 1
+            self._record_net(len(jpg))
+
+    def _record_net(self, nbytes: int) -> None:
+        """Record one received frame's size + arrival time for the stream stats."""
+        with self._net_lock:
+            self._net_frames += 1
+            self._net_bytes += nbytes
+            self._net_last_bytes = nbytes
+            self._net_times.append(time.monotonic())
+
+    def get_net_stats(self) -> dict:
+        """Network/stream statistics for the run log.
+
+        recv_fps is measured over the recent arrival window (not the whole run),
+        so it reflects the current camera→PC frame rate. dropped frames (received
+        but skipped as stale) are tracked by the pipeline, not here.
+        """
+        with self._net_lock:
+            frames = self._net_frames
+            total_bytes = self._net_bytes
+            last_bytes = self._net_last_bytes
+            times = list(self._net_times)
+        recv_fps = 0.0
+        if len(times) >= 2:
+            span = times[-1] - times[0]
+            if span > 0:
+                recv_fps = (len(times) - 1) / span
+        kbps = recv_fps * last_bytes * 8 / 1000.0   # instantaneous throughput
+        return {
+            "recv_fps": recv_fps,
+            "last_bytes": last_bytes,
+            "frames_recv": frames,
+            "total_bytes": total_bytes,
+            "kbps": kbps,
+        }
 
     # ── Background capture loops ──────────────────────────────────────────────
 
@@ -171,6 +214,7 @@ class CameraBuffer:
                 with self._lock:
                     self._buf.append(frame)
                     self._seq += 1
+                self._record_net(len(jpg))
 
     def _demo_loop(self) -> None:
         """Read frames from a video file and feed the buffer at video frame-rate."""
