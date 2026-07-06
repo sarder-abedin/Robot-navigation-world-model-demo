@@ -48,12 +48,14 @@ class TankServer:
         return self.videoServerIsBusy
 
     def sendDataToCmdClinet(self, data, ip_address=None):
-        # Send data to the command server client(s)
+        # Send data to the command server client(s). This runs on the AI pipeline
+        # thread (live AI status), so use a SHORT send timeout: a slow/stuck UI
+        # client is dropped quickly rather than stalling navigation for seconds.
         self.set_cmd_server_busy(True)
         if ip_address is not None:
             self.cmdServer.send_to_client(ip_address, data)  # Send data to a specific client
         else:
-            self.cmdServer.send_to_all_client(data)  # Send data to all connected clients of the command server
+            self.cmdServer.send_to_all_client(data, timeout=0.5)  # non-blocking-ish broadcast
         self.set_cmd_server_busy(False)
 
     def sendDataToVideoClient(self, data, ip_address=None):

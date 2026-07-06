@@ -164,7 +164,27 @@ class AIViewer(QMainWindow):
         self._video_label.setStyleSheet(
             "background:#1a1a1a; border:1px solid #555; color:#666;"
         )
+        # Click-to-set-goal: capture clicks on the video and map them to normalized
+        # image coords. Active only while "Set Goal" is armed.
+        self._video_label.mousePressEvent = self._on_video_click
+        self._pix_w = 0   # size of the last displayed pixmap (for click→image mapping)
+        self._pix_h = 0
         root.addWidget(self._video_label, alignment=Qt.AlignHCenter)
+
+        # ── Goal point (click on the video) ───────────────────────────────────
+        goal_box = QGroupBox("Navigation Goal  (Phase 1: marker only, no motion)")
+        goal_row = QHBoxLayout(goal_box)
+        self._btn_set_goal = QPushButton("🎯  Set Goal (click video)")
+        self._btn_set_goal.setCheckable(True)
+        self._btn_set_goal.setToolTip(
+            "Arm goal selection, then click a point on the video. Sends CMD_GOAL; "
+            "the server draws a GOAL marker on the HUD. Does not move the robot yet."
+        )
+        goal_row.addWidget(self._btn_set_goal)
+        self._btn_clear_goal = QPushButton("Clear Goal")
+        self._btn_clear_goal.clicked.connect(self._clear_goal)
+        goal_row.addWidget(self._btn_clear_goal)
+        root.addWidget(goal_box)
 
         # ── AI state panel ────────────────────────────────────────────────────
         state_box = QGroupBox("AI State")
@@ -608,7 +628,52 @@ class AIViewer(QMainWindow):
         pix = QPixmap.fromImage(qimg).scaled(
             420, 315, Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
+        self._pix_w = pix.width()
+        self._pix_h = pix.height()
         self._video_label.setPixmap(pix)
+
+    # ── Goal selection (Phase 1: send CMD_GOAL, server draws the marker) ─────────
+
+    def _on_video_click(self, event) -> None:
+        """Map a click on the video to normalized image coords and send CMD_GOAL.
+
+        Only acts while 'Set Goal' is armed. The displayed pixmap is centred in the
+        label with KeepAspectRatio, so account for any letterbox offset.
+        """
+        if not self._btn_set_goal.isChecked():
+            return
+        if not (self._cmd_sock and self._connected):
+            self._status_bar.setText("Not connected – cannot set goal.")
+            return
+        if self._pix_w <= 0 or self._pix_h <= 0:
+            self._status_bar.setText("No video yet – cannot set goal.")
+            return
+        off_x = (self._video_label.width() - self._pix_w) / 2.0
+        off_y = (self._video_label.height() - self._pix_h) / 2.0
+        nx = (event.pos().x() - off_x) / self._pix_w
+        ny = (event.pos().y() - off_y) / self._pix_h
+        if not (0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0):
+            self._status_bar.setText("Click inside the video image to set a goal.")
+            return
+        # Per-mille integers: the server's message parser is integer-only.
+        try:
+            self._cmd_sock.sendall(
+                f"CMD_GOAL#{int(nx * 1000)}#{int(ny * 1000)}\n".encode("utf-8")
+            )
+            self._status_bar.setText(f"Goal set at ({nx:.2f}, {ny:.2f}) – see HUD marker.")
+        except Exception as exc:
+            self._status_bar.setText(f"Send error: {exc}")
+        self._btn_set_goal.setChecked(False)   # one-shot; re-arm for the next goal
+
+    def _clear_goal(self) -> None:
+        if not (self._cmd_sock and self._connected):
+            self._status_bar.setText("Not connected – cannot clear goal.")
+            return
+        try:
+            self._cmd_sock.sendall(b"CMD_GOAL_CLEAR\n")
+            self._status_bar.setText("Goal cleared.")
+        except Exception as exc:
+            self._status_bar.setText(f"Send error: {exc}")
 
     def _recv_exact(self, sock, n: int) -> bytes | None:
         buf = b""

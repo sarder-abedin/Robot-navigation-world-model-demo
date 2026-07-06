@@ -90,7 +90,7 @@ producing a human sentence like **"person moving closer"** or
   navigation behaviour is unchanged.
 - Shown on the video HUD (`SSv2: …`) and as an `SSv2:` line in the AI-state panel,
   and written to the CSV log.
-- Runs every `ssv2.run_every_n_frames` (default 16) on CPU, auto-halved on a GPU;
+- Runs every `ssv2.run_every_n_frames` (default 32) on CPU, auto-halved on a GPU;
   uses `device: auto` (CUDA → MPS → CPU). First run downloads the checkpoint
   (~350 MB) from HuggingFace (`transformers` is already a dependency for V-JEPA 2).
   If the model/weights are unavailable it falls back to a stub that still fills
@@ -273,6 +273,8 @@ Both modes run on the **same code path** — only the weight vector changes.
 | `CMD_KILL` | PC → Pi | `CMD_KILL` | Shutdown robot process |
 | `CMD_AIMODE` | UI → PC | `CMD_AIMODE#<0/1/2>` | Mode change from operator |
 | `CMD_LOGGING` | UI → PC | `CMD_LOGGING#<0/1>` | Toggle PC-side run logging |
+| `CMD_GOAL` | UI → PC | `CMD_GOAL#<x‰>#<y‰>` | Set navigation goal at normalized image coords ×1000 (per-mille, since the parser is integer-only). **Phase 1: HUD marker only, no motion** |
+| `CMD_GOAL_CLEAR` | UI → PC | `CMD_GOAL_CLEAR` | Clear the navigation goal |
 | `CMD_KILL` | UI → PC | `CMD_KILL#0` | Shutdown from operator |
 | `CMD_AISTATUS` | PC → UI | `CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>` | Live AI state (SSv2 sentence is the last, optional field) |
 | Video frames | Pi → PC | 4-byte LE uint32 length + JPEG | Camera stream for V-JEPA 2 (port 8004) |

@@ -79,8 +79,13 @@ class Visualizer:
         ultrasonic_cm: float = -1.0,
         ssv2_sentence: str = "",
         depth=None,
+        goal=None,
     ) -> np.ndarray:
-        """Annotate a BGR frame with full AI pipeline state."""
+        """Annotate a BGR frame with full AI pipeline state.
+
+        goal: optional (x_norm, y_norm) in [0,1] — the user-selected navigation
+        goal point (Phase 1: drawn only, does not yet drive motion).
+        """
         vis = frame_bgr.copy()
         h, w = vis.shape[:2]
 
@@ -113,7 +118,34 @@ class Visualizer:
         if ssv2_sentence:
             self._draw_ssv2(vis, ssv2_sentence, w, h)
 
+        if goal is not None:
+            self._draw_goal(vis, goal, w, h)
+
         return vis
+
+    def _draw_goal(self, vis, goal, w: int, h: int) -> None:
+        """Draw the user-selected navigation goal marker (Phase 1: display only)."""
+        try:
+            gx, gy = float(goal[0]), float(goal[1])
+        except (TypeError, ValueError, IndexError):
+            return
+        px = int(min(max(gx, 0.0), 1.0) * w)
+        py = int(min(max(gy, 0.0), 1.0) * h)
+        colour = (0, 215, 255)   # amber (BGR)
+        # Crosshair + ring so it's visible over any background.
+        cv2.circle(vis, (px, py), 10, colour, 2, cv2.LINE_AA)
+        cv2.circle(vis, (px, py), 2, colour, -1, cv2.LINE_AA)
+        cv2.line(vis, (px - 16, py), (px - 4, py), colour, 2, cv2.LINE_AA)
+        cv2.line(vis, (px + 4, py), (px + 16, py), colour, 2, cv2.LINE_AA)
+        cv2.line(vis, (px, py - 16), (px, py - 4), colour, 2, cv2.LINE_AA)
+        cv2.line(vis, (px, py + 4), (px, py + 16), colour, 2, cv2.LINE_AA)
+        label = "GOAL"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+        ly = py - 16 if py - 16 - th > 0 else py + 28
+        cv2.rectangle(vis, (px - tw // 2 - 3, ly - th - 3),
+                      (px + tw // 2 + 3, ly + 3), (0, 0, 0), -1)
+        cv2.putText(vis, label, (px - tw // 2, ly), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45, colour, 1, cv2.LINE_AA)
 
     def _draw_depth(self, vis, depth, w: int, h: int) -> None:
         """Depth free-space HUD: distance ahead, open direction, L/C/R region bars."""

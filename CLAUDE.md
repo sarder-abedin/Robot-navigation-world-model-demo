@@ -86,6 +86,8 @@ PC → Pi:  CMD_MOTOR#<L>#<R>                         (manual from UI viewer)
 PC → Pi:  CMD_STOP / CMD_KILL / CMD_AIMODE#<0|1|2>
 UI → PC:  CMD_AIMODE#<0|1|2>  |  CMD_MOTOR#<L>#<R>  |  CMD_KILL#0
 UI → PC:  CMD_LOGGING#<0|1>                         (toggle server-side run logging)
+UI → PC:  CMD_GOAL#<x_permille>#<y_permille>        (set goal at normalized image coords ×1000; Phase 1: HUD marker only, no motion)
+UI → PC:  CMD_GOAL_CLEAR                            (clear the goal)
 PC → UI:  CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>
           (ssv2_sentence = genuine SSv2 label with the YOLO object filled in; last field, optional for old clients)
 PC → UI:  4-byte LE uint32 + JPEG  (annotated HUD frames, port 8003)

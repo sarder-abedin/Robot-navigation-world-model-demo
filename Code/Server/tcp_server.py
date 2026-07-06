@@ -68,6 +68,14 @@ class TCPServer:
                     except OSError:
                         continue
                     client_socket.setblocking(0)
+                    # Low-latency delivery for the UI: disable Nagle so small
+                    # status messages and the tail of each JPEG frame are sent
+                    # immediately instead of being coalesced (which makes the UI
+                    # feel laggy/unresponsive).
+                    try:
+                        client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    except OSError:
+                        pass
                     with self._clients_lock:
                         self.client_sockets[client_socket] = client_address
                         self.active_connections += 1
@@ -120,7 +128,7 @@ class TCPServer:
         # Send a byte to the stop pipe to signal the server to stop
         self.stop_pipe_w.send(b'\x00')
 
-    def _send_all(self, client_socket, data, timeout=5.0):
+    def _send_all(self, client_socket, data, timeout=2.0):
         """
         Reliably send all bytes on a NON-BLOCKING socket.
 
@@ -152,15 +160,18 @@ class TCPServer:
                 if not writable:
                     raise socket.error("send timed out (client not draining)")
 
-    def send_to_all_client(self, message):
-        # Send a message to all connected clients
+    def send_to_all_client(self, message, timeout=2.0):
+        # Send a message to all connected clients. `timeout` bounds how long we
+        # wait on a slow client before dropping it — keep it SHORT for anything
+        # sent from the AI pipeline thread (status), so a stuck UI can never
+        # stall navigation.
         if isinstance(message, str):
             message = message.encode('utf-8')
         with self._clients_lock:
             targets = list(self.client_sockets.keys())
         for client_socket in targets:
             try:
-                self._send_all(client_socket, message)
+                self._send_all(client_socket, message, timeout=timeout)
             except (socket.error, OSError, ValueError) as e:
                 print(f"Error sending data to {self.client_sockets.get(client_socket)}: {e}")
                 self.remove_client(client_socket)
