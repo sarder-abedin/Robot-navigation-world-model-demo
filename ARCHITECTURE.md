@@ -90,7 +90,7 @@ producing a human sentence like **"person moving closer"** or
   navigation behaviour is unchanged.
 - Shown on the video HUD (`SSv2: …`) and as an `SSv2:` line in the AI-state panel,
   and written to the CSV log.
-- Runs every `ssv2.run_every_n_frames` (default 16) on CPU, auto-halved on a GPU;
+- Runs every `ssv2.run_every_n_frames` (default 32) on CPU, auto-halved on a GPU;
   uses `device: auto` (CUDA → MPS → CPU). First run downloads the checkpoint
   (~350 MB) from HuggingFace (`transformers` is already a dependency for V-JEPA 2).
   If the model/weights are unavailable it falls back to a stub that still fills

@@ -162,7 +162,13 @@ ssv2:
   model_id: "MCG-NJU/videomae-base-finetuned-ssv2"
   num_frames: 16
   device: "auto"               # auto = CUDA → MPS → CPU; or force "cuda"/"mps"/"cpu"
-  run_every_n_frames: 16       # CPU cadence; auto-halved on a GPU
+  # SSv2 (VideoMAE) is the heaviest single stage (~100 ms/tick on CPU) and is
+  # ANNOTATION/LOG ONLY — it does not drive navigation. Profiling on a live run
+  # showed its ticks caused ~31% of camera frames to be dropped (pipeline 20 fps
+  # vs 30 fps received) and pushed p95 latency to ~130 ms, making the UI feel
+  # laggy and slowing the STOP reaction. Run it less often (was 16); lower it if
+  # you want a snappier SSv2 caption at the cost of throughput, or disable it.
+  run_every_n_frames: 32       # CPU cadence; auto-halved on a GPU
   min_confidence: 0.15         # below this the sentence is shown as tentative
 
 # ── Depth free-space channel (Depth-Anything V2, class-agnostic geometry) ─────
