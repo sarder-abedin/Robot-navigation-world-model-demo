@@ -61,6 +61,12 @@ def test_estimator_stub_reports_not_ready():
     assert res.buffer_ready is False and res.is_stub is True
 
 
+def test_depth_scale_config_read():
+    # The linear scale correction (CALIBRATION.md) is read from config.
+    assert DepthEstimator({"depth": {"scale": 0.74}})._scale == 0.74
+    assert DepthEstimator({"depth": {}})._scale == 1.0   # default = raw metres
+
+
 def test_hud_draws_depth_overlay():
     """annotate() accepts a DepthResult and renders without error."""
     import yaml

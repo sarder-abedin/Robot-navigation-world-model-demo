@@ -1,6 +1,6 @@
 # How to Run — Tank Robot Predictive Navigation
 
-> Part of the [Tank Robot](README.md) docs — see also [ARCHITECTURE.md](ARCHITECTURE.md) · [HOW_TO_RUN.md](HOW_TO_RUN.md) · [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+> Part of the [Tank Robot](README.md) docs — see also [ARCHITECTURE.md](ARCHITECTURE.md) · [HOW_TO_RUN.md](HOW_TO_RUN.md) · [CALIBRATION.md](CALIBRATION.md) · [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 Everything operational: setup, the three run modes (demo / live / Docker), the UI
 viewer options, anchor + governor calibration, configuration tables, tests and
@@ -309,65 +309,31 @@ available in the PyQt5 viewer.
 
 ---
 
-## Calibrate V-JEPA 2 anchors for your corridor
+## Calibration
 
-V-JEPA 2 scores a scene by cosine similarity to a **blocked** and a **clear**
-anchor. By default those anchors are **synthetic** (a grey square vs a gradient),
-which barely matches a real corridor — so `BLOCKED`/`CLEAR` is coarse until you
-calibrate. This is the cheapest, highest-impact improvement.
-
-Collect a handful of images each (snapshots or frames grabbed from the demo
-video) into two folders, then build + save persistent anchors:
+Several signals are only *qualitatively* right until calibrated for your robot and
+space — the V-JEPA 2 risk/label, the speed governor's metres, and the depth scale.
+The full step-by-step (prerequisites, verification, troubleshooting) lives in
+**[CALIBRATION.md](CALIBRATION.md)**. The essentials:
 
 ```bash
+# 1. V-JEPA 2 anchors (biggest quality win) — run where V-JEPA 2 loads (GPU/MPS box)
 cd Code/Server
 python calibrate_anchors.py --blocked ./blocked --clear ./clear --out anchors.npz
-# then point the server at them:
-#   config.yaml →  world_model.anchors_path: "anchors.npz"
-```
+#   → config.yaml: world_model.anchors_path: "anchors.npz"
 
-At least ~10 frames per class is recommended, captured on your robot in your
-space. Run it where V-JEPA 2 actually loads (the native GPU/MPS box) so the
-anchors come from the real encoder, not the stub. On startup the server logs
-`V-JEPA 2 anchors loaded from … (calibrated)` when they're in use.
+# 2. Depth scale — measure a known distance, read the HUD, set scale = actual/reported
+#   → config.yaml: depth.scale: <actual/reported>
 
----
-
-## Calibrating the speed governor
-
-The math is in **SI units** (m, s, m/s, m/s²), but the robot speaks PWM — so
-measure the constants on the real robot. The easiest way is the on-robot script,
-which uses the motors + forward ultrasonic (point it at a flat wall with ~2–3 m
-of clear runway):
-
-```bash
-# ON THE ROBOT:
+# 3. Speed governor — ON THE ROBOT, facing a flat wall with ~2–3 m runway
 cd Code/Robot
-python calibrate_governor.py                          # measure + print the block
 python calibrate_governor.py --apply ../Server/config.yaml   # measure + patch safely
 ```
 
-It drives at the FORWARD/SLOW PWM, fits distance-vs-time from the sonar for the
-speeds, and uses the STOP coast distance for `max_decel_mps2` (`a = v²/2d`). It
-takes the **median of several runs**, **aborts** if the wall gets too close, and
-**refuses to emit/apply implausible values**. `--apply` is safe: it sanity-checks,
-backs up the config, patches only the governor numerics (comments preserved),
-re-validates the YAML, and restores the backup on any failure. (The script runs on
-the Pi; the governor lives in the PC's `config.yaml`, so either patch a synced
-copy with `--apply` or paste the printed block on the PC.)
-
-Or measure by hand and edit `Code/Server/config.yaml → decision.governor`:
-
-| Constant | How to measure |
-|---|---|
-| `forward_speed_mps` | Drive at the FORWARD PWM over a tape-measured distance; speed = distance ÷ time. |
-| `slow_speed_mps` | Same at the SLOW PWM. |
-| `max_decel_mps2` | From `forward_speed_mps`, command STOP and measure the coast distance `d`; `a ≈ v² / (2d)`. |
-| `target_speed_mps` | `0` for a full stop, or a small crawl speed to only *reduce* impact. |
-| `safety_margin_m` | Fixed buffer (e.g. 0.10 m) for sensor/timing slop. |
-
-Leave `enabled: false` to turn the governor off and fall back to the fixed
-thresholds + ultrasonic hard-stop.
+Do them in that order. The **reroute direction** (relative depth) and the
+**ultrasonic hard-stop** (sonar) work *without* calibration — only the absolute-
+distance signals (world-model risk, governor metres, goal-arrival distance) need it.
+See **[CALIBRATION.md](CALIBRATION.md)** for details.
 
 ---
 

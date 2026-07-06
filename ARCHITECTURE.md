@@ -1,6 +1,6 @@
 # Architecture — Tank Robot Predictive Navigation
 
-> Part of the [Tank Robot](README.md) docs — see also [ARCHITECTURE.md](ARCHITECTURE.md) · [HOW_TO_RUN.md](HOW_TO_RUN.md) · [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+> Part of the [Tank Robot](README.md) docs — see also [ARCHITECTURE.md](ARCHITECTURE.md) · [HOW_TO_RUN.md](HOW_TO_RUN.md) · [CALIBRATION.md](CALIBRATION.md) · [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 How the system works under the hood: the split-inference topology, what each AI
 model contributes, the safety layers, and the TCP wire protocol.
