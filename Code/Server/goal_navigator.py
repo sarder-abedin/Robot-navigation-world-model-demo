@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 class GoalState:
     active: bool = False           # a goal is set and being tracked
     lost: bool = False             # tracker has lost the goal (no lock for a while)
+    reached: bool = False          # the goal is within the arrival distance
     x: float = 0.5                 # tracked goal centre, normalized [0,1]
     y: float = 0.5
     bearing: float = 0.0           # horizontal offset from centre [-1 left .. +1 right]
@@ -103,11 +104,13 @@ class GoalTracker:
         self._patch_frac = float(g.get("patch_frac", 0.12))       # goal patch size (frac of frame)
         self._hfov_deg = float(g.get("horizontal_fov_deg", 66.0))  # camera horizontal FOV
         self._max_lost = int(g.get("max_lost_frames", 15))         # misses before "lost"
+        self._arrival_m = float(g.get("arrival_distance_m", 0.4))  # goal depth ≤ this → reached
         self._use_csrt = csrt_available()
         self._tracker = None
         self._pending = None      # (x,y) normalized, awaiting init on the next frame
         self._active = False
         self._lost_count = 0
+        self._reached = False     # latched once the goal is within arrival distance
         self._last = GoalState()
         logger.info("GoalTracker using %s tracker",
                     "CSRT (opencv-contrib)" if self._use_csrt else "template-match fallback")
@@ -119,11 +122,13 @@ class GoalTracker:
         self._pending = (min(max(x_norm, 0.0), 1.0), min(max(y_norm, 0.0), 1.0))
         self._active = True
         self._lost_count = 0
+        self._reached = False
 
     def clear(self) -> None:
         self._pending = None
         self._tracker = None
         self._active = False
+        self._reached = False
         self._last = GoalState()
 
     @property
@@ -174,7 +179,7 @@ class GoalTracker:
         if lost and not self._last.lost:
             logger.info("Goal lost (no track for %d frames)", self._lost_count)
         self._last = GoalState(
-            active=True, lost=lost, x=self._last.x, y=self._last.y,
+            active=True, lost=lost, reached=self._reached, x=self._last.x, y=self._last.y,
             bearing=self._last.bearing, bearing_deg=self._last.bearing_deg,
             distance_m=self._last.distance_m,
         )
@@ -192,6 +197,10 @@ class GoalTracker:
                 dist = float(d) if d is not None and d > 0 else None
             except Exception:
                 dist = None
-        self._last = GoalState(active=True, lost=False, x=cx, y=cy,
+        # Arrival: latch once the goal's depth is within the arrival distance, so a
+        # noisy depth reading can't un-reach it (cleared only on a new/clear goal).
+        if dist is not None and dist <= self._arrival_m:
+            self._reached = True
+        self._last = GoalState(active=True, lost=False, reached=self._reached, x=cx, y=cy,
                                bearing=bearing, bearing_deg=bearing_deg, distance_m=dist)
         return self._last

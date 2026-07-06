@@ -101,6 +101,7 @@ class AIPipeline:
         from goal_navigator import GoalTracker
         self._goal_tracker = GoalTracker(cfg)
         self._goal_state = None     # latest GoalState (tracked position, bearing, depth)
+        self._goal_reached_handled = False   # fired the stop-on-arrival once
 
         self._last_annotated_bgr: np.ndarray | None = None
         self._annotated_lock = threading.Lock()
@@ -190,11 +191,13 @@ class AIPipeline:
         gx = min(max(float(x_norm), 0.0), 1.0)
         gy = min(max(float(y_norm), 0.0), 1.0)
         self._goal_tracker.set_target(gx, gy)
+        self._goal_reached_handled = False   # a new goal re-arms arrival detection
         logger.info("Navigation goal set at (%.3f, %.3f) [tracking + HUD only – no motion]", gx, gy)
 
     def clear_goal(self) -> None:
         """Clear the user-selected navigation goal."""
         self._goal_tracker.clear()
+        self._goal_reached_handled = False
         with self._state_lock:
             self._goal_state = None
         logger.info("Navigation goal cleared")
@@ -430,6 +433,12 @@ class AIPipeline:
                 goal_state = self._goal_tracker.update(
                     frame_bgr, depth_sampler=self._depth.depth_at_norm,
                 )
+                # Arrival: on the first frame the goal is reached, STOP and hold —
+                # the robot waits for a new UI command (new goal / re-activate).
+                if goal_state.reached and not self._goal_reached_handled:
+                    self._goal_reached_handled = True
+                    self.set_motor_enabled(False)
+                    logger.info("Goal reached (≤ arrival distance) – stopping, awaiting UI command")
             with self._state_lock:
                 motor_enabled = self._motor_enabled
                 logging_enabled = self._logging_enabled
@@ -477,7 +486,7 @@ class AIPipeline:
 
             # ── 10. Broadcast AI status to TCP client ─────────────────────────
             self._broadcast_status(decision, temporal_result, sonic_cm,
-                                   ssv2_sentence, depth_result)
+                                   ssv2_sentence, depth_result, goal_state)
 
             # ── 11. Update shared state ───────────────────────────────────────
             with self._state_lock:
@@ -558,7 +567,8 @@ class AIPipeline:
     # ── TCP status broadcast ──────────────────────────────────────────────────
 
     def _broadcast_status(self, decision, temporal_result, sonic_cm: float,
-                          ssv2_sentence: str = "", depth_result=None) -> None:
+                          ssv2_sentence: str = "", depth_result=None,
+                          goal_state=None) -> None:
         """
         Send a compact status string to all connected command clients so the
         lightweight client UI can display live AI state (in the panel below the
@@ -566,9 +576,9 @@ class AIPipeline:
 
         Format:
           CMD_AISTATUS#<action>#<risk*100>#<wm_label>#<pattern>#<sonic_cm>#<ssv2>
-                       #<clear_dist_m>#<clear_dir>\r\n
-        Fields are appended, never reordered, so older clients that split on the
-        first 6–7 fields keep working; newer clients also read the depth fields.
+                       #<clear_dist_m>#<clear_dir>#<goal_status>\r\n
+        goal_status ∈ none|tracking|lost|reached. Fields are appended, never
+        reordered, so older clients that split on the first 6–8 fields keep working.
         """
         if self._tcp_server is None:
             return
@@ -588,6 +598,15 @@ class AIPipeline:
                 clear_dir = getattr(depth_result, "clear_direction", "") or ""
             else:
                 clear_dist, clear_dir = -1.0, ""
+            # Goal status for the UI ("Goal reached" banner etc.).
+            if goal_state is None or not getattr(goal_state, "active", False):
+                goal_status = "none"
+            elif goal_state.reached:
+                goal_status = "reached"
+            elif goal_state.lost:
+                goal_status = "lost"
+            else:
+                goal_status = "tracking"
             msg = (
                 f"CMD_AISTATUS#{action}"
                 f"#{int(decision.risk_score * 100)}"
@@ -596,7 +615,8 @@ class AIPipeline:
                 f"#{sonic_cm:.1f}"
                 f"#{ssv2}"
                 f"#{clear_dist:.2f}"
-                f"#{clear_dir}\r\n"
+                f"#{clear_dir}"
+                f"#{goal_status}\r\n"
             )
             if self._tcp_server.isCmdServerConnected():
                 self._tcp_server.sendDataToCmdClinet(msg)

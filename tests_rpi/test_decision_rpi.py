@@ -30,6 +30,25 @@ def test_high_risk_stops(cfg):
     assert r.action in (Action.STOP, Action.REROUTE)
 
 
+def test_risk_hold_absorbs_detection_flicker(cfg):
+    """A high detector spike must not snap back to clear the very next frame: the
+    risk decays over time, so a flickering YOLO detection doesn't stutter the
+    robot FORWARD↔STOP. Rises are still immediate."""
+    import time
+    f = DecisionFuser(cfg, "predictive")
+    # Frame with a strong (flickering) detection → risk climbs immediately.
+    hi = f.decide(0.87, 0.47, 0.0, "MIXED", "STATIC_CLEAR")
+    assert hi.risk_score > cfg["decision"]["medium_risk_max"]
+    # Next frame the detection vanishes (det=0), evaluated ~immediately → the held
+    # risk barely decays, so it stays elevated (no snap to clear).
+    lo = f.decide(0.0, 0.47, 0.0, "MIXED", "STATIC_CLEAR")
+    assert lo.risk_score > 0.45          # held near the spike, not dropped to ~0.21
+    # After enough time elapses, caution is released and risk falls.
+    f._risk_ts -= 2.0                     # simulate 2 s passing
+    later = f.decide(0.0, 0.47, 0.0, "MIXED", "STATIC_CLEAR")
+    assert later.risk_score < 0.30       # decayed back toward the det-free baseline
+
+
 def test_blocking_pattern_reroutes(cfg):
     f = DecisionFuser(cfg, "predictive")
     r = f.decide(0.85, 0.9, 0.9, "BLOCKED", "BLOCKING")

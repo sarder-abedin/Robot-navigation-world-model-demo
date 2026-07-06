@@ -146,8 +146,10 @@ class Visualizer:
         gx = min(max(float(getattr(goal, "x", 0.5)), 0.0), 1.0)
         gy = min(max(float(getattr(goal, "y", 0.5)), 0.0), 1.0)
         lost = bool(getattr(goal, "lost", False))
+        reached = bool(getattr(goal, "reached", False))
         px, py = int(gx * w), int(gy * h)
-        colour = (0, 0, 255) if lost else (0, 215, 255)   # red if lost, else amber (BGR)
+        # green if reached, red if lost, else amber (BGR)
+        colour = (0, 200, 0) if reached else ((0, 0, 255) if lost else (0, 215, 255))
 
         # Heading arrow from the image centre toward the goal (visualises bearing).
         cxp, cyp = w // 2, h // 2
@@ -160,8 +162,10 @@ class Visualizer:
         for dx0, dy0, dx1, dy1 in ((-16, 0, -4, 0), (4, 0, 16, 0), (0, -16, 0, -4), (0, 4, 0, 16)):
             cv2.line(vis, (px + dx0, py + dy0), (px + dx1, py + dy1), colour, 2, cv2.LINE_AA)
 
-        # Readout: bearing (deg, L/R) + distance, or LOST.
-        if lost:
+        # Readout: REACHED, LOST, or bearing (deg, L/R) + distance.
+        if reached:
+            label = "GOAL REACHED"
+        elif lost:
             label = "GOAL: lost"
         else:
             deg = float(getattr(goal, "bearing_deg", 0.0))

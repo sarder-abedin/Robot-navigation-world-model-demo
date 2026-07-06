@@ -195,6 +195,7 @@ goal:
   patch_frac: 0.12             # size of the tracked goal patch (fraction of frame)
   horizontal_fov_deg: 66.0     # camera horizontal field of view → bearing in degrees
   max_lost_frames: 15          # consecutive missed frames before the goal is "lost"
+  arrival_distance_m: 0.4      # goal depth ≤ this → "reached" → stop + notify the UI
 
 # ── Decision fusion ────────────────────────────────────────────────────────────
 # Thresholds must be coordinated with robot speed and pipeline latency: the
@@ -211,6 +212,11 @@ decision:
   low_risk_max: 0.25           # above this → SLOW (was 0.30; brake earlier)
   medium_risk_max: 0.50        # above this → STOP/REROUTE (was 0.60)
   hysteresis: 0.05
+  # Risk rises immediately but DROPS at most this fast (risk units/second), so a
+  # flickering YOLO detection (det spikes then vanishes for a frame) doesn't make
+  # the robot stutter FORWARD↔STOP — the elevated risk is held ~0.5s and its
+  # avoidance runs to completion. Raise for snappier release; lower to hold longer.
+  risk_decay_per_s: 0.6
   stop_hold_seconds: 1.5
 
   # ── Closed-loop, context-aware reroute ─────────────────────────────────────
