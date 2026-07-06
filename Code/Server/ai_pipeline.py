@@ -281,15 +281,22 @@ class AIPipeline:
             depth_m = (depth_result.clear_distance_m
                        if depth_result.buffer_ready and depth_result.clear_distance_m > 0 else None)
             clear_direction = depth_result.clear_direction if depth_result.buffer_ready else None
+            regions = depth_result.region_distances_m if depth_result.buffer_ready else {}
 
             # ── 4b. Temporal motion pattern ───────────────────────────────────
             # Use YOLO's obstacle state; but if YOLO sees nothing while depth shows
-            # a close obstacle (e.g. a wall), synthesize a state from depth so the
-            # motion isn't blind (stuck at STATIC_CLEAR) to non-YOLO obstacles.
+            # a close obstacle CENTRED in our path (nearer than the sides), synthesize
+            # a state from depth so the motion isn't blind (stuck at STATIC_CLEAR) to
+            # non-YOLO obstacles. A uniformly-close reading (open corridor with
+            # mis-scaled depth, or a flat wall) is left to STATIC_CLEAR so it doesn't
+            # peg temporal_risk and stall the robot on a clear path.
             obs_state = self._detection_to_state(det_result)
             if not det_result.boxes and depth_result.buffer_ready:
                 from temporal_action import depth_to_obstacle_state
-                ds = depth_to_obstacle_state(depth_m, self._depth_presence_range)
+                ds = depth_to_obstacle_state(
+                    regions.get("CENTER", depth_m), self._depth_presence_range,
+                    depth_left_m=regions.get("LEFT"), depth_right_m=regions.get("RIGHT"),
+                )
                 if ds is not None:
                     obs_state = ds
             self._temporal.push(obs_state)
@@ -323,9 +330,8 @@ class AIPipeline:
             sonic_m = sonic_cm / 100.0 if sonic_cm and sonic_cm > 0 else None
             candidates = [d for d in (sonic_m, depth_m) if d is not None]
             clear_distance_m = min(candidates) if candidates else None
-            # Per-side depth free-space + the closest obstacle's YOLO label feed the
-            # closed-loop reroute (wait / turn toward the open side / back up).
-            regions = depth_result.region_distances_m if depth_result.buffer_ready else {}
+            # Per-side depth free-space (computed above) + the closest obstacle's
+            # YOLO label feed the closed-loop reroute (wait / turn / back up).
             decision = self._fuser.decide(
                 detector_risk=det_result.raw_risk,
                 world_model_risk=wm_risk,

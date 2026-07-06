@@ -69,7 +69,7 @@ assets/         ← Demo video clips
 | `Code/Robot/tcp_robot_client.py` | Pi-side TCP client; `send_sonic()` / `send_frame()`; TCP keepalive on both sockets |
 | `Code/Client/streamlit_viewer.py` | Browser UI (port 8501); bundled in the server Docker image |
 | `Code/Client/desktop_viewer.py` | Native desktop window wrapping the Streamlit UI (pywebview); native-only |
-| `Code/Client/ai_viewer.py` | PyQt5 UI; AUTO mode (AI drives) / MANUAL mode (operator drives) |
+| `Code/Client/ai_viewer.py` | PyQt5 UI; AUTO mode (AI drives) / MANUAL mode (operator drives); run-logging toggle (`CMD_LOGGING`) |
 
 ## TCP protocol (summary)
 

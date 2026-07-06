@@ -387,8 +387,9 @@ thresholds + ultrasonic hard-stop.
 | `decision.reroute.wait_timeout_seconds` | `2.0` | WAIT for a crossing obstacle at most this long, then TURN |
 | `decision.reroute.max_turn_seconds` | `4.0` | Keep turning at most this long, then STOP & reassess |
 | `decision.reroute.backup_distance_m` | `0.35` | Closer than this + approaching → BACKUP |
-| `decision.reroute.direction_margin_m` | `0.3` | A side must beat centre free-space by this to TURN (else STOP straight — don't turn into a wall) |
-| `temporal_action.depth_presence_range_m` | `1.5` | Depth obstacle within this range (m) feeds the motion recogniser when YOLO is blind (walls) |
+| `decision.reroute.direction_margin_m` | `0.05` | A side must beat centre free-space by this **absolute** distance to TURN toward it (else STOP/search) |
+| `decision.reroute.direction_margin_frac` | `0.10` | …OR by this **relative** fraction of the centre distance. The relative test makes reroute work on **uncalibrated** depth (per-side gaps of a few cm/percent); the old absolute-only 0.3 m was unreachable, so the robot never turned and sat in STOP |
+| `temporal_action.depth_presence_range_m` | `1.5` | Depth obstacle within this range (m) feeds the motion recogniser when YOLO is blind — but only if the centre is clearly nearer than the sides (a real obstacle, not a uniformly-close/mis-scaled reading) |
 | `decision.reroute.dynamic_classes` | `[person, cat, dog]` | Obstacles likely to move out of the way (→ WAIT) |
 | `decision.governor.enabled` | `true` | Kinematic safe-speed governor (proactive, latency-aware) |
 | `decision.governor.forward_speed_mps` | `0.35` | **Calibrate** — robot speed at FORWARD (m/s) |

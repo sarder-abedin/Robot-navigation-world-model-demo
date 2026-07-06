@@ -104,8 +104,8 @@ Run logging (CSV + annotated frames) is written **entirely on the PC server**
 the operator:
 
 - **Before the run:** `--logging on` (or `docker run -e NAV_LOGGING=1 …`).
-- **During the run:** the **"Run Logging" toggle** in the Streamlit UI (sends
-  `CMD_LOGGING#<0|1>`).
+- **During the run:** the **"Run Logging" toggle** — in the Streamlit UI *and*
+  the PyQt `ai_viewer.py` — sends `CMD_LOGGING#<0|1>`.
 
 The CSV includes an `ssv2` column with the composed sentence.
 
@@ -199,8 +199,13 @@ Instead of a fixed back-up-then-spin, a high-risk obstacle now selects a
 |---|---|---|
 | Crossing / leaving obstacle, or a **person** approaching (not close) | temporal pattern `CROSSING`/`CLEARING`; YOLO class ∈ `dynamic_classes` | **WAIT** (`STOP`) — the path may clear itself; a timeout escalates to TURN |
 | Obstacle **rushing in**, too close to turn | `APPROACHING` + depth center < `backup_distance_m` | **BACKUP** (`CMD_AIMOVE#BACKUP`) — capped (no rear sensor) then STOP |
-| Static blockage / wall, a **side clearly more open** than centre | otherwise | **TURN** toward the open side (per-side depth), **keep turning until the gap opens** (a spin guard stops an endless rotation) |
-| Blocked ahead but **centre is the clearest** direction | no side beats centre by `direction_margin_m` | **STOP** & reassess — don't turn into a side wall |
+| Static blockage / wall, a **side clearly more open** than centre | a side beats centre by `direction_margin_m` (absolute) **or** `direction_margin_frac` (relative) | **TURN** toward the open side (per-side depth), **keep turning until the gap opens** (a spin guard stops an endless rotation) |
+| Boxed in — **no side clearly more open** than centre | neither margin met | **STOP** briefly, then **rotate in place to SEARCH** for an opening (capped by the spin guard) — the robot never just freezes facing a wall |
+
+> The turn margin is tested both **absolutely and relatively** so it works on
+> **uncalibrated** depth, where the per-side distances differ by only a few
+> centimetres/percent. An absolute-only margin (the old 0.3 m) is unreachable for
+> a depth camera, so the robot would sit in `STOP` and never reroute.
 
 The **direction** comes from the per-side depth free-space (`depth_left/right`),
 not a coarse hint; turning is re-evaluated every frame, so it stops the instant

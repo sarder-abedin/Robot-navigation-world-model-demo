@@ -210,7 +210,14 @@ decision:
     max_turn_seconds: 4.0       # keep turning at most this long, then STOP & reassess
     backup_distance_m: 0.35     # closer than this + approaching → BACK UP (don't turn into it)
     max_backup_seconds: 1.0     # cap reversing (no rear sensor) then STOP & reassess
-    direction_margin_m: 0.3     # a side must beat centre free-space by this to TURN (else STOP straight)
+    # A side must beat the centre free-space to TURN toward it — by this absolute
+    # margin OR by direction_margin_frac (relative). The relative test is what
+    # makes reroute work on UNCALIBRATED depth, whose per-side gaps are only a few
+    # cm / percent: the old absolute-only 0.3 m was unreachable, so the robot never
+    # turned and just sat in STOP. Lower these to turn more readily, raise to turn
+    # only for a clearly-open side.
+    direction_margin_m: 0.05        # absolute: turn if a side is >5 cm more open than centre
+    direction_margin_frac: 0.10     # relative: OR >10% more open than centre (calibration-free)
     dynamic_classes: ["person", "cat", "dog"]   # obstacles likely to move out of the way
 
   # ── Kinematic safe-speed governor (proactive collision avoidance) ──────────

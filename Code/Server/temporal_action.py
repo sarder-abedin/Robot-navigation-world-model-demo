@@ -168,6 +168,8 @@ def detection_to_state(det_result, assumed_width: int = 400) -> FrameObstacleSta
 
 def depth_to_obstacle_state(
     depth_center_m: float | None, presence_range_m: float = 1.5,
+    depth_left_m: float | None = None, depth_right_m: float | None = None,
+    localized_frac: float = 0.15,
 ) -> FrameObstacleState | None:
     """Synthesize an obstacle state from the depth center distance.
 
@@ -177,9 +179,19 @@ def depth_to_obstacle_state(
     "present" and centered, with a pseudo-area that grows as it gets closer — so
     the recogniser tracks its approach (APPROACHING/BLOCKING) class-agnostically.
     Returns None if there's nothing within range (→ genuinely STATIC_CLEAR).
+
+    Localization guard: when the per-side depths are known, only treat the centre
+    as an obstacle if it is meaningfully NEARER than the sides (a real object in
+    our path). A uniformly-close reading is either open space with a mis-scaled
+    (uncalibrated) depth or a flat wall the sonar/governor already handle — and
+    synthesizing BLOCKING there pegged temporal_risk high and stopped the robot on
+    a clear path. If side depths are unknown, fall back to the absolute test.
     """
     if depth_center_m is None or depth_center_m <= 0 or depth_center_m >= presence_range_m:
         return None
+    sides = [d for d in (depth_left_m, depth_right_m) if d is not None and d > 0]
+    if sides and depth_center_m >= min(sides) * (1.0 - localized_frac):
+        return None    # centre not clearly closer than the sides → not a centred obstacle
     area = float(np.clip((presence_range_m - depth_center_m) / presence_range_m, 0.0, 1.0))
     return FrameObstacleState(
         obstacle_present=True, in_center=True, area_frac=area, centroid_x=0.5,
