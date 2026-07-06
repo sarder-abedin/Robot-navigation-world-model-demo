@@ -273,7 +273,7 @@ Both modes run on the **same code path** — only the weight vector changes.
 | `CMD_KILL` | PC → Pi | `CMD_KILL` | Shutdown robot process |
 | `CMD_AIMODE` | UI → PC | `CMD_AIMODE#<0/1/2>` | Mode change from operator |
 | `CMD_LOGGING` | UI → PC | `CMD_LOGGING#<0/1>` | Toggle PC-side run logging |
-| `CMD_GOAL` | UI → PC | `CMD_GOAL#<x‰>#<y‰>` | Set navigation goal at normalized image coords ×1000 (per-mille, since the parser is integer-only). **Phase 1: HUD marker only, no motion** |
+| `CMD_GOAL` | UI → PC | `CMD_GOAL#<x‰>#<y‰>` | Set navigation goal at normalized image coords ×1000 (per-mille, since the parser is integer-only). **Phase 2: the point is tracked (CSRT/template) and its bearing + depth drawn on the HUD; still no motion** |
 | `CMD_GOAL_CLEAR` | UI → PC | `CMD_GOAL_CLEAR` | Clear the navigation goal |
 | `CMD_KILL` | UI → PC | `CMD_KILL#0` | Shutdown from operator |
 | `CMD_AISTATUS` | PC → UI | `CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>` | Live AI state (SSv2 sentence is the last, optional field) |

@@ -62,6 +62,9 @@ def parse_args():
     p.add_argument("--video", default=None, help="Demo video path override")
     p.add_argument("--no-display", action="store_true",
                    help="Disable OpenCV HUD window")
+    p.add_argument("--ai-start", action="store_true",
+                   help="Enable AI motor output at startup (default: idle until the "
+                        "operator activates AI from the UI). Use for headless/demo runs.")
     p.add_argument("--logging", choices=["on", "off"], default=None,
                    help="Initial run-logging state (CSV + annotated frames). "
                         "Also settable via NAV_LOGGING=1/0; toggled live from the UI.")
@@ -327,6 +330,11 @@ def main() -> None:
 
     server = PCNavigationServer(cfg, nav_mode)
     server.start()
+    if args.ai_start:
+        # Default is idle (robot waits for UI activation). --ai-start opts a
+        # headless/demo run into driving immediately.
+        server._ai.set_motor_enabled(True)
+        logger.info("--ai-start: AI motor output enabled at startup")
 
     mode = cfg.get("mode", "demo")
     srv_cfg = cfg.get("server", {})

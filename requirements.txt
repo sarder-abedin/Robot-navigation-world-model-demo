@@ -9,7 +9,10 @@ ultralytics>=8.3.0            # YOLO11 (yolo11n.pt)
 pyserial>=3.5                 # Serial communication with Freenove ESP32
 
 # ── Computer Vision ───────────────────────────────────────────────────────────
-opencv-python>=4.8.0
+# contrib build: provides the CSRT tracker used for goal-point tracking
+# (goal_navigator.py). Do NOT also install opencv-python — the two conflict. The
+# code falls back to template matching if only the base build is present.
+opencv-contrib-python>=4.8.0
 Pillow>=10.0.0
 
 # ── Config / Utilities ───────────────────────────────────────────────────────

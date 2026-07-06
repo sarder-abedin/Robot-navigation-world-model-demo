@@ -187,6 +187,15 @@ depth:
   path_band_frac: 0.6          # analyse the lower 60% of the frame (the path ahead)
   direction_margin_m: 0.3      # a side must be this much more open than centre to turn
 
+# ── Goal-point navigation (Phase 2: track a clicked goal; HUD only, no motion) ──
+# The operator clicks a point on the video (CMD_GOAL); the PC tracks it across
+# frames and shows its bearing + depth on the HUD. Tracking uses CSRT when
+# opencv-contrib is installed, else a template-match fallback.
+goal:
+  patch_frac: 0.12             # size of the tracked goal patch (fraction of frame)
+  horizontal_fov_deg: 66.0     # camera horizontal field of view → bearing in degrees
+  max_lost_frames: 15          # consecutive missed frames before the goal is "lost"
+
 # ── Decision fusion ────────────────────────────────────────────────────────────
 # Thresholds must be coordinated with robot speed and pipeline latency: the
 # heavy models run at only a few FPS on CPU, so a fast robot travels far between

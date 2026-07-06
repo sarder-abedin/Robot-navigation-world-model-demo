@@ -99,6 +99,7 @@ class DepthEstimator:
         self._device = None
         self._call_count = 0
         self._last = DepthResult()
+        self._last_depth_map = None   # cached metric HxW map for per-pixel sampling
 
     def load(self) -> None:
         if not self._enabled:
@@ -138,6 +139,7 @@ class DepthEstimator:
             return self._last
         try:
             depth_m = self._infer_depth_m(frame_rgb)
+            self._last_depth_map = depth_m   # cache for per-pixel goal-depth sampling
             self._last = freespace_from_depth(
                 depth_m, self._near_pct, self._path_band, self._dir_margin, self._max_range_m,
             )
@@ -145,6 +147,26 @@ class DepthEstimator:
             logger.debug("Depth inference error: %s", exc)
             return self._last
         return self._last
+
+    def depth_at_norm(self, x_norm: float, y_norm: float) -> float | None:
+        """Sample the latest metric depth map at normalized image coords [0,1].
+
+        Returns metres (clamped to max_range_m) or None if no map is available
+        yet or the model is a stub. Used to report the goal point's distance.
+        """
+        m = self._last_depth_map
+        if m is None:
+            return None
+        h, w = m.shape[:2]
+        px = int(min(max(x_norm, 0.0), 1.0) * (w - 1))
+        py = int(min(max(y_norm, 0.0), 1.0) * (h - 1))
+        try:
+            d = float(m[py, px])
+        except (IndexError, ValueError):
+            return None
+        if d <= 0:
+            return None
+        return min(d, self._max_range_m)
 
     def _infer_depth_m(self, frame_rgb: np.ndarray) -> np.ndarray:
         import torch

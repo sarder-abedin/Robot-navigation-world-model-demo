@@ -64,7 +64,8 @@ assets/         ← Demo video clips
 | `Code/Server/ai_pipeline.py` | Orchestrates YOLO → V-JEPA 2 → SSv2 → decision → broadcast; measures reaction latency for the governor |
 | `Code/Server/decision.py` | Risk fusion + hysteresis; ultrasonic hard-stop (separate); closed-loop context-aware reroute (wait/turn/backup); applies the speed governor |
 | `Code/Server/speed_governor.py` | Kinematic safe-speed governor: caps action to `d_stop(v)=v·t_react+v²/(2a)+margin` |
-| `Code/Server/depth_perception.py` | Depth-Anything V2 → free-space distance ahead + clear direction (LEFT/CENTER/RIGHT); class-agnostic (sees walls) |
+| `Code/Server/depth_perception.py` | Depth-Anything V2 → free-space distance ahead + clear direction (LEFT/CENTER/RIGHT); class-agnostic (sees walls); `depth_at_norm()` per-pixel goal-depth sampler |
+| `Code/Server/goal_navigator.py` | Tracks a user-selected goal point (CSRT, template-match fallback) → bearing + depth for the HUD (Phase 2: no motion). Server starts **idle**; `--ai-start` opts headless into driving |
 | `Code/Server/calibrate_anchors.py` | Builds V-JEPA 2 corridor anchors from blocked/clear frame folders → `anchors.npz` |
 | `Code/Robot/calibrate_governor.py` | On-robot: measures governor m/s constants (sonar+motors), safely patches `config.yaml` |
 | `Code/Server/visualization.py` | HUD overlay incl. depth free-space (distance + open direction bars) |
@@ -86,7 +87,7 @@ PC → Pi:  CMD_MOTOR#<L>#<R>                         (manual from UI viewer)
 PC → Pi:  CMD_STOP / CMD_KILL / CMD_AIMODE#<0|1|2>
 UI → PC:  CMD_AIMODE#<0|1|2>  |  CMD_MOTOR#<L>#<R>  |  CMD_KILL#0
 UI → PC:  CMD_LOGGING#<0|1>                         (toggle server-side run logging)
-UI → PC:  CMD_GOAL#<x_permille>#<y_permille>        (set goal at normalized image coords ×1000; Phase 1: HUD marker only, no motion)
+UI → PC:  CMD_GOAL#<x_permille>#<y_permille>        (set goal at normalized image coords ×1000; Phase 2: tracked marker + bearing/depth on HUD, no motion yet)
 UI → PC:  CMD_GOAL_CLEAR                            (clear the goal)
 PC → UI:  CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>
           (ssv2_sentence = genuine SSv2 label with the YOLO object filled in; last field, optional for old clients)

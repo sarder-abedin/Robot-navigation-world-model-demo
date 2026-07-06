@@ -118,34 +118,48 @@ class Visualizer:
         if ssv2_sentence:
             self._draw_ssv2(vis, ssv2_sentence, w, h)
 
-        if goal is not None:
+        if goal is not None and getattr(goal, "active", False):
             self._draw_goal(vis, goal, w, h)
 
         return vis
 
     def _draw_goal(self, vis, goal, w: int, h: int) -> None:
-        """Draw the user-selected navigation goal marker (Phase 1: display only)."""
-        try:
-            gx, gy = float(goal[0]), float(goal[1])
-        except (TypeError, ValueError, IndexError):
-            return
-        px = int(min(max(gx, 0.0), 1.0) * w)
-        py = int(min(max(gy, 0.0), 1.0) * h)
-        colour = (0, 215, 255)   # amber (BGR)
-        # Crosshair + ring so it's visible over any background.
+        """Draw the tracked navigation goal: marker + heading arrow + readout.
+
+        `goal` is a GoalState (active/lost/x/y/bearing_deg/distance_m). Phase 2 is
+        display only — this does not steer the robot.
+        """
+        gx = min(max(float(getattr(goal, "x", 0.5)), 0.0), 1.0)
+        gy = min(max(float(getattr(goal, "y", 0.5)), 0.0), 1.0)
+        lost = bool(getattr(goal, "lost", False))
+        px, py = int(gx * w), int(gy * h)
+        colour = (0, 0, 255) if lost else (0, 215, 255)   # red if lost, else amber (BGR)
+
+        # Heading arrow from the image centre toward the goal (visualises bearing).
+        cxp, cyp = w // 2, h // 2
+        if not lost:
+            cv2.arrowedLine(vis, (cxp, cyp), (px, py), colour, 2, cv2.LINE_AA, tipLength=0.15)
+
+        # Crosshair + ring marker so it reads over any background.
         cv2.circle(vis, (px, py), 10, colour, 2, cv2.LINE_AA)
         cv2.circle(vis, (px, py), 2, colour, -1, cv2.LINE_AA)
-        cv2.line(vis, (px - 16, py), (px - 4, py), colour, 2, cv2.LINE_AA)
-        cv2.line(vis, (px + 4, py), (px + 16, py), colour, 2, cv2.LINE_AA)
-        cv2.line(vis, (px, py - 16), (px, py - 4), colour, 2, cv2.LINE_AA)
-        cv2.line(vis, (px, py + 4), (px, py + 16), colour, 2, cv2.LINE_AA)
-        label = "GOAL"
+        for dx0, dy0, dx1, dy1 in ((-16, 0, -4, 0), (4, 0, 16, 0), (0, -16, 0, -4), (0, 4, 0, 16)):
+            cv2.line(vis, (px + dx0, py + dy0), (px + dx1, py + dy1), colour, 2, cv2.LINE_AA)
+
+        # Readout: bearing (deg, L/R) + distance, or LOST.
+        if lost:
+            label = "GOAL: lost"
+        else:
+            deg = float(getattr(goal, "bearing_deg", 0.0))
+            side = "C" if abs(deg) < 1.0 else ("R" if deg > 0 else "L")
+            dist = getattr(goal, "distance_m", None)
+            dtxt = f"{dist:.1f}m" if dist else "?m"
+            label = f"GOAL: {abs(deg):.0f}deg {side}  ~{dtxt}"
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
         ly = py - 16 if py - 16 - th > 0 else py + 28
-        cv2.rectangle(vis, (px - tw // 2 - 3, ly - th - 3),
-                      (px + tw // 2 + 3, ly + 3), (0, 0, 0), -1)
-        cv2.putText(vis, label, (px - tw // 2, ly), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45, colour, 1, cv2.LINE_AA)
+        lx = int(min(max(px - tw // 2, 2), w - tw - 2))
+        cv2.rectangle(vis, (lx - 3, ly - th - 3), (lx + tw + 3, ly + 3), (0, 0, 0), -1)
+        cv2.putText(vis, label, (lx, ly), cv2.FONT_HERSHEY_SIMPLEX, 0.45, colour, 1, cv2.LINE_AA)
 
     def _draw_depth(self, vis, depth, w: int, h: int) -> None:
         """Depth free-space HUD: distance ahead, open direction, L/C/R region bars."""
