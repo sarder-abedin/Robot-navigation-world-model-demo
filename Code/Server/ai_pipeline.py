@@ -92,8 +92,15 @@ class AIPipeline:
         self._state = AIState(navigation_mode=self._nav_mode,
                               logging_enabled=self._logging_enabled)
         self._state_lock = threading.Lock()
-        self._motor_enabled = True  # False when UI disables AI (CMD_AIMODE#0)
-        self._goal = None           # user-selected (x,y) goal in [0,1] (Phase 1: HUD only)
+        # Start IDLE: the robot must not drive until the operator activates AI from
+        # the UI (after selecting a goal). Safer, and matches the connect→goal→
+        # activate flow. Headless/demo can force-on via --ai-start (set_motor_enabled).
+        self._motor_enabled = False
+        # Goal-point tracking (Phase 2): follow the user-selected point across
+        # frames and report bearing + depth for the HUD. Does NOT drive motion yet.
+        from goal_navigator import GoalTracker
+        self._goal_tracker = GoalTracker(cfg)
+        self._goal_state = None     # latest GoalState (tracked position, bearing, depth)
 
         self._last_annotated_bgr: np.ndarray | None = None
         self._annotated_lock = threading.Lock()
@@ -177,24 +184,24 @@ class AIPipeline:
     def set_goal(self, x_norm: float, y_norm: float) -> None:
         """Set the user-selected navigation goal at normalized image coords [0,1].
 
-        Phase 1: the goal is stored and drawn on the HUD only — it does NOT drive
-        motion yet (that's a later phase). Coords are clamped to the frame.
+        Phase 2: the goal is TRACKED across frames (bearing + depth) and drawn on
+        the HUD — it does NOT drive motion yet (that's a later phase).
         """
         gx = min(max(float(x_norm), 0.0), 1.0)
         gy = min(max(float(y_norm), 0.0), 1.0)
-        with self._state_lock:
-            self._goal = (gx, gy)
-        logger.info("Navigation goal set at (%.3f, %.3f) [display only – no motion yet]", gx, gy)
+        self._goal_tracker.set_target(gx, gy)
+        logger.info("Navigation goal set at (%.3f, %.3f) [tracking + HUD only – no motion]", gx, gy)
 
     def clear_goal(self) -> None:
         """Clear the user-selected navigation goal."""
+        self._goal_tracker.clear()
         with self._state_lock:
-            self._goal = None
+            self._goal_state = None
         logger.info("Navigation goal cleared")
 
-    def get_goal(self):
+    def get_goal_state(self):
         with self._state_lock:
-            return self._goal
+            return self._goal_state
 
     def set_logging_enabled(self, enabled: bool) -> None:
         """Turn run logging (CSV + annotated frames) on/off at runtime."""
@@ -417,10 +424,16 @@ class AIPipeline:
                 )
 
             # ── 7. Execute motor command ──────────────────────────────────────
+            # ── 7b. Goal tracking (Phase 2: bearing + depth, HUD only) ────────
+            goal_state = None
+            if self._goal_tracker.active:
+                goal_state = self._goal_tracker.update(
+                    frame_bgr, depth_sampler=self._depth.depth_at_norm,
+                )
             with self._state_lock:
                 motor_enabled = self._motor_enabled
                 logging_enabled = self._logging_enabled
-                goal = self._goal
+                self._goal_state = goal_state
             if motor_enabled:
                 self._execute_action(self._robot, decision.action,
                                      getattr(decision, "reroute_direction", ""))
@@ -428,7 +441,7 @@ class AIPipeline:
             # ── 8. Visualise ──────────────────────────────────────────────────
             annotated = self._visualizer.annotate(
                 frame_bgr, det_result, decision, temporal_result, sonic_cm,
-                ssv2_sentence=ssv2_sentence, depth=depth_result, goal=goal,
+                ssv2_sentence=ssv2_sentence, depth=depth_result, goal=goal_state,
             )
             with self._annotated_lock:
                 self._last_annotated_bgr = annotated
@@ -463,7 +476,8 @@ class AIPipeline:
                 )
 
             # ── 10. Broadcast AI status to TCP client ─────────────────────────
-            self._broadcast_status(decision, temporal_result, sonic_cm, ssv2_sentence)
+            self._broadcast_status(decision, temporal_result, sonic_cm,
+                                   ssv2_sentence, depth_result)
 
             # ── 11. Update shared state ───────────────────────────────────────
             with self._state_lock:
@@ -544,15 +558,17 @@ class AIPipeline:
     # ── TCP status broadcast ──────────────────────────────────────────────────
 
     def _broadcast_status(self, decision, temporal_result, sonic_cm: float,
-                          ssv2_sentence: str = "") -> None:
+                          ssv2_sentence: str = "", depth_result=None) -> None:
         """
         Send a compact status string to all connected command clients so the
-        lightweight client UI can display live AI state without video decoding.
+        lightweight client UI can display live AI state (in the panel below the
+        video) without video decoding.
 
         Format:
-          CMD_AISTATUS#<action>#<risk*100>#<wm_label>#<pattern>#<sonic_cm>#<ssv2>\r\n
-        The ssv2 sentence is the last field so older clients that split on the
-        first 6 fields keep working.
+          CMD_AISTATUS#<action>#<risk*100>#<wm_label>#<pattern>#<sonic_cm>#<ssv2>
+                       #<clear_dist_m>#<clear_dir>\r\n
+        Fields are appended, never reordered, so older clients that split on the
+        first 6–7 fields keep working; newer clients also read the depth fields.
         """
         if self._tcp_server is None:
             return
@@ -565,13 +581,22 @@ class AIPipeline:
             pattern = getattr(temporal_result.pattern, "value", temporal_result.pattern)
             # '#' is the field separator; keep the sentence clean.
             ssv2 = (ssv2_sentence or "").replace("#", " ")
+            # Depth free-space (shown in the UI panel below the video). -1 / "" when
+            # the depth model isn't ready.
+            if depth_result is not None and getattr(depth_result, "buffer_ready", False):
+                clear_dist = getattr(depth_result, "clear_distance_m", -1.0)
+                clear_dir = getattr(depth_result, "clear_direction", "") or ""
+            else:
+                clear_dist, clear_dir = -1.0, ""
             msg = (
                 f"CMD_AISTATUS#{action}"
                 f"#{int(decision.risk_score * 100)}"
                 f"#{wm_label}"
                 f"#{pattern}"
                 f"#{sonic_cm:.1f}"
-                f"#{ssv2}\r\n"
+                f"#{ssv2}"
+                f"#{clear_dist:.2f}"
+                f"#{clear_dir}\r\n"
             )
             if self._tcp_server.isCmdServerConnected():
                 self._tcp_server.sendDataToCmdClinet(msg)

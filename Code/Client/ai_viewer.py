@@ -123,9 +123,12 @@ class AIViewer(QMainWindow):
         self._control_mode: str = "AUTO"   # "AUTO" | "MANUAL"
         self._manual_speed: int = SPEED_FULL
         self._keys_held: set[int] = set()  # avoid repeated motor sends on auto-repeat
+        self._goal_selected: bool = False  # AI activation is gated until a goal is set
+        self._fps_times: list[float] = []  # video-frame arrival times for the FPS readout
 
         self._build_ui()
         self._register_shortcuts()
+        self._update_activation_gate()   # AI activation disabled until connected + goal set
 
         self._ui_timer = QTimer(self)
         self._ui_timer.timeout.connect(self._update_status_bar)
@@ -205,12 +208,23 @@ class AIViewer(QMainWindow):
         self._wm_val    = self._make_info_val("UNKNOWN")
         self._pat_val   = self._make_info_val("UNKNOWN")
         self._sonic_val = self._make_info_val("---")
+        self._depth_val = self._make_info_val("---")
+        self._fps_val   = self._make_info_val("---")
+        self._ssv2_val  = self._make_info_val("---")
+        self._ssv2_val.setWordWrap(True)
         grid.addWidget(QLabel("V-JEPA 2:"),   2, 0)
         grid.addWidget(self._wm_val,           2, 1)
         grid.addWidget(QLabel("Motion:"),      3, 0)
         grid.addWidget(self._pat_val,          3, 1)
         grid.addWidget(QLabel("Sonic:"),       4, 0)
         grid.addWidget(self._sonic_val,        4, 1)
+        # Moved off the video HUD into this panel (declutter):
+        grid.addWidget(QLabel("Depth:"),       5, 0)
+        grid.addWidget(self._depth_val,        5, 1)
+        grid.addWidget(QLabel("FPS:"),         6, 0)
+        grid.addWidget(self._fps_val,          6, 1)
+        grid.addWidget(QLabel("SSv2:"),        7, 0)
+        grid.addWidget(self._ssv2_val,         7, 1)
 
         root.addWidget(state_box)
 
@@ -535,6 +549,12 @@ class AIViewer(QMainWindow):
             )
             self._recv_thread.start()
 
+            # Start IDLE: don't drive on connect. The operator must select a goal
+            # and then activate AI. Gate the activation buttons accordingly.
+            self._goal_selected = False
+            self._send_ai_mode(0)
+            self._update_activation_gate()
+
             # Video connection (non-fatal if unavailable)
             self._video_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
@@ -572,6 +592,8 @@ class AIViewer(QMainWindow):
             except Exception:
                 pass
         self._cmd_sock = self._video_sock = None
+        self._goal_selected = False
+        self._update_activation_gate()     # re-lock AI activation until reconnected + goal
         self._btn_connect.setText("Connect")
         self._video_label.setText("[ No video – connect to server ]")
         self._status_bar.setText("Disconnected")
@@ -631,6 +653,14 @@ class AIViewer(QMainWindow):
         self._pix_w = pix.width()
         self._pix_h = pix.height()
         self._video_label.setPixmap(pix)
+        # Video FPS (moved off the HUD): count arrivals over a ~1 s window.
+        import time as _t
+        now = _t.monotonic()
+        self._fps_times.append(now)
+        while self._fps_times and now - self._fps_times[0] > 1.0:
+            self._fps_times.pop(0)
+        if len(self._fps_times) >= 2:
+            self._fps_val.setText(f"{len(self._fps_times) - 1:d}")
 
     # ── Goal selection (Phase 1: send CMD_GOAL, server draws the marker) ─────────
 
@@ -660,7 +690,11 @@ class AIViewer(QMainWindow):
             self._cmd_sock.sendall(
                 f"CMD_GOAL#{int(nx * 1000)}#{int(ny * 1000)}\n".encode("utf-8")
             )
-            self._status_bar.setText(f"Goal set at ({nx:.2f}, {ny:.2f}) – see HUD marker.")
+            self._status_bar.setText(
+                f"Goal set at ({nx:.2f}, {ny:.2f}) – now activate AI to start."
+            )
+            self._goal_selected = True
+            self._update_activation_gate()     # AI activation now unlocked
         except Exception as exc:
             self._status_bar.setText(f"Send error: {exc}")
         self._btn_set_goal.setChecked(False)   # one-shot; re-arm for the next goal
@@ -671,7 +705,11 @@ class AIViewer(QMainWindow):
             return
         try:
             self._cmd_sock.sendall(b"CMD_GOAL_CLEAR\n")
-            self._status_bar.setText("Goal cleared.")
+            # Clearing the goal re-locks AI activation and returns the robot to idle.
+            self._cmd_sock.sendall(b"CMD_AIMODE#0\n")
+            self._goal_selected = False
+            self._update_activation_gate()
+            self._status_bar.setText("Goal cleared – AI idle until a new goal is set.")
         except Exception as exc:
             self._status_bar.setText(f"Send error: {exc}")
 
@@ -697,10 +735,14 @@ class AIViewer(QMainWindow):
 
     def _process_status(self, line: str) -> None:
         # CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>
+        #             #<ssv2>#<clear_dist_m>#<clear_dir>   (trailing fields optional)
         parts = line.split("#")
         if len(parts) < 6:
             return
         _, action, risk_pct, wm_label, pattern, sonic = parts[:6]
+        ssv2 = parts[6] if len(parts) > 6 else ""
+        clear_dist = parts[7] if len(parts) > 7 else ""
+        clear_dir = parts[8] if len(parts) > 8 else ""
 
         self._action_label.setText(action)
         self._action_label.setStyleSheet(ACTION_CSS.get(action, ACTION_CSS["---"]))
@@ -736,6 +778,16 @@ class AIViewer(QMainWindow):
         except ValueError:
             self._sonic_val.setText(sonic)
 
+        # Depth + SSv2 (moved off the video HUD into this panel).
+        try:
+            dm = float(clear_dist)
+            self._depth_val.setText(
+                f"{dm:.2f} m ahead  (open: {clear_dir or '?'})" if dm >= 0 else "---"
+            )
+        except ValueError:
+            self._depth_val.setText("---")
+        self._ssv2_val.setText(ssv2 or "---")
+
     def _update_status_bar(self) -> None:
         if self._connected:
             mode_hint = "AUTO" if self._control_mode == "AUTO" else "MANUAL (↑↓←→)"
@@ -755,6 +807,17 @@ class AIViewer(QMainWindow):
             self._cmd_sock.sendall(f"CMD_AIMODE#{mode}\n".encode("utf-8"))
         except Exception as exc:
             self._status_bar.setText(f"Send error: {exc}")
+
+    def _update_activation_gate(self) -> None:
+        """AI activation (AUTO/PREDICTIVE/BASELINE) is enabled only once connected
+        AND a goal has been selected — the intended connect → set-goal → activate
+        flow. MANUAL driving stays available regardless."""
+        armed = self._connected and self._goal_selected
+        for btn in (self._btn_auto, self._btn_predictive, self._btn_baseline):
+            btn.setEnabled(armed)
+        tip = ("" if armed else "Select a goal on the video first, then activate AI.")
+        for btn in (self._btn_auto, self._btn_predictive, self._btn_baseline):
+            btn.setToolTip(tip or btn.toolTip())
 
     def _send_logging(self, on: bool) -> None:
         """Toggle server-side run logging (CMD_LOGGING#1|0)."""
