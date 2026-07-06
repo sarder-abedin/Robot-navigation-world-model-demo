@@ -107,7 +107,14 @@ the operator:
 - **During the run:** the **"Run Logging" toggle** — in the Streamlit UI *and*
   the PyQt `ai_viewer.py` — sends `CMD_LOGGING#<0|1>`.
 
-The CSV includes an `ssv2` column with the composed sentence.
+The CSV includes an `ssv2` column with the composed sentence, plus per-frame
+**inference latency** columns (`lat_total_ms` and per stage: `lat_yolo_ms`,
+`lat_wm_ms`, `lat_depth_ms`, `lat_temporal_ms`, `lat_ssv2_ms`, `lat_decision_ms`,
+and the governor's `reaction_ema_ms`) and camera-stream **network statistics**
+(`net_recv_fps`, `net_frame_bytes`, `net_frames_recv`, `net_frames_dropped`,
+`net_kbps`). The heavy models run every N frames, so their per-frame latency is
+near-0 on skipped frames and spikes on the compute tick — that periodicity is
+visible in the log.
 
 ### V-JEPA 2 anchor embeddings
 

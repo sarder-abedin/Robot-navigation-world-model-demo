@@ -6,7 +6,12 @@ Every processed frame produces one CSV row capturing:
   detector_risk, world_model_risk, temporal_risk,
   world_model_label, temporal_pattern,
   obstacles_detected, obstacle_in_center, closest_area,
-  ultrasonic_cm, explanation
+  ultrasonic_cm, ssv2, explanation,
+  # per-frame inference latency (ms): total + each stage
+  lat_total_ms, lat_yolo_ms, lat_wm_ms, lat_depth_ms,
+  lat_temporal_ms, lat_ssv2_ms, lat_decision_ms, reaction_ema_ms,
+  # camera-stream network statistics
+  net_recv_fps, net_frame_bytes, net_frames_recv, net_frames_dropped, net_kbps
 
 Annotated JPEG frames are saved every N frames to the run directory.
 A system.log text file captures all Python logging output.
@@ -29,6 +34,29 @@ import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Per-frame inference-latency + network-statistics columns (appended to the CSV
+# after the core nav columns). Kept in one place so the header and each row stay
+# in sync. Values default to 0 when the pipeline doesn't supply metrics.
+METRIC_FIELDS = [
+    "lat_total_ms", "lat_yolo_ms", "lat_wm_ms", "lat_depth_ms",
+    "lat_temporal_ms", "lat_ssv2_ms", "lat_decision_ms", "reaction_ema_ms",
+    "net_recv_fps", "net_frame_bytes", "net_frames_recv",
+    "net_frames_dropped", "net_kbps",
+]
+
+
+def _metric_row(metrics: dict | None) -> dict:
+    """Format the metric columns for one CSV row (0 when absent)."""
+    metrics = metrics or {}
+    row = {}
+    for k in METRIC_FIELDS:
+        v = metrics.get(k, 0)
+        # byte / frame counts are integers; latencies / rates get 2 decimals
+        row[k] = str(int(v)) if k in (
+            "net_frame_bytes", "net_frames_recv", "net_frames_dropped"
+        ) else f"{float(v):.2f}"
+    return row
 
 
 class NavigationLogger:
@@ -64,13 +92,18 @@ class NavigationLogger:
         detector_result,
         ultrasonic_cm: float = -1.0,
         ssv2_sentence: str = "",
+        metrics: dict | None = None,
     ) -> None:
-        """Legacy full-pipeline logging (kept for backward compat with tests)."""
+        """Legacy full-pipeline logging (kept for backward compat with tests).
+
+        `metrics` optionally carries per-frame inference latencies (ms) and
+        network/stream statistics (see METRIC_FIELDS); absent → logged as 0.
+        """
         ts = time.time()
         self._frame_idx += 1
 
         if self._csv_writer:
-            self._csv_writer.writerow({
+            row = {
                 "timestamp":       f"{ts:.4f}",
                 "frame_idx":       self._frame_idx,
                 "nav_mode":        self._nav_mode,
@@ -87,7 +120,9 @@ class NavigationLogger:
                 "ultrasonic_cm":   f"{ultrasonic_cm:.1f}",
                 "ssv2":            ssv2_sentence,
                 "explanation":     decision_result.explanation,
-            })
+            }
+            row.update(_metric_row(metrics))
+            self._csv_writer.writerow(row)
             if self._frame_idx % 20 == 0:
                 self._csv_file.flush()
 
@@ -161,6 +196,7 @@ class NavigationLogger:
             "wm_label", "temporal_pattern",
             "obstacles", "in_center", "closest_area",
             "ultrasonic_cm", "ssv2", "explanation",
+            *METRIC_FIELDS,
         ]
         self._csv_file = open(self._csv_path, "w", newline="", encoding="utf-8")
         self._csv_writer = csv.DictWriter(self._csv_file, fieldnames=fieldnames)

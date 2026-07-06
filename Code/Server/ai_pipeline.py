@@ -77,6 +77,9 @@ class AIPipeline:
         # over-optimistic on a slow (CPU) pipeline.
         gov_cfg = (self._cfg.get("decision", {}) or {}).get("governor", {}) or {}
         self._reaction_ema = float(gov_cfg.get("min_reaction_s", 0.5))
+        # Cumulative count of camera frames received but skipped (stale) because the
+        # pipeline was still busy — logged as a network/compute drop statistic.
+        self._net_dropped_total = 0
         # Depth distance within which a (non-YOLO) obstacle counts as "present"
         # for the motion recogniser, so walls aren't invisible to it.
         self._depth_presence_range = float(
@@ -234,6 +237,10 @@ class AIPipeline:
                 # fps (that floods CMD_AIMOVE/CMD_AISTATUS and starves the UI).
                 time.sleep(0.005)
                 continue
+            # Frames that arrived while we were busy on the previous one are skipped
+            # (we only ever process the latest) — count them as network/compute drops.
+            if last_seq >= 0 and seq > last_seq + 1:
+                self._net_dropped_total += seq - last_seq - 1
             last_seq = seq
 
             try:
@@ -245,12 +252,14 @@ class AIPipeline:
 
     def _process_frame(self, frame_rgb, frame_idx: int) -> None:
             proc_t0 = time.monotonic()
+            lat: dict[str, float] = {}   # per-stage inference latency (ms)
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
             # ── 2. Detection – always the PC's local YOLO on the streamed frame.
             # Pass BGR: ultralytics treats a numpy array as BGR (OpenCV order) and
             # flips it to RGB internally, so handing it RGB swaps the R/B channels
             # and degrades detection. The Pi is a thin client (detection runs here).
+            _t = time.monotonic()
             if self._detector is not None:
                 try:
                     det_result = self._detector.detect(frame_bgr)
@@ -260,8 +269,10 @@ class AIPipeline:
             else:
                 from detector import DetectionResult
                 det_result = DetectionResult()  # YOLO unavailable – empty result
+            lat["yolo"] = (time.monotonic() - _t) * 1000.0
 
             # ── 3. V-JEPA 2 world model prediction ───────────────────────────
+            _t = time.monotonic()
             clip = self._cam_buf.get_clip()
             if clip:
                 wm_result = self._world_model.predict(clip)
@@ -269,6 +280,7 @@ class AIPipeline:
                 from world_model import WorldModelResult
                 wm_result = WorldModelResult(buffer_ready=False,
                                              predicted_risk=det_result.raw_risk)
+            lat["wm"] = (time.monotonic() - _t) * 1000.0
 
             wm_risk = (wm_result.predicted_risk
                        if wm_result.buffer_ready else det_result.raw_risk)
@@ -277,11 +289,13 @@ class AIPipeline:
             # Metric distance ahead + which side is open. Sees walls the sonar and
             # YOLO miss; feeds the governor, the motion recogniser and the reroute
             # direction. Ignored (buffer_ready False) when the model isn't loaded.
+            _t = time.monotonic()
             depth_result = self._depth.estimate(frame_rgb)
             depth_m = (depth_result.clear_distance_m
                        if depth_result.buffer_ready and depth_result.clear_distance_m > 0 else None)
             clear_direction = depth_result.clear_direction if depth_result.buffer_ready else None
             regions = depth_result.region_distances_m if depth_result.buffer_ready else {}
+            lat["depth"] = (time.monotonic() - _t) * 1000.0
 
             # ── 4b. Temporal motion pattern ───────────────────────────────────
             # Use YOLO's obstacle state; but if YOLO sees nothing while depth shows
@@ -299,8 +313,10 @@ class AIPipeline:
                 )
                 if ds is not None:
                     obs_state = ds
+            _t = time.monotonic()
             self._temporal.push(obs_state)
             temporal_result = self._temporal.classify()
+            lat["temporal"] = (time.monotonic() - _t) * 1000.0
 
             # ── 4b. Genuine SSv2 action recognition (annotation/log only) ─────
             # The "something" slot is filled with the CLOSEST/largest obstacle's
@@ -308,7 +324,9 @@ class AIPipeline:
             object_label = getattr(det_result, "closest_label", "") or (
                 det_result.labels[0] if det_result.labels else ""
             )
+            _t = time.monotonic()
             ssv2_result = self._ssv2.recognize(clip or [], object_label)
+            lat["ssv2"] = (time.monotonic() - _t) * 1000.0
             ssv2_sentence = ssv2_result.sentence if ssv2_result.buffer_ready else ""
             ssv2_conf = ssv2_result.confidence if ssv2_result.buffer_ready else 0.0
 
@@ -332,6 +350,7 @@ class AIPipeline:
             clear_distance_m = min(candidates) if candidates else None
             # Per-side depth free-space (computed above) + the closest obstacle's
             # YOLO label feed the closed-loop reroute (wait / turn / back up).
+            _t = time.monotonic()
             decision = self._fuser.decide(
                 detector_risk=det_result.raw_risk,
                 world_model_risk=wm_risk,
@@ -347,6 +366,7 @@ class AIPipeline:
                 depth_center_m=regions.get("CENTER"),
                 depth_right_m=regions.get("RIGHT"),
             )
+            lat["decision"] = (time.monotonic() - _t) * 1000.0
 
             # Scene understanding: metric geometry (depth, class-agnostic → sees
             # walls) + the object's YOLO label when it's a known class.
@@ -392,9 +412,30 @@ class AIPipeline:
 
             # ── 9. Log (only when the operator has logging enabled) ───────────
             if logging_enabled:
+                lat["total"] = (time.monotonic() - proc_t0) * 1000.0
+                net = self._cam_buf.get_net_stats()
+                metrics = {
+                    # inference latency (ms) — heavy models run every N frames, so
+                    # their per-frame cost is near-0 on skipped frames and spikes on
+                    # the compute tick; that periodicity is visible in the log.
+                    "lat_total_ms":    lat.get("total", 0.0),
+                    "lat_yolo_ms":     lat.get("yolo", 0.0),
+                    "lat_wm_ms":       lat.get("wm", 0.0),
+                    "lat_depth_ms":    lat.get("depth", 0.0),
+                    "lat_temporal_ms": lat.get("temporal", 0.0),
+                    "lat_ssv2_ms":     lat.get("ssv2", 0.0),
+                    "lat_decision_ms": lat.get("decision", 0.0),
+                    "reaction_ema_ms": self._reaction_ema * 1000.0,
+                    # network / stream stats
+                    "net_recv_fps":      net["recv_fps"],
+                    "net_frame_bytes":   net["last_bytes"],
+                    "net_frames_recv":   net["frames_recv"],
+                    "net_frames_dropped": self._net_dropped_total,
+                    "net_kbps":          net["kbps"],
+                }
                 self._nav_logger.log_frame(
                     annotated, decision, det_result, sonic_cm,
-                    ssv2_sentence=ssv2_sentence,
+                    ssv2_sentence=ssv2_sentence, metrics=metrics,
                 )
 
             # ── 10. Broadcast AI status to TCP client ─────────────────────────
