@@ -93,6 +93,27 @@ def test_blocked_with_center_clearest_stops_not_turns(cfg):
     assert r.action == Action.STOP and "no clearer side" in r.explanation.lower()
 
 
+def test_turn_fires_on_small_relative_side_gap(cfg):
+    """Regression: the old absolute 0.3 m margin was unreachable for a depth camera
+    (regions differ by cm), so the robot never turned and sat in STOP forever.
+    With the relative margin a modestly-more-open side now triggers a turn."""
+    f = DecisionFuser(cfg, "predictive")
+    # CENTER 0.28, RIGHT 0.37 — right is ~9 cm / 30% more open (real opening).
+    r = _hi(f, pattern="BLOCKING", dl=0.22, dc=0.28, dr=0.37)
+    assert r.action == Action.REROUTE and r.reroute_direction == "right"
+
+
+def test_boxed_in_rotates_to_search_instead_of_freezing(cfg):
+    """No side clearly open → hold briefly, then rotate in place to SEARCH for an
+    opening rather than freezing in STOP forever."""
+    f = DecisionFuser(cfg, "predictive")
+    r1 = _hi(f, pattern="BLOCKING", dl=0.30, dc=0.30, dr=0.30)   # dead-equal → blocked
+    assert r1.action == Action.STOP and "stop & reassess" in r1.explanation
+    f._blocked_since = time.monotonic() - (f._stop_hold + 0.5)   # held long enough
+    r2 = _hi(f, pattern="BLOCKING", dl=0.30, dc=0.30, dr=0.30)
+    assert r2.action == Action.REROUTE and "search" in r2.explanation.lower()
+
+
 def test_turn_only_when_side_clearly_more_open(cfg):
     f = DecisionFuser(cfg, "predictive")
     # a side beats centre by more than the margin → TURN toward it
@@ -111,6 +132,18 @@ def test_depth_motion_state_from_close_wall():
     assert depth_to_obstacle_state(None) is None
     # closer → larger pseudo-area (so the recogniser can see it "grow"/approach)
     assert depth_to_obstacle_state(0.3).area_frac > depth_to_obstacle_state(1.0).area_frac
+
+
+def test_depth_localized_guard_ignores_uniformly_close_scene():
+    """A uniformly-close depth reading (open corridor with mis-scaled/uncalibrated
+    depth) must NOT synthesize an obstacle — that pegged temporal_risk and stopped
+    the robot on a clear path. Only a centre clearly nearer than the sides counts."""
+    from temporal_action import depth_to_obstacle_state
+    # centre not nearer than the sides → not a real centred obstacle → None
+    assert depth_to_obstacle_state(0.25, depth_left_m=0.25, depth_right_m=0.26) is None
+    # centre clearly nearer than the sides → a real object ahead → present
+    ds = depth_to_obstacle_state(0.25, depth_left_m=0.9, depth_right_m=0.9)
+    assert ds is not None and ds.obstacle_present
 
 
 def test_backup_capped_when_no_rear_progress(cfg):

@@ -83,13 +83,20 @@ class DecisionFuser:
         self._rr_max_turn = float(rr.get("max_turn_seconds", 4.0))
         self._rr_backup_m = float(rr.get("backup_distance_m", 0.35))
         self._rr_backup_max = float(rr.get("max_backup_seconds", 1.0))
-        # A side must beat the centre free-space by this much to turn toward it;
-        # otherwise straight ahead is the clearest → STOP (don't turn into a wall).
-        self._rr_dir_margin = float(rr.get("direction_margin_m", 0.3))
+        # A side must beat the centre free-space to turn toward it — expressed both
+        # as an absolute margin AND (for uncalibrated, relative-scale depth where
+        # per-side gaps are only a few percent) a relative fraction of the centre
+        # distance. Either one triggers a turn; otherwise straight ahead is the
+        # clearest → STOP/search (don't turn into a wall). The absolute default is
+        # small on purpose: a large one (the old 0.3 m) is unreachable for a depth
+        # camera whose regions differ by centimetres, so the robot never turned.
+        self._rr_dir_margin = float(rr.get("direction_margin_m", 0.05))
+        self._rr_dir_frac = float(rr.get("direction_margin_frac", 0.10))
         self._rr_dynamic = set(rr.get("dynamic_classes", ["person", "cat", "dog"]))
         self._wait_since: float = 0.0   # when the current WAIT started (0 = not waiting)
         self._turn_since: float = 0.0   # when the current TURN started (0 = not turning)
         self._backup_since: float = 0.0 # when the current BACKUP run started
+        self._blocked_since: float = 0.0  # when we first got boxed-in with no open side
 
         # Kinematic safe-speed governor (proactive, latency-aware). Lazy import
         # keeps decision.py free of a top-level dependency cycle (speed_governor
@@ -172,10 +179,10 @@ class DecisionFuser:
             self._wait_since = self._turn_since = self._backup_since = 0.0  # stopped → reset avoidance
         elif smoothed <= self._low_max:
             action, explanation = Action.FORWARD, f"Low risk ({smoothed:.2f}) – forward"
-            self._wait_since = self._turn_since = self._backup_since = 0.0     # path clear → reset avoidance
+            self._wait_since = self._turn_since = self._backup_since = self._blocked_since = 0.0  # clear
         elif smoothed <= self._med_max:
             action, explanation = Action.SLOW, f"Medium risk ({smoothed:.2f}) – slowing"
-            self._wait_since = self._turn_since = self._backup_since = 0.0
+            self._wait_since = self._turn_since = self._backup_since = self._blocked_since = 0.0
         elif self._rr_closed_loop:
             # High vision risk → closed-loop, context-aware avoidance: wait out a
             # crossing obstacle, back off from one rushing in, or turn toward the
@@ -246,9 +253,14 @@ class DecisionFuser:
         """
         if dl is None or dr is None or dc is None:
             return "", "turn"                       # unknown → legacy default turn
-        if max(dl, dr) > dc + self._rr_dir_margin:
+        best = max(dl, dr)
+        gain = best - dc
+        # A side is "clearly more open" if it beats centre by the absolute margin
+        # OR by the relative fraction of the centre distance. The relative test is
+        # what makes this work on uncalibrated depth (gaps of a few cm / percent).
+        if gain > self._rr_dir_margin or (dc > 0 and gain > dc * self._rr_dir_frac):
             return ("left" if dl >= dr else "right"), "turn"
-        return "", "stop"                           # centre is the most open
+        return "", "stop"                           # centre is (roughly) the most open
 
     def _select_behaviour(self, pattern, obj_label, dc, dl, dr):
         """Choose an avoidance INTENT from motion + object + geometry.
@@ -277,6 +289,7 @@ class DecisionFuser:
         intent, direction = self._select_behaviour(pattern, obj_label, dc, dl, dr)
 
         if intent == "WAIT":
+            self._blocked_since = 0.0
             if self._wait_since == 0.0:
                 self._wait_since = now
             if now - self._wait_since <= self._rr_wait_timeout:
@@ -288,9 +301,26 @@ class DecisionFuser:
         self._wait_since = 0.0
 
         if intent == "STOP_BLOCKED":
-            self._turn_since = self._backup_since = 0.0
-            self._stop_until = now + self._stop_hold
-            return Action.STOP, "", "blocked ahead, no clearer side — stop & reassess"
+            # Boxed in: no side clearly more open. Don't freeze here forever (the old
+            # behaviour — the robot just sat in STOP). Hold briefly so the sensors can
+            # update, then rotate in place to SEARCH for an opening, capped by the
+            # spin guard; if a full sweep finds nothing, re-hold and search again.
+            self._backup_since = 0.0
+            if self._blocked_since == 0.0:
+                self._blocked_since = now
+            if now - self._blocked_since <= self._stop_hold:
+                self._turn_since = 0.0
+                return Action.STOP, "", "blocked ahead, no clearer side — stop & reassess"
+            if self._turn_since == 0.0:
+                self._turn_since = now
+            if now - self._turn_since > self._rr_max_turn:
+                self._turn_since = 0.0
+                self._blocked_since = 0.0
+                self._stop_until = now + self._stop_hold
+                return Action.STOP, "", "searched all around, still blocked — stop & reassess"
+            side, _ = self._turn_side(dl, dc, dr)   # marginal side if any, else default spin
+            return Action.REROUTE, side, "no clearly-open side — rotating to search for an opening"
+        self._blocked_since = 0.0
 
         if intent == "BACKUP":
             self._turn_since = 0.0

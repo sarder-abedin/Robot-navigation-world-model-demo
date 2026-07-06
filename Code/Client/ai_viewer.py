@@ -54,7 +54,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QImage, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
-    QApplication, QGroupBox, QHBoxLayout, QLabel,
+    QApplication, QCheckBox, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QProgressBar, QPushButton,
     QRadioButton, QShortcut, QSizePolicy, QVBoxLayout, QWidget,
 )
@@ -215,6 +215,20 @@ class AIViewer(QMainWindow):
         mode_row.addWidget(self._btn_baseline)
 
         root.addWidget(mode_box)
+
+        # ── Run logging (server-side) ─────────────────────────────────────────
+        # Toggles CSV + annotated-frame logging on the PC (CMD_LOGGING#1|0). The
+        # data is written on the server (logs_rpi/), not on this UI machine.
+        log_box = QGroupBox("Run Logging  (stored on the server PC)")
+        log_row = QHBoxLayout(log_box)
+        self._chk_logging = QCheckBox("Record run log (CSV + frames)")
+        self._chk_logging.setToolTip(
+            "Start/stop server-side run logging. Files are written to logs_rpi/ on "
+            "the PC running main_server.py. You can also start it with --logging on."
+        )
+        self._chk_logging.toggled.connect(self._send_logging)
+        log_row.addWidget(self._chk_logging)
+        root.addWidget(log_box)
 
         # ── Drive Control ─────────────────────────────────────────────────────
         drive_box = QGroupBox("Drive Control")
@@ -674,6 +688,23 @@ class AIViewer(QMainWindow):
             return
         try:
             self._cmd_sock.sendall(f"CMD_AIMODE#{mode}\n".encode("utf-8"))
+        except Exception as exc:
+            self._status_bar.setText(f"Send error: {exc}")
+
+    def _send_logging(self, on: bool) -> None:
+        """Toggle server-side run logging (CMD_LOGGING#1|0)."""
+        if not (self._cmd_sock and self._connected):
+            self._status_bar.setText("Not connected – cannot toggle logging.")
+            # revert the checkbox to reflect that nothing was sent
+            self._chk_logging.blockSignals(True)
+            self._chk_logging.setChecked(False)
+            self._chk_logging.blockSignals(False)
+            return
+        try:
+            self._cmd_sock.sendall(f"CMD_LOGGING#{1 if on else 0}\n".encode("utf-8"))
+            self._status_bar.setText(
+                f"Server run logging {'ENABLED' if on else 'disabled'}"
+            )
         except Exception as exc:
             self._status_bar.setText(f"Send error: {exc}")
 
