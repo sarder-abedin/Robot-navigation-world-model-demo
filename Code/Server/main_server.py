@@ -95,6 +95,8 @@ class PCNavigationServer:
     CMD_KILL    = "CMD_KILL"
     CMD_MOTOR   = "CMD_MOTOR"
     CMD_LOGGING = "CMD_LOGGING"
+    CMD_GOAL       = "CMD_GOAL"        # UI→PC: set goal at normalized image coords (per-mille)
+    CMD_GOAL_CLEAR = "CMD_GOAL_CLEAR"  # UI→PC: clear the goal
 
     def __init__(self, cfg: dict, nav_mode: str):
         self._cfg = cfg
@@ -247,6 +249,20 @@ class PCNavigationServer:
             # Operator toggled run logging (CSV + annotated frames) from the UI.
             val = self._parser.intParameter[0] if self._parser.intParameter else 0
             self._ai.set_logging_enabled(val == 1)
+
+        elif cmd == self.CMD_GOAL:
+            # User clicked a goal point on the video. Coords arrive as per-mille
+            # integers (0..1000) because the message parser is integer-only; scale
+            # back to normalized [0,1]. Phase 1: stored + drawn on the HUD only.
+            if len(self._parser.intParameter) >= 2:
+                gx = self._parser.intParameter[0] / 1000.0
+                gy = self._parser.intParameter[1] / 1000.0
+                self._ai.set_goal(gx, gy)
+            else:
+                logger.warning("CMD_GOAL with unexpected format: %s", msg)
+
+        elif cmd == self.CMD_GOAL_CLEAR:
+            self._ai.clear_goal()
 
         elif cmd == self.CMD_KILL:
             logger.warning("CMD_KILL from UI viewer – shutting down")

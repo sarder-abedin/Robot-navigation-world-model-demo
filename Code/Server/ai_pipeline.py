@@ -93,6 +93,7 @@ class AIPipeline:
                               logging_enabled=self._logging_enabled)
         self._state_lock = threading.Lock()
         self._motor_enabled = True  # False when UI disables AI (CMD_AIMODE#0)
+        self._goal = None           # user-selected (x,y) goal in [0,1] (Phase 1: HUD only)
 
         self._last_annotated_bgr: np.ndarray | None = None
         self._annotated_lock = threading.Lock()
@@ -172,6 +173,28 @@ class AIPipeline:
         with self._state_lock:
             self._motor_enabled = enabled
         logger.info("Motor output %s", "enabled" if enabled else "disabled (manual/off mode)")
+
+    def set_goal(self, x_norm: float, y_norm: float) -> None:
+        """Set the user-selected navigation goal at normalized image coords [0,1].
+
+        Phase 1: the goal is stored and drawn on the HUD only — it does NOT drive
+        motion yet (that's a later phase). Coords are clamped to the frame.
+        """
+        gx = min(max(float(x_norm), 0.0), 1.0)
+        gy = min(max(float(y_norm), 0.0), 1.0)
+        with self._state_lock:
+            self._goal = (gx, gy)
+        logger.info("Navigation goal set at (%.3f, %.3f) [display only – no motion yet]", gx, gy)
+
+    def clear_goal(self) -> None:
+        """Clear the user-selected navigation goal."""
+        with self._state_lock:
+            self._goal = None
+        logger.info("Navigation goal cleared")
+
+    def get_goal(self):
+        with self._state_lock:
+            return self._goal
 
     def set_logging_enabled(self, enabled: bool) -> None:
         """Turn run logging (CSV + annotated frames) on/off at runtime."""
@@ -397,6 +420,7 @@ class AIPipeline:
             with self._state_lock:
                 motor_enabled = self._motor_enabled
                 logging_enabled = self._logging_enabled
+                goal = self._goal
             if motor_enabled:
                 self._execute_action(self._robot, decision.action,
                                      getattr(decision, "reroute_direction", ""))
@@ -404,7 +428,7 @@ class AIPipeline:
             # ── 8. Visualise ──────────────────────────────────────────────────
             annotated = self._visualizer.annotate(
                 frame_bgr, det_result, decision, temporal_result, sonic_cm,
-                ssv2_sentence=ssv2_sentence, depth=depth_result,
+                ssv2_sentence=ssv2_sentence, depth=depth_result, goal=goal,
             )
             with self._annotated_lock:
                 self._last_annotated_bgr = annotated
