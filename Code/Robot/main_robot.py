@@ -45,6 +45,7 @@ _shutdown = False
 # worker thread that a new command can preempt via this cancel event.
 _reroute_thread: threading.Thread | None = None
 _reroute_cancel = threading.Event()
+_reroute_direction: str = ""   # direction of the in-progress reroute (to detect changes)
 
 
 def _cancel_reroute() -> None:
@@ -492,9 +493,18 @@ def _execute_aimove(action: str, motor, speed_full: int, speed_slow: int,
         # Timed back-up + spin runs in a worker thread so STOP/KILL/MOTOR can
         # preempt it instead of being ignored for the full maneuver. The turn
         # direction comes from the PC depth channel (open side); default left.
+        # The PC re-sends REROUTE every frame while it wants us to keep turning;
+        # restarting the maneuver each frame would trap the robot in the initial
+        # back-up phase and it would never actually spin (forward/backward
+        # oscillation). So let an in-progress reroute in the SAME direction run to
+        # completion — only (re)start on a fresh reroute or a direction change.
+        global _reroute_direction
         turn = direction if direction in ("left", "right") else "left"
         if motor:
-            _start_reroute(motor, speed_slow, reroute_secs, turn)
+            running = _reroute_thread is not None and _reroute_thread.is_alive()
+            if not running or turn != _reroute_direction:
+                _reroute_direction = turn
+                _start_reroute(motor, speed_slow, reroute_secs, turn)
         else:
             logger.info("[MockMotor] REROUTE %s (%.1f s)", turn, reroute_secs)
 

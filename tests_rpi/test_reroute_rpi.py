@@ -133,6 +133,27 @@ def test_ultrasonic_block_escalates_to_maneuver(cfg):
     assert f._sonic_block_since == 0.0
 
 
+def test_committed_maneuver_hysteresis_no_forward_oscillation(cfg):
+    """After escalating, a momentary sonar clear (e.g. from backing up) must NOT
+    flip straight to FORWARD — the robot stays committed to clearing the obstacle
+    until the front is clear by a margin. This kills the forward/backward loop."""
+    f = DecisionFuser(cfg, "predictive")
+    f._sonic_block_since = time.monotonic() - (f._sonic_escalate_s + 0.5)
+    r1 = f.decide(0.0, 0.48, 0.0, "MIXED", "STATIC_CLEAR", ultrasonic_risk=1.0,
+                  depth_left_m=1.0, depth_center_m=0.3, depth_right_m=0.35)
+    assert r1.action in (Action.REROUTE, Action.BACKUP) and f._sonic_maneuvering
+    # Sonar just barely cleared (risk above the resume threshold) → keep clearing,
+    # do NOT go forward.
+    r2 = f.decide(0.0, 0.48, 0.0, "MIXED", "STATIC_CLEAR",
+                  ultrasonic_risk=f._sonic_resume_risk + 0.2,
+                  depth_left_m=1.0, depth_center_m=0.3, depth_right_m=0.35)
+    assert r2.action != Action.FORWARD and "committed" in r2.explanation.lower()
+    # Now clear by a comfortable margin → resume normal nav (forward).
+    r3 = f.decide(0.0, 0.10, 0.0, "CLEAR", "STATIC_CLEAR",
+                  ultrasonic_risk=f._sonic_resume_risk - 0.2)
+    assert r3.action == Action.FORWARD and not f._sonic_maneuvering
+
+
 def test_turn_only_when_side_clearly_more_open(cfg):
     f = DecisionFuser(cfg, "predictive")
     # a side beats centre by more than the margin → TURN toward it

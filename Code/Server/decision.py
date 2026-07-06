@@ -96,11 +96,17 @@ class DecisionFuser:
         # How long to hold the ultrasonic reflex STOP before escalating to a
         # maneuver (turn/back-up) to go around an obstacle that won't clear.
         self._sonic_escalate_s = float(rr.get("ultrasonic_escalate_seconds", 1.5))
+        # Once maneuvering around a sonar-blocking obstacle, stay committed until
+        # the ultrasonic risk drops below this (front clear by a margin) before
+        # resuming forward — hysteresis that stops the forward/backward oscillation
+        # at the stop threshold. 1.0 = at the stop distance; lower = more clearance.
+        self._sonic_resume_risk = float(rr.get("ultrasonic_resume_risk", 0.5))
         self._wait_since: float = 0.0   # when the current WAIT started (0 = not waiting)
         self._turn_since: float = 0.0   # when the current TURN started (0 = not turning)
         self._backup_since: float = 0.0 # when the current BACKUP run started
         self._blocked_since: float = 0.0  # when we first got boxed-in with no open side
         self._sonic_block_since: float = 0.0  # when the ultrasonic first hard-stopped us
+        self._sonic_maneuvering: bool = False  # committed to clearing a sonar obstacle
 
         # Kinematic safe-speed governor (proactive, latency-aware). Lazy import
         # keeps decision.py free of a top-level dependency cycle (speed_governor
@@ -174,6 +180,7 @@ class DecisionFuser:
                 self._sonic_block_since = now
             if (self._rr_closed_loop
                     and now - self._sonic_block_since > self._sonic_escalate_s):
+                self._sonic_maneuvering = True   # commit: see the hysteresis below
                 action, reroute_dir, why = self._avoidance(
                     now, temporal_pattern, obstacle_label,
                     depth_left_m, depth_center_m, depth_right_m,
@@ -195,6 +202,26 @@ class DecisionFuser:
                 temporal_risk, world_model_label, temporal_pattern,
                 "Ultrasonic hard-stop (obstacle within safe distance)",
             )
+
+        # Sonar below the hard-stop threshold. If we were maneuvering around a
+        # blocking obstacle, stay COMMITTED until the front is clear by a margin
+        # (hysteresis): resume forward only once ultrasonic_risk falls below
+        # ultrasonic_resume_risk. Otherwise a momentary clear — the back-up phase,
+        # or the obstacle grazing the threshold — flips us straight to FORWARD and
+        # we drive right back in: the forward/backward oscillation from the logs.
+        if self._sonic_maneuvering:
+            if ultrasonic_risk > self._sonic_resume_risk:
+                action, reroute_dir, why = self._avoidance(
+                    now, temporal_pattern, obstacle_label,
+                    depth_left_m, depth_center_m, depth_right_m,
+                )
+                return self._result(
+                    action, smoothed, detector_risk, world_model_risk,
+                    temporal_risk, world_model_label, temporal_pattern,
+                    f"clearing obstacle (committed until clear) → {why}",
+                    reroute_direction=reroute_dir if action == Action.REROUTE else "",
+                )
+            self._sonic_maneuvering = False   # clear by a margin → resume normal nav
         # Sonar clear → reset the persistent-block timer so the next block starts fresh.
         self._sonic_block_since = 0.0
 
