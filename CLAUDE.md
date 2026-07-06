@@ -64,9 +64,9 @@ assets/         ← Demo video clips
 | `Code/Server/calibrate_anchors.py` | Builds V-JEPA 2 corridor anchors from blocked/clear frame folders → `anchors.npz` |
 | `Code/Robot/calibrate_governor.py` | On-robot: measures governor m/s constants (sonar+motors), safely patches `config.yaml` |
 | `Code/Server/visualization.py` | HUD overlay incl. depth free-space (distance + open direction bars) |
-| `Code/Server/robot_control.py` | `TCPRobotController` sends `CMD_AIMOVE` to Pi; ultrasonic risk (fail-safe on no-echo) |
-| `Code/Robot/main_robot.py` | Pi entry point (thin client); camera stream + sonic + command loop |
-| `Code/Robot/tcp_robot_client.py` | Pi-side TCP client; `send_sonic()` / `send_frame()` |
+| `Code/Server/robot_control.py` | `TCPRobotController` sends `CMD_AIMOVE` to Pi; direct `RobotController` reroute/backup run as preemptible worker threads (never block the pipeline); ultrasonic risk (fail-safe on no-echo) |
+| `Code/Robot/main_robot.py` | Pi entry point (thin client); camera stream + sonic + command loop; motor **watchdog** (stop on PC silence) + **reconnect** loop |
+| `Code/Robot/tcp_robot_client.py` | Pi-side TCP client; `send_sonic()` / `send_frame()`; TCP keepalive on both sockets |
 | `Code/Client/streamlit_viewer.py` | Browser UI (port 8501); bundled in the server Docker image |
 | `Code/Client/desktop_viewer.py` | Native desktop window wrapping the Streamlit UI (pywebview); native-only |
 | `Code/Client/ai_viewer.py` | PyQt5 UI; AUTO mode (AI drives) / MANUAL mode (operator drives) |

@@ -76,6 +76,7 @@ class WorldModel:
         self._clear_anchor: np.ndarray | None = None
         self._call_count = 0
         self._last_result = WorldModelResult()
+        self._mask_warned = False   # log the masked-forward fallback only once
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -129,7 +130,10 @@ class WorldModel:
         if len(clip) < self._clip_len:
             return WorldModelResult(buffer_ready=False)
 
-        if self._call_count % self._run_every != 0:
+        # Run once as soon as the clip is first ready (don't return the default
+        # buffer_ready=False for the first run_every frames), then honour the
+        # cadence — matches depth_perception / ssv2_model.
+        if self._last_result.buffer_ready and self._call_count % self._run_every != 0:
             return self._last_result
 
         import torch  # type: ignore
@@ -256,10 +260,21 @@ class WorldModel:
             mask_start = max(0, T - self._horizon)
             mask[0, mask_start:] = True
 
-            outputs = self._model(
-                pixel_values_videos=pixel_values,
-                bool_masked_pos=mask,
-            )
+            # The exact encoder signature varies across transformers versions
+            # (some VJEPA2Model encoders don't accept bool_masked_pos, or expect a
+            # token-count mask, not a frame-count one). Try the masked call, but
+            # fall back to a plain encode on any signature/shape error so a version
+            # mismatch degrades to "no future masking" instead of silently killing
+            # the whole predictive path (the error would be swallowed upstream).
+            try:
+                outputs = self._model(pixel_values_videos=pixel_values,
+                                      bool_masked_pos=mask)
+            except (TypeError, RuntimeError, ValueError) as exc:
+                if not self._mask_warned:
+                    logger.warning("V-JEPA 2 masked forward failed (%s) – encoding "
+                                   "without bool_masked_pos", exc)
+                    self._mask_warned = True
+                outputs = self._model(pixel_values_videos=pixel_values)
             # Mean-pool sequence dim → (D,)
             return outputs.last_hidden_state.mean(dim=1).squeeze(0).cpu().numpy()
 

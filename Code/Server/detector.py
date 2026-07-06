@@ -47,7 +47,7 @@ class Detector:
         self._iou = det_cfg["iou_threshold"]
         self._obstacle_classes = set(det_cfg["obstacle_classes"])
         self._center_ratio = det_cfg["center_zone_ratio"]
-        self._close_area_thresh = det_cfg["close_area_threshold"]
+        self._close_area_thresh = max(1e-6, float(det_cfg["close_area_threshold"]))
         self._run_every = det_cfg.get("run_every_n_frames", 2)
         self._model = None
         self._frame_count = 0
@@ -60,7 +60,8 @@ class Detector:
 
     def detect(self, frame: np.ndarray) -> DetectionResult:
         """
-        Run detection on an RGB uint8 numpy frame.
+        Run detection on a BGR uint8 numpy frame (OpenCV order — ultralytics
+        assumes numpy input is BGR and flips it to RGB internally).
 
         Returns the cached last result on skipped frames to avoid stale
         processing without wasting CPU cycles.
@@ -76,7 +77,7 @@ class Detector:
         cx_lo = w * (0.5 - self._center_ratio / 2)
         cx_hi = w * (0.5 + self._center_ratio / 2)
 
-        # YOLOv8 accepts RGB numpy arrays directly
+        # ultralytics takes numpy frames in BGR (see docstring); pass frame_bgr.
         results = self._model(frame, conf=self._conf, iou=self._iou, verbose=False)[0]
 
         boxes, labels, confidences = [], [], []

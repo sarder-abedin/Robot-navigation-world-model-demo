@@ -185,3 +185,48 @@ def test_tcp_controller_sends_backup():
     ctl = TCPRobotController({"robot": {"ultrasonic_stop_cm": 30.0}}, conn)
     ctl.backup()
     assert conn.msgs == ["BACKUP"]
+
+
+# ── Hard-stop resets an in-progress avoidance maneuver ────────────────────────
+
+def test_hard_stop_resets_avoidance_timers(cfg):
+    """An ultrasonic hard-stop interrupting a WAIT must clear the avoidance
+    timers, so when risk resumes the WAIT starts fresh instead of being
+    'already timed out' while the robot was actually stopped."""
+    f = DecisionFuser(cfg, "predictive")
+    _hi(f, pattern="CROSSING", label="person", dc=0.6)     # begin WAIT
+    assert f._wait_since != 0.0
+    # Ultrasonic reflex fires for a frame (obstacle within stop distance).
+    r = f.decide(0.9, 0.9, 0.9, "BLOCKED", "CROSSING", ultrasonic_risk=1.0)
+    assert r.action == Action.STOP
+    assert f._wait_since == 0.0 and f._turn_since == 0.0 and f._backup_since == 0.0
+
+
+# ── RobotController maneuvers must not block the pipeline thread ───────────────
+
+def _direct_cfg(cfg):
+    c = dict(cfg); c["robot"] = dict(cfg["robot"])
+    c["robot"].setdefault("reroute_direction", "left")
+    return c
+
+
+def test_direct_controller_reroute_is_non_blocking(cfg):
+    """RobotController.reroute() must return immediately (timed spin runs in a
+    worker thread) rather than sleeping on the caller's (pipeline) thread."""
+    from robot_control import RobotController
+
+    class FakeMotor:
+        def __init__(s): s.calls = []
+        def setMotorModel(s, l, r): s.calls.append((l, r))
+
+    class FakeCar:
+        def __init__(s): s.motor = FakeMotor()
+
+    car = FakeCar()
+    ctl = RobotController(_direct_cfg(cfg), car)
+    t0 = time.monotonic()
+    ctl.reroute("right")
+    assert (time.monotonic() - t0) < 0.1          # returned without blocking
+    ctl.stop()                                     # preempt the worker
+    # A subsequent stop leaves the motors halted.
+    assert car.motor.calls[-1] == (0, 0)

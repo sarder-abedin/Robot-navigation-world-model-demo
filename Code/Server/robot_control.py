@@ -22,6 +22,7 @@ can be tested on any machine without GPIO access.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 logger = logging.getLogger(__name__)
@@ -83,48 +84,85 @@ class RobotController:
         self._blind_hold_s = r.get("ultrasonic_blind_hold_seconds", 1.0)
         self._sonic_state = {"cm": None, "t": 0.0}
         self._car = car
+        # Timed manoeuvres (reroute/backup) run in a preemptible worker thread so
+        # they never block the AI pipeline thread — otherwise no new frame is
+        # processed (and no STOP computed) for the manoeuvre's full duration.
+        self._maneuver_thread: threading.Thread | None = None
+        self._maneuver_cancel = threading.Event()
 
     # ── High-level commands ───────────────────────────────────────────────────
 
+    def _cancel_maneuver(self) -> None:
+        """Preempt any in-progress reroute/backup so a new command takes effect now."""
+        if self._maneuver_thread is not None and self._maneuver_thread.is_alive():
+            self._maneuver_cancel.set()
+            self._maneuver_thread.join(timeout=1.0)
+        self._maneuver_thread = None
+
     def forward(self) -> None:
+        self._cancel_maneuver()
         if self._sonic_blocked():
             logger.info("Sonic guard: forward blocked – stopping instead")
-            self.stop()
+            self._set(0, 0)
             return
         self._set(self._speed_full, self._speed_full)
 
     def slow_forward(self) -> None:
+        self._cancel_maneuver()
         if self._sonic_blocked():
-            self.stop()
+            self._set(0, 0)
             return
         self._set(self._speed_slow, self._speed_slow)
 
     def stop(self) -> None:
+        self._cancel_maneuver()
         self._set(0, 0)
 
     def reroute(self, direction: str = "") -> None:
-        """Stop, turn to avoid obstacle, then resume slow forward.
+        """Stop, turn to avoid the obstacle toward the open side, then halt.
 
         direction ("left"/"right", from the depth channel) overrides the
-        configured default so the robot turns toward the open side.
+        configured default. Runs in a preemptible worker thread so a STOP/FORWARD
+        arriving mid-manoeuvre isn't ignored for the full turn duration.
         """
         turn = (direction or "").strip().lower() or self._reroute_dir
-        self.stop()
-        time.sleep(0.2)
-        if turn == "left":
-            self._set(-self._speed_slow, self._speed_slow)
-        else:
-            self._set(self._speed_slow, -self._speed_slow)
-        time.sleep(self._reroute_secs)
-        self.stop()
+        spin = ((-self._speed_slow, self._speed_slow) if turn == "left"
+                else (self._speed_slow, -self._speed_slow))
+        self._cancel_maneuver()
+        self._maneuver_cancel.clear()
+
+        def _run():
+            self._set(0, 0)
+            if self._maneuver_cancel.wait(0.2):
+                return
+            self._set(*spin)
+            if self._maneuver_cancel.wait(self._reroute_secs):
+                self._set(0, 0)
+                return
+            self._set(0, 0)
+
+        self._maneuver_thread = threading.Thread(target=_run, daemon=True, name="RerouteDirect")
+        self._maneuver_thread.start()
 
     def backup(self) -> None:
-        """Short reverse pulse (obstacle too close / rushing in), then stop."""
-        self._set(-self._speed_slow, -self._speed_slow)
-        time.sleep(0.4)
-        self.stop()
+        """Short reverse pulse (obstacle too close / rushing in), then stop.
+
+        Preemptible worker thread — same rationale as reroute()."""
+        self._cancel_maneuver()
+        self._maneuver_cancel.clear()
+
+        def _run():
+            self._set(-self._speed_slow, -self._speed_slow)
+            if self._maneuver_cancel.wait(0.4):
+                self._set(0, 0)
+                return
+            self._set(0, 0)
+
+        self._maneuver_thread = threading.Thread(target=_run, daemon=True, name="BackupDirect")
+        self._maneuver_thread.start()
 
     def safe_stop(self) -> None:
+        self._cancel_maneuver()
         self._set(0, 0)
         logger.warning("SAFE STOP – motors halted")
 

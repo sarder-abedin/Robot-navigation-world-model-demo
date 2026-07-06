@@ -154,6 +154,11 @@ class DecisionFuser:
         # by distance alone — separate from and higher priority than the AI risk.
         if ultrasonic_risk >= 1.0:
             self._stop_until = now + self._stop_hold
+            # A hard-stop supersedes any in-progress avoidance maneuver; clear the
+            # timers so that when risk resumes we start the maneuver fresh rather
+            # than mid-way (e.g. skipping a WAIT because its timeout "already" elapsed
+            # while the robot was actually stopped).
+            self._wait_since = self._turn_since = self._backup_since = 0.0
             return self._result(
                 Action.STOP, smoothed, detector_risk, world_model_risk,
                 temporal_risk, world_model_label, temporal_pattern,
@@ -164,6 +169,7 @@ class DecisionFuser:
         reroute_dir = ""
         if now < self._stop_until:
             action, explanation = Action.STOP, "Stop hold active"
+            self._wait_since = self._turn_since = self._backup_since = 0.0  # stopped → reset avoidance
         elif smoothed <= self._low_max:
             action, explanation = Action.FORWARD, f"Low risk ({smoothed:.2f}) – forward"
             self._wait_since = self._turn_since = self._backup_since = 0.0     # path clear → reset avoidance

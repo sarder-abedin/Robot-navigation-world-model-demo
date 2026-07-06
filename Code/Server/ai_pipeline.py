@@ -248,11 +248,12 @@ class AIPipeline:
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
             # ── 2. Detection – always the PC's local YOLO on the streamed frame.
-            # The Pi is a thin client that only streams frames + ultrasonic, so
-            # detection runs here in both live and demo mode.
+            # Pass BGR: ultralytics treats a numpy array as BGR (OpenCV order) and
+            # flips it to RGB internally, so handing it RGB swaps the R/B channels
+            # and degrades detection. The Pi is a thin client (detection runs here).
             if self._detector is not None:
                 try:
-                    det_result = self._detector.detect(frame_rgb)
+                    det_result = self._detector.detect(frame_bgr)
                 except Exception as exc:
                     logger.warning("Detector error: %s", exc)
                     return

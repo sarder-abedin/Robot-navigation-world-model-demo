@@ -56,6 +56,12 @@ model contributes, the safety layers, and the TCP wire protocol.
 - The Pi is a **thin client**: it streams JPEG camera frames to the PC and sends
   `CMD_SONIC` (its ultrasonic reading, the local hard-stop safety); the PC runs
   YOLO on those frames.
+- **Fail-safe link handling on the Pi:** a **motor watchdog** stops the motors if
+  no command arrives from the PC within `robot.command_watchdog_seconds` (default
+  1.5 s) — covering a stalled pipeline/server, a stalled video stream, or a
+  silently half-open link. TCP **keepalive** on both sockets tears down a truly
+  dead connection, and an **outer reconnect loop** drops the robot back to
+  (re)connecting (motors stopped) instead of exiting on a transient network blip.
 
 ---
 
