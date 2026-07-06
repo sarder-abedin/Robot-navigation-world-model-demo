@@ -1,6 +1,6 @@
 # Troubleshooting — Tank Robot Predictive Navigation
 
-> Part of the [Tank Robot](README.md) docs — see also [ARCHITECTURE.md](ARCHITECTURE.md) · [HOW_TO_RUN.md](HOW_TO_RUN.md) · [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+> Part of the [Tank Robot](README.md) docs — see also [ARCHITECTURE.md](ARCHITECTURE.md) · [HOW_TO_RUN.md](HOW_TO_RUN.md) · [CALIBRATION.md](CALIBRATION.md) · [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 The hard-won operational gotchas — mostly Pi-side hardware and Docker traps. If a
 run misbehaves (no camera frames, motors won't open, flags "do nothing"), check

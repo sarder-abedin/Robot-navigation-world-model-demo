@@ -93,6 +93,10 @@ class DepthEstimator:
         self._near_pct = float(d.get("near_percentile", 15.0))
         self._path_band = float(d.get("path_band_frac", 0.6))
         self._dir_margin = float(d.get("direction_margin_m", 0.3))
+        # Linear scale correction for the metric depth model (see CALIBRATION.md):
+        # measure a known distance, read what the HUD reports, set scale =
+        # actual / reported. 1.0 = the model's raw metres (uncorrected).
+        self._scale = float(d.get("scale", 1.0))
 
         self._model = None
         self._processor = None
@@ -174,4 +178,6 @@ class DepthEstimator:
         inputs = {k: v.to(self._device) for k, v in inputs.items()}
         with torch.no_grad():
             pred = self._model(**inputs).predicted_depth  # (1, H, W), metres for metric models
-        return pred.squeeze(0).cpu().numpy().astype(np.float32)
+        depth = pred.squeeze(0).cpu().numpy().astype(np.float32)
+        # Apply the linear scale correction from calibration (default 1.0 = raw).
+        return depth * self._scale if self._scale != 1.0 else depth

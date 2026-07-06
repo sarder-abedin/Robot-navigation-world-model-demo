@@ -54,14 +54,14 @@ For live mode, the native venv path, GPU builds and the full Docker flags, see
 1. **Install/build** — server deps in a venv on the PC (`pip install -r requirements_server.txt`); build the robot image on the Pi. → [HOW_TO_RUN.md](HOW_TO_RUN.md)
 2. **Smoke-test in demo mode** (no robot): run the server `--mode demo`, open the UI, confirm annotated video + risk/action HUD. → [HOW_TO_RUN.md](HOW_TO_RUN.md)
 3. **Go live**: start the server (natively on a Mac for MPS), start the Pi client (`docker compose -f docker-compose.robot.yml up --build`), confirm the UI shows live video and a *changing* ultrasonic value. → [HOW_TO_RUN.md](HOW_TO_RUN.md)
-4. **Calibrate V-JEPA 2 anchors**: capture ~10 "blocked" + ~10 "clear" corridor frames, run `python Code/Server/calibrate_anchors.py --blocked ./blocked --clear ./clear --out anchors.npz`, then set `world_model.anchors_path: "anchors.npz"` in `Code/Server/config.yaml`. → [HOW_TO_RUN.md](HOW_TO_RUN.md)
-5. **Calibrate the speed governor**: on the robot, facing a flat wall with clear runway, run `python Code/Robot/calibrate_governor.py --apply ../Server/config.yaml` (measures forward/slow speed + max decel, patches config safely). → [HOW_TO_RUN.md](HOW_TO_RUN.md)
-6. **Verify**: the HUD shows a sane `Depth: <d>m ahead | open: <dir>` line and the log shows `SCENE: <obj> <d>m ahead | open=<dir>`; the robot slows early, stops before walls, and reroutes toward the open side.
+4. **Calibrate** (in order: V-JEPA 2 anchors → depth scale → speed governor). Anchors are the biggest quality win; depth scale + governor make the absolute distances/speeds real. Full step-by-step in **[CALIBRATION.md](CALIBRATION.md)**.
+5. **Verify**: `V-JEPA 2` reads `BLOCKED`/`CLEAR` (not stuck on `MIXED`), the HUD `Depth: <d>m` matches a tape measure, and the robot slows early, stops before walls, and reroutes toward the open side.
 
 ## Documentation
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — design, AI models, TCP protocol, safety layers, project structure.
-- **[HOW_TO_RUN.md](HOW_TO_RUN.md)** — setup, run modes (demo/live/Docker), UI viewers, anchor + governor calibration, config tables, tests, logging.
+- **[HOW_TO_RUN.md](HOW_TO_RUN.md)** — setup, run modes (demo/live/Docker), UI viewers, config tables, tests, logging.
+- **[CALIBRATION.md](CALIBRATION.md)** — detailed step-by-step for the three calibrations (V-JEPA 2 anchors, depth scale, speed governor) with verification + troubleshooting.
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — camera / GPIO / compose / brownout gotchas and the rebuild-after-pull trap.
 - `CLAUDE.md` — development guide for AI assistants working in this repo.
 

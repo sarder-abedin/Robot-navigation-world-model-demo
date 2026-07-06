@@ -186,6 +186,9 @@ depth:
   near_percentile: 15          # per-region percentile = "nearest obstacle" (robust to noise)
   path_band_frac: 0.6          # analyse the lower 60% of the frame (the path ahead)
   direction_margin_m: 0.3      # a side must be this much more open than centre to turn
+  # Linear scale correction (see CALIBRATION.md): measure a known distance, read
+  # what the HUD reports, set scale = actual / reported. 1.0 = raw model metres.
+  scale: 1.0
 
 # ── Goal-point navigation (Phase 2: track a clicked goal; HUD only, no motion) ──
 # The operator clicks a point on the video (CMD_GOAL); the PC tracks it across
