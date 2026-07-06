@@ -114,6 +114,25 @@ def test_boxed_in_rotates_to_search_instead_of_freezing(cfg):
     assert r2.action == Action.REROUTE and "search" in r2.explanation.lower()
 
 
+def test_ultrasonic_block_escalates_to_maneuver(cfg):
+    """An ultrasonic obstacle that won't clear must escalate from a permanent STOP
+    into an avoidance maneuver — the sonar-seen obstacle never raises the vision
+    risk (YOLO blind), so reroute would otherwise never fire and the robot sits."""
+    f = DecisionFuser(cfg, "predictive")
+    # Low vision risk (det=ta=0), but the ultrasonic is hard-stopping us.
+    r1 = f.decide(0.0, 0.48, 0.0, "MIXED", "STATIC_CLEAR", ultrasonic_risk=1.0)
+    assert r1.action == Action.STOP and "hard-stop" in r1.explanation.lower()
+    # Obstacle still there after the escalate window → maneuver around it.
+    f._sonic_block_since = time.monotonic() - (f._sonic_escalate_s + 0.5)
+    r2 = f.decide(0.0, 0.48, 0.0, "MIXED", "STATIC_CLEAR", ultrasonic_risk=1.0,
+                  depth_left_m=1.0, depth_center_m=0.3, depth_right_m=0.35)
+    assert r2.action in (Action.REROUTE, Action.BACKUP)
+    assert "won't clear" in r2.explanation.lower()
+    # Once the sonar clears, the block timer resets (next block starts fresh).
+    f.decide(0.0, 0.1, 0.0, "CLEAR", "STATIC_CLEAR", ultrasonic_risk=0.0)
+    assert f._sonic_block_since == 0.0
+
+
 def test_turn_only_when_side_clearly_more_open(cfg):
     f = DecisionFuser(cfg, "predictive")
     # a side beats centre by more than the margin → TURN toward it

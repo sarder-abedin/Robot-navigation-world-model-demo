@@ -210,6 +210,12 @@ decision:
     max_turn_seconds: 4.0       # keep turning at most this long, then STOP & reassess
     backup_distance_m: 0.35     # closer than this + approaching → BACK UP (don't turn into it)
     max_backup_seconds: 1.0     # cap reversing (no rear sensor) then STOP & reassess
+    # The ultrasonic hard-stop is a reflex STOP. If the obstacle it sees won't
+    # clear within this many seconds, escalate from a permanent STOP to the
+    # avoidance maneuver (turn/back-up/rotate-to-search) to go AROUND it — the
+    # sonar-seen obstacle often never raises the vision risk (YOLO can't classify a
+    # wall), so without this the robot just sits stopped and never reroutes.
+    ultrasonic_escalate_seconds: 1.5
     # A side must beat the centre free-space to TURN toward it — by this absolute
     # margin OR by direction_margin_frac (relative). The relative test is what
     # makes reroute work on UNCALIBRATED depth, whose per-side gaps are only a few
