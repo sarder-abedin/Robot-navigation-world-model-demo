@@ -93,10 +93,14 @@ class DecisionFuser:
         self._rr_dir_margin = float(rr.get("direction_margin_m", 0.05))
         self._rr_dir_frac = float(rr.get("direction_margin_frac", 0.10))
         self._rr_dynamic = set(rr.get("dynamic_classes", ["person", "cat", "dog"]))
+        # How long to hold the ultrasonic reflex STOP before escalating to a
+        # maneuver (turn/back-up) to go around an obstacle that won't clear.
+        self._sonic_escalate_s = float(rr.get("ultrasonic_escalate_seconds", 1.5))
         self._wait_since: float = 0.0   # when the current WAIT started (0 = not waiting)
         self._turn_since: float = 0.0   # when the current TURN started (0 = not turning)
         self._backup_since: float = 0.0 # when the current BACKUP run started
         self._blocked_since: float = 0.0  # when we first got boxed-in with no open side
+        self._sonic_block_since: float = 0.0  # when the ultrasonic first hard-stopped us
 
         # Kinematic safe-speed governor (proactive, latency-aware). Lazy import
         # keeps decision.py free of a top-level dependency cycle (speed_governor
@@ -160,6 +164,26 @@ class DecisionFuser:
         # within the stop distance (or is blind-close). This is a reflex, decided
         # by distance alone — separate from and higher priority than the AI risk.
         if ultrasonic_risk >= 1.0:
+            # Reflex STOP. But an obstacle the SONAR sees may never raise the
+            # *vision* risk (YOLO can't classify a wall → det=0; motion STATIC_CLEAR
+            # → ta=0), so the vision-driven reroute below would never fire and the
+            # robot would sit here forever. So: hold the reflex STOP briefly, then —
+            # if the obstacle won't clear — escalate to the closed-loop avoidance
+            # (turn toward an open side / back up / rotate-to-search) to go around it.
+            if self._sonic_block_since == 0.0:
+                self._sonic_block_since = now
+            if (self._rr_closed_loop
+                    and now - self._sonic_block_since > self._sonic_escalate_s):
+                action, reroute_dir, why = self._avoidance(
+                    now, temporal_pattern, obstacle_label,
+                    depth_left_m, depth_center_m, depth_right_m,
+                )
+                return self._result(
+                    action, smoothed, detector_risk, world_model_risk,
+                    temporal_risk, world_model_label, temporal_pattern,
+                    f"Ultrasonic block won't clear → {why}",
+                    reroute_direction=reroute_dir if action == Action.REROUTE else "",
+                )
             self._stop_until = now + self._stop_hold
             # A hard-stop supersedes any in-progress avoidance maneuver; clear the
             # timers so that when risk resumes we start the maneuver fresh rather
@@ -171,6 +195,8 @@ class DecisionFuser:
                 temporal_risk, world_model_label, temporal_pattern,
                 "Ultrasonic hard-stop (obstacle within safe distance)",
             )
+        # Sonar clear → reset the persistent-block timer so the next block starts fresh.
+        self._sonic_block_since = 0.0
 
         # ── 2. Vision-driven action from the fused AI risk ────────────────────
         reroute_dir = ""
