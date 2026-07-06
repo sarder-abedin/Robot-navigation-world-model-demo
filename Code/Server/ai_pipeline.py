@@ -476,7 +476,8 @@ class AIPipeline:
                 )
 
             # ── 10. Broadcast AI status to TCP client ─────────────────────────
-            self._broadcast_status(decision, temporal_result, sonic_cm, ssv2_sentence)
+            self._broadcast_status(decision, temporal_result, sonic_cm,
+                                   ssv2_sentence, depth_result)
 
             # ── 11. Update shared state ───────────────────────────────────────
             with self._state_lock:
@@ -557,15 +558,17 @@ class AIPipeline:
     # ── TCP status broadcast ──────────────────────────────────────────────────
 
     def _broadcast_status(self, decision, temporal_result, sonic_cm: float,
-                          ssv2_sentence: str = "") -> None:
+                          ssv2_sentence: str = "", depth_result=None) -> None:
         """
         Send a compact status string to all connected command clients so the
-        lightweight client UI can display live AI state without video decoding.
+        lightweight client UI can display live AI state (in the panel below the
+        video) without video decoding.
 
         Format:
-          CMD_AISTATUS#<action>#<risk*100>#<wm_label>#<pattern>#<sonic_cm>#<ssv2>\r\n
-        The ssv2 sentence is the last field so older clients that split on the
-        first 6 fields keep working.
+          CMD_AISTATUS#<action>#<risk*100>#<wm_label>#<pattern>#<sonic_cm>#<ssv2>
+                       #<clear_dist_m>#<clear_dir>\r\n
+        Fields are appended, never reordered, so older clients that split on the
+        first 6–7 fields keep working; newer clients also read the depth fields.
         """
         if self._tcp_server is None:
             return
@@ -578,13 +581,22 @@ class AIPipeline:
             pattern = getattr(temporal_result.pattern, "value", temporal_result.pattern)
             # '#' is the field separator; keep the sentence clean.
             ssv2 = (ssv2_sentence or "").replace("#", " ")
+            # Depth free-space (shown in the UI panel below the video). -1 / "" when
+            # the depth model isn't ready.
+            if depth_result is not None and getattr(depth_result, "buffer_ready", False):
+                clear_dist = getattr(depth_result, "clear_distance_m", -1.0)
+                clear_dir = getattr(depth_result, "clear_direction", "") or ""
+            else:
+                clear_dist, clear_dir = -1.0, ""
             msg = (
                 f"CMD_AISTATUS#{action}"
                 f"#{int(decision.risk_score * 100)}"
                 f"#{wm_label}"
                 f"#{pattern}"
                 f"#{sonic_cm:.1f}"
-                f"#{ssv2}\r\n"
+                f"#{ssv2}"
+                f"#{clear_dist:.2f}"
+                f"#{clear_dir}\r\n"
             )
             if self._tcp_server.isCmdServerConnected():
                 self._tcp_server.sendDataToCmdClinet(msg)

@@ -124,6 +124,7 @@ class AIViewer(QMainWindow):
         self._manual_speed: int = SPEED_FULL
         self._keys_held: set[int] = set()  # avoid repeated motor sends on auto-repeat
         self._goal_selected: bool = False  # AI activation is gated until a goal is set
+        self._fps_times: list[float] = []  # video-frame arrival times for the FPS readout
 
         self._build_ui()
         self._register_shortcuts()
@@ -207,12 +208,23 @@ class AIViewer(QMainWindow):
         self._wm_val    = self._make_info_val("UNKNOWN")
         self._pat_val   = self._make_info_val("UNKNOWN")
         self._sonic_val = self._make_info_val("---")
+        self._depth_val = self._make_info_val("---")
+        self._fps_val   = self._make_info_val("---")
+        self._ssv2_val  = self._make_info_val("---")
+        self._ssv2_val.setWordWrap(True)
         grid.addWidget(QLabel("V-JEPA 2:"),   2, 0)
         grid.addWidget(self._wm_val,           2, 1)
         grid.addWidget(QLabel("Motion:"),      3, 0)
         grid.addWidget(self._pat_val,          3, 1)
         grid.addWidget(QLabel("Sonic:"),       4, 0)
         grid.addWidget(self._sonic_val,        4, 1)
+        # Moved off the video HUD into this panel (declutter):
+        grid.addWidget(QLabel("Depth:"),       5, 0)
+        grid.addWidget(self._depth_val,        5, 1)
+        grid.addWidget(QLabel("FPS:"),         6, 0)
+        grid.addWidget(self._fps_val,          6, 1)
+        grid.addWidget(QLabel("SSv2:"),        7, 0)
+        grid.addWidget(self._ssv2_val,         7, 1)
 
         root.addWidget(state_box)
 
@@ -641,6 +653,14 @@ class AIViewer(QMainWindow):
         self._pix_w = pix.width()
         self._pix_h = pix.height()
         self._video_label.setPixmap(pix)
+        # Video FPS (moved off the HUD): count arrivals over a ~1 s window.
+        import time as _t
+        now = _t.monotonic()
+        self._fps_times.append(now)
+        while self._fps_times and now - self._fps_times[0] > 1.0:
+            self._fps_times.pop(0)
+        if len(self._fps_times) >= 2:
+            self._fps_val.setText(f"{len(self._fps_times) - 1:d}")
 
     # ── Goal selection (Phase 1: send CMD_GOAL, server draws the marker) ─────────
 
@@ -715,10 +735,14 @@ class AIViewer(QMainWindow):
 
     def _process_status(self, line: str) -> None:
         # CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>
+        #             #<ssv2>#<clear_dist_m>#<clear_dir>   (trailing fields optional)
         parts = line.split("#")
         if len(parts) < 6:
             return
         _, action, risk_pct, wm_label, pattern, sonic = parts[:6]
+        ssv2 = parts[6] if len(parts) > 6 else ""
+        clear_dist = parts[7] if len(parts) > 7 else ""
+        clear_dir = parts[8] if len(parts) > 8 else ""
 
         self._action_label.setText(action)
         self._action_label.setStyleSheet(ACTION_CSS.get(action, ACTION_CSS["---"]))
@@ -753,6 +777,16 @@ class AIViewer(QMainWindow):
                 )
         except ValueError:
             self._sonic_val.setText(sonic)
+
+        # Depth + SSv2 (moved off the video HUD into this panel).
+        try:
+            dm = float(clear_dist)
+            self._depth_val.setText(
+                f"{dm:.2f} m ahead  (open: {clear_dir or '?'})" if dm >= 0 else "---"
+            )
+        except ValueError:
+            self._depth_val.setText("---")
+        self._ssv2_val.setText(ssv2 or "---")
 
     def _update_status_bar(self) -> None:
         if self._connected:

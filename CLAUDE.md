@@ -68,7 +68,7 @@ assets/         ← Demo video clips
 | `Code/Server/goal_navigator.py` | Tracks a user-selected goal point (CSRT, template-match fallback) → bearing + depth for the HUD (Phase 2: no motion). Server starts **idle**; `--ai-start` opts headless into driving |
 | `Code/Server/calibrate_anchors.py` | Builds V-JEPA 2 corridor anchors from blocked/clear frame folders → `anchors.npz` |
 | `Code/Robot/calibrate_governor.py` | On-robot: measures governor m/s constants (sonar+motors), safely patches `config.yaml` |
-| `Code/Server/visualization.py` | HUD overlay incl. depth free-space (distance + open direction bars) |
+| `Code/Server/visualization.py` | HUD overlay: keeps spatial cues on the video (boxes, risk bar, action, depth L/C/R bars, goal marker+arrow+readout); text overlays (V-JEPA2/motion, sonic, fps, ssv2, depth-distance) default OFF and are shown in the UI panel below the video instead |
 | `Code/Server/robot_control.py` | `TCPRobotController` sends `CMD_AIMOVE` to Pi; direct `RobotController` reroute/backup run as preemptible worker threads (never block the pipeline); ultrasonic risk (fail-safe on no-echo) |
 | `Code/Robot/main_robot.py` | Pi entry point (thin client); camera stream + sonic + command loop; motor **watchdog** (stop on PC silence) + **reconnect** loop |
 | `Code/Robot/tcp_robot_client.py` | Pi-side TCP client; `send_sonic()` / `send_frame()`; TCP keepalive on both sockets |
@@ -89,8 +89,8 @@ UI → PC:  CMD_AIMODE#<0|1|2>  |  CMD_MOTOR#<L>#<R>  |  CMD_KILL#0
 UI → PC:  CMD_LOGGING#<0|1>                         (toggle server-side run logging)
 UI → PC:  CMD_GOAL#<x_permille>#<y_permille>        (set goal at normalized image coords ×1000; Phase 2: tracked marker + bearing/depth on HUD, no motion yet)
 UI → PC:  CMD_GOAL_CLEAR                            (clear the goal)
-PC → UI:  CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>
-          (ssv2_sentence = genuine SSv2 label with the YOLO object filled in; last field, optional for old clients)
+PC → UI:  CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>#<clear_dist_m>#<clear_dir>
+          (ssv2_sentence = genuine SSv2 label with the YOLO object filled in; depth fields appended for the UI panel; trailing fields optional for old clients)
 PC → UI:  4-byte LE uint32 + JPEG  (annotated HUD frames, port 8003)
 ```
 

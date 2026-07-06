@@ -161,3 +161,36 @@ def test_hud_lost_goal_renders_without_error():
 def test_permille_roundtrip_precision():
     for nx in (0.0, 0.123, 0.5, 0.999, 1.0):
         assert abs(int(nx * 1000) / 1000.0 - nx) <= 0.001
+
+
+# ── HUD declutter: text overlays default off (shown in the UI panel instead) ─────
+
+def test_hud_declutter_default_flags():
+    v = Visualizer({"visualization": {}})   # all defaults
+    # Spatial / glanceable overlays stay burned on the video:
+    assert v._overlay_det and v._overlay_risk and v._overlay_action
+    # Text overlays move to the panel below → off on the video by default:
+    assert not v._overlay_wm and not v._overlay_sonic and not v._overlay_fps
+    assert not v._overlay_mode_badge and not v._overlay_ssv2 and not v._overlay_depth_text
+
+
+def test_hud_depth_bars_drawn_without_text():
+    @dataclass
+    class _Depth:
+        buffer_ready: bool = True
+        clear_distance_m: float = 0.5
+        clear_direction: str = "RIGHT"
+        region_distances_m: dict = field(default_factory=lambda: {"LEFT": 0.4, "CENTER": 0.5, "RIGHT": 0.9})
+    out = _viz().annotate(np.zeros((300, 400, 3), np.uint8), _Det(), _Decision(),
+                          _Temporal(), depth=_Depth())
+    assert out[88:120, 9:170].sum() > 0     # L/C/R bars still drawn (spatial cue kept)
+
+
+def test_extended_aistatus_parses_with_depth_and_ssv2():
+    # Mirrors ai_viewer._process_status field layout for the extended message.
+    line = "CMD_AISTATUS#FORWARD#12#MIXED#STATIC_CLEAR#62.2#person moving closer#0.45#RIGHT"
+    parts = line.split("#")
+    assert parts[6] == "person moving closer"    # ssv2
+    assert float(parts[7]) == 0.45 and parts[8] == "RIGHT"   # depth dist + dir
+    # Old 6-field client still parses the core fields.
+    assert parts[:6] == ["CMD_AISTATUS", "FORWARD", "12", "MIXED", "STATIC_CLEAR", "62.2"]

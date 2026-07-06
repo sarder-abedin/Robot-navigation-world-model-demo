@@ -313,9 +313,16 @@ server:
 visualization:
   show_window: false            # set true only if a display is attached to the Pi
   window_name: "Predictive Navigation"
-  overlay_detections: true
-  overlay_risk_bar: true
-  overlay_action: true
-  overlay_world_model_label: true
+  overlay_detections: true      # detection boxes (spatial) — stay on the video
+  overlay_risk_bar: true        # risk bar — stays on the video
+  overlay_action: true          # current action label — stays on the video
+  # Text overlays below default OFF: they're shown in the UI panel BELOW the video
+  # to keep the image uncluttered. Set true to burn them back onto the frame.
+  overlay_world_model_label: false   # V-JEPA 2 label + motion pattern text
+  overlay_sonic: false               # ultrasonic distance text
+  overlay_fps: false                 # FPS counter
+  overlay_mode_badge: false          # predictive/baseline badge
+  overlay_ssv2: false                # SSv2 caption sentence
+  overlay_depth_text: false          # depth "X.XXm ahead" text (L/C/R bars stay)
   # Annotated frames are sent via the video TCP channel
   stream_annotated: true

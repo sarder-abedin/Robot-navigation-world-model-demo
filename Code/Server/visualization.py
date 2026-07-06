@@ -62,7 +62,16 @@ class Visualizer:
         self._overlay_det = vis.get("overlay_detections", True)
         self._overlay_risk = vis.get("overlay_risk_bar", True)
         self._overlay_action = vis.get("overlay_action", True)
-        self._overlay_wm = vis.get("overlay_world_model_label", True)
+        # These text overlays are shown in the UI panel BELOW the video, so they
+        # default OFF on the video itself to keep the image uncluttered. The
+        # spatial cues (detection boxes, depth L/C/R bars, goal marker+arrow) and
+        # Action/Risk/Goal-readout stay on the video.
+        self._overlay_wm = vis.get("overlay_world_model_label", False)   # V-JEPA2 + motion text
+        self._overlay_sonic = vis.get("overlay_sonic", False)
+        self._overlay_fps = vis.get("overlay_fps", False)
+        self._overlay_mode_badge = vis.get("overlay_mode_badge", False)
+        self._overlay_ssv2 = vis.get("overlay_ssv2", False)
+        self._overlay_depth_text = vis.get("overlay_depth_text", False)  # keep the L/C/R bars
         self._stream_annotated = vis.get("stream_annotated", True)
         self._mode = navigation_mode
 
@@ -110,12 +119,17 @@ class Visualizer:
             self._draw_wm_label(vis, getattr(decision.world_model_label, "value", decision.world_model_label))
             self._draw_temporal(vis, getattr(temporal_result.pattern, "value", temporal_result.pattern))
 
-        self._draw_sonic(vis, ultrasonic_cm, w)
-        self._draw_mode_badge(vis, w)
-        self._draw_fps(vis, fps)
+        if self._overlay_sonic:
+            self._draw_sonic(vis, ultrasonic_cm, w)
+        if self._overlay_mode_badge:
+            self._draw_mode_badge(vis, w)
+        if self._overlay_fps:
+            self._draw_fps(vis, fps)
         if depth is not None and getattr(depth, "buffer_ready", False):
-            self._draw_depth(vis, depth, w, h)
-        if ssv2_sentence:
+            # Spatial L/C/R free-space bars stay on the video; the text line is
+            # optional (shown in the UI panel below by default).
+            self._draw_depth(vis, depth, w, h, with_text=self._overlay_depth_text)
+        if ssv2_sentence and self._overlay_ssv2:
             self._draw_ssv2(vis, ssv2_sentence, w, h)
 
         if goal is not None and getattr(goal, "active", False):
@@ -161,19 +175,20 @@ class Visualizer:
         cv2.rectangle(vis, (lx - 3, ly - th - 3), (lx + tw + 3, ly + 3), (0, 0, 0), -1)
         cv2.putText(vis, label, (lx, ly), cv2.FONT_HERSHEY_SIMPLEX, 0.45, colour, 1, cv2.LINE_AA)
 
-    def _draw_depth(self, vis, depth, w: int, h: int) -> None:
-        """Depth free-space HUD: distance ahead, open direction, L/C/R region bars."""
+    def _draw_depth(self, vis, depth, w: int, h: int, with_text: bool = True) -> None:
+        """Depth free-space HUD: L/C/R region bars (always) + optional distance text."""
         regions = getattr(depth, "region_distances_m", {}) or {}
         direction = getattr(depth, "clear_direction", "CENTER")
         ahead = getattr(depth, "clear_distance_m", -1.0)
 
-        # Text line near the top-left, under the WM/motion labels.
-        text = f"Depth: {ahead:.2f}m ahead  |  open: {direction}"
-        font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
-        (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
         y = 78
-        cv2.rectangle(vis, (6, y - th - 5), (6 + tw + 6, y + 5), (0, 0, 0), -1)
-        cv2.putText(vis, text, (9, y), font, scale, (0, 220, 255), thick, cv2.LINE_AA)
+        if with_text:
+            # Text line near the top-left, under the WM/motion labels.
+            text = f"Depth: {ahead:.2f}m ahead  |  open: {direction}"
+            font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+            (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+            cv2.rectangle(vis, (6, y - th - 5), (6 + tw + 6, y + 5), (0, 0, 0), -1)
+            cv2.putText(vis, text, (9, y), font, scale, (0, 220, 255), thick, cv2.LINE_AA)
 
         # Three small bars (LEFT/CENTER/RIGHT), longer = more open; the chosen
         # direction is highlighted green.
