@@ -1,162 +1,252 @@
 """
-calibration_ui.py – a separate, desk-only Streamlit UI for calibration from logs.
+calibration_ui.py – a separate, desk-only PyQt5 UI for calibration from logs.
 
 Zero extra driving: pick one or more stored run folders, review the derived
 depth.scale / governor speeds / anchor label counts, and apply them to config.yaml
 (with a verification of what was written). This is a *separate* UI from the
-operator viewers (streamlit_viewer.py / ai_viewer.py) — it never drives the robot.
+operator viewers (ai_viewer.py / streamlit_viewer.py) — it never drives the robot.
 
 Run:
-    streamlit run Code/Server/calibration_ui.py
+    python Code/Server/calibration_ui.py
 
 It reuses the tested pure functions in calibrate_from_logs.py, so the numbers match
-the CLI exactly.
+the CLI exactly. Anchor building (which loads V-JEPA 2) runs in a worker thread so
+the window never freezes.
 """
 
 import glob
 import os
 import sys
 
-import streamlit as st
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtWidgets import (
+    QApplication, QCheckBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton,
+    QTextEdit, QVBoxLayout, QWidget,
+)
 import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import calibrate_from_logs as cal   # noqa: E402  (path set above)
 
-st.set_page_config(page_title="Navigation Calibration", layout="centered")
-st.title("🎛️ Navigation Calibration")
-st.caption("Zero-driving calibration from stored run logs. Pick runs → review → apply. "
-           "The robot is never driven from here.")
 
+class ApplyWorker(QThread):
+    """Runs patch + (optional) anchor building off the GUI thread."""
+    finished_ok = pyqtSignal(str)
+    failed = pyqtSignal(str)
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
+    def __init__(self, cfg, scale, gov, anchor_runs, rows_by_run, build_anchors):
+        super().__init__()
+        self._cfg, self._scale, self._gov = cfg, scale, gov
+        self._anchor_runs, self._rows = anchor_runs, rows_by_run
+        self._build_anchors = build_anchors
 
-cfg_path = st.text_input("Config file to calibrate", os.path.join(HERE, "config.yaml"))
-
-
-def _default_logs_dir() -> str:
-    try:
-        c = yaml.safe_load(open(cfg_path))
-        d = (c.get("logging", {}) or {}).get("log_dir", "../../logs_rpi")
-        return os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(cfg_path)), d))
-    except Exception:
-        return os.path.normpath(os.path.join(HERE, "..", "..", "logs_rpi"))
-
-
-log_dir = st.text_input("Logs directory", _default_logs_dir())
-run_dirs = sorted(glob.glob(os.path.join(log_dir, "run_*")))
-
-
-# ── 1. Select runs ────────────────────────────────────────────────────────────
-
-st.subheader("1 · Select runs  (more runs = more robust)")
-if not run_dirs:
-    st.warning(f"No `run_*` folders found in {log_dir}. Record a run with logging on first.")
-    st.stop()
-
-selected = []
-for r in run_dirs:
-    has_csv = os.path.exists(os.path.join(r, "navigation_log.csv"))
-    has_raw = os.path.isdir(os.path.join(r, "raw_frames"))
-    tag = ("✓CSV" if has_csv else "✗CSV") + ("  ✓raw" if has_raw else "  ✗raw")
-    if st.checkbox(f"{os.path.basename(r)}   [{tag}]", value=has_csv,
-                   disabled=not has_csv, key=r):
-        selected.append(r)
-
-if not selected:
-    st.info("Select at least one run that has a `navigation_log.csv`.")
-    st.stop()
-
-
-# ── Pool + compute (fast; numpy only) ─────────────────────────────────────────
-
-runs, rows_by_run = [], {}
-ratios = []
-gpool = {"forward": [], "slow": [], "decel": []}
-for r in selected:
-    rows = cal.read_rows(r)
-    rows_by_run[r] = rows
-    runs.append((r, rows))
-    ratios += cal.depth_ratios(rows)
-    s = cal.governor_samples(rows)
-    for k in gpool:
-        gpool[k] += s[k]
-
-scale, n_pairs = cal.depth_scale_from_ratios(ratios)
-gov = cal.summarize_governor(gpool)
-
-
-# ── 2. Results ────────────────────────────────────────────────────────────────
-
-st.subheader("2 · Results (pooled across selected runs)")
-c1, c2, c3 = st.columns(3)
-c1.metric("depth.scale", f"{scale:.3f}" if scale is not None else "—", f"{n_pairs} pairs")
-c2.metric("forward m/s",
-          f"{gov['forward_speed_mps']:.3f}" if gov["forward_speed_mps"] else "—",
-          f"{gov['n_forward']} segments")
-c3.metric("slow m/s",
-          f"{gov['slow_speed_mps']:.3f}" if gov["slow_speed_mps"] else "—",
-          f"{gov['n_slow']} segments")
-st.write(f"**max_decel_mps2:** "
-         + (f"{gov['max_decel_mps2']:.3f} (from {gov['n_decel']} coasts)"
-            if gov["max_decel_mps2"] else "not measurable from these logs — the config default is kept"))
-
-if scale is None:
-    st.warning("Not enough valid ultrasonic/depth pairs — pick runs recorded with a "
-               "**working ultrasonic** and depth enabled.")
-
-
-# ── 3. Anchors (optional, heavy) ──────────────────────────────────────────────
-
-st.subheader("3 · V-JEPA 2 anchors (optional)")
-raw_runs = [r for r in selected if os.path.isdir(os.path.join(r, "raw_frames"))]
-if not raw_runs:
-    st.info("None of the selected runs have `raw_frames/`. Turn on "
-            "`logging.save_raw_frames` and record a run to enable anchor calibration.")
-do_anchors = st.checkbox("Build anchors from raw frames (slow — loads V-JEPA 2)",
-                         value=False, disabled=not raw_runs)
-
-
-# ── 4. Apply ──────────────────────────────────────────────────────────────────
-
-st.subheader("4 · Apply to config")
-if st.button("Apply to config.yaml", type="primary", disabled=not os.path.exists(cfg_path)):
-    applied = []
-    try:
-        if scale is not None:
-            cal.patch_config_block(cfg_path, "depth", {"scale": round(scale, 3)})
-            applied.append(f"depth.scale = {round(scale, 3)}")
-        gov_updates = {k: round(v, 3) for k, v in gov.items()
-                       if k in ("forward_speed_mps", "slow_speed_mps", "max_decel_mps2") and v}
-        if gov_updates:
-            cal.patch_config_block(cfg_path, "governor", gov_updates)
-            applied.append(f"governor {gov_updates}")
-        if do_anchors and raw_runs:
-            with st.spinner("Building anchors (loading V-JEPA 2 — this can take a minute)…"):
+    def run(self):
+        try:
+            applied = []
+            if self._scale is not None:
+                cal.patch_config_block(self._cfg, "depth", {"scale": round(self._scale, 3)})
+                applied.append(f"depth.scale = {round(self._scale, 3)}")
+            gu = {k: round(v, 3) for k, v in self._gov.items()
+                  if k in ("forward_speed_mps", "slow_speed_mps", "max_decel_mps2") and v}
+            if gu:
+                cal.patch_config_block(self._cfg, "governor", gu)
+                applied.append(f"governor {gu}")
+            if self._build_anchors and self._anchor_runs:
                 out = os.path.abspath(os.path.join(HERE, "anchors.npz"))
                 ok = cal._build_anchors_from_runs(
-                    [(r, rows_by_run[r]) for r in raw_runs], out, cfg_path)
-            if ok:
-                cal.patch_config_block(cfg_path, "world_model", {"anchors_path": out})
-                applied.append(f"anchors_path = {out}")
-        st.success("Applied: " + ("; ".join(applied) if applied else "nothing (no valid values)"))
-    except Exception as exc:
-        st.error(f"Apply failed (config restored from backup): {exc}")
+                    [(r, self._rows[r]) for r in self._anchor_runs], out, self._cfg)
+                if ok:
+                    cal.patch_config_block(self._cfg, "world_model", {"anchors_path": out})
+                    applied.append(f"anchors_path = {out}")
+            # Verify what actually landed.
+            c = yaml.safe_load(open(self._cfg))
+            ap = (c.get("world_model", {}) or {}).get("anchors_path", "")
+            lines = [
+                "Applied: " + ("; ".join(applied) if applied else "nothing (no valid values)"),
+                "",
+                "── Effective in config now ──",
+                f"  config file : {os.path.abspath(self._cfg)}",
+                f"  depth.scale : {(c.get('depth', {}) or {}).get('scale')}",
+                f"  governor    : {(c.get('decision', {}) or {}).get('governor', {})}",
+                f"  anchors_path: {ap}"
+                + ("  ✓ file present" if ap and os.path.exists(ap)
+                   else ("  ✗ FILE MISSING" if ap else "")),
+                "",
+                "⚠ RESTART the server — it reads config.yaml at startup, so the "
+                "calibrated values take effect on the next run.",
+            ]
+            self.finished_ok.emit("\n".join(lines))
+        except Exception as exc:
+            self.failed.emit(f"Apply failed (config restored from backup): {exc}")
 
-    # Verify what actually landed in the file.
-    try:
-        c = yaml.safe_load(open(cfg_path))
-        ap = (c.get("world_model", {}) or {}).get("anchors_path", "")
-        st.info("Effective in config now:")
-        st.json({
-            "config file": os.path.abspath(cfg_path),
-            "depth.scale": (c.get("depth", {}) or {}).get("scale"),
-            "decision.governor": (c.get("decision", {}) or {}).get("governor", {}),
-            "world_model.anchors_path": ap,
-            "anchors file present": bool(ap) and os.path.exists(ap),
-        })
-    except Exception as exc:
-        st.error(f"Could not re-read config: {exc}")
-    st.warning("⚠ **Restart the server** — it reads `config.yaml` at startup, so the "
-               "calibrated values take effect on the next run.")
+
+class CalibrationWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Navigation Calibration (from logs — no driving)")
+        self.resize(760, 720)
+        self._worker = None
+        self._build_ui()
+
+    # ── UI ──────────────────────────────────────────────────────────────────
+    def _build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QVBoxLayout(central)
+
+        # Paths
+        paths = QGroupBox("Paths")
+        pg = QGridLayout(paths)
+        self._cfg_edit = QLineEdit(os.path.join(HERE, "config.yaml"))
+        self._logs_edit = QLineEdit(self._default_logs_dir())
+        pg.addWidget(QLabel("Config file:"), 0, 0)
+        pg.addWidget(self._cfg_edit, 0, 1)
+        b1 = QPushButton("Browse…"); b1.clicked.connect(self._browse_cfg); pg.addWidget(b1, 0, 2)
+        pg.addWidget(QLabel("Logs directory:"), 1, 0)
+        pg.addWidget(self._logs_edit, 1, 1)
+        b2 = QPushButton("Browse…"); b2.clicked.connect(self._browse_logs); pg.addWidget(b2, 1, 2)
+        b3 = QPushButton("Scan runs"); b3.clicked.connect(self._scan_runs); pg.addWidget(b3, 2, 2)
+        root.addWidget(paths)
+
+        # Run selection
+        runs_box = QGroupBox("1 · Select runs  (more runs = more robust; ✓CSV needed, ✓raw for anchors)")
+        rl = QVBoxLayout(runs_box)
+        self._run_list = QListWidget()
+        rl.addWidget(self._run_list)
+        root.addWidget(runs_box)
+
+        # Actions
+        act = QHBoxLayout()
+        self._btn_analyze = QPushButton("2 · Analyze depth + governor")
+        self._btn_analyze.clicked.connect(self._analyze)
+        act.addWidget(self._btn_analyze)
+        self._chk_anchors = QCheckBox("Build V-JEPA 2 anchors on apply (slow; needs raw frames)")
+        act.addWidget(self._chk_anchors)
+        self._btn_apply = QPushButton("3 · Apply to config")
+        self._btn_apply.clicked.connect(self._apply)
+        act.addWidget(self._btn_apply)
+        root.addLayout(act)
+
+        # Results
+        self._out = QTextEdit()
+        self._out.setReadOnly(True)
+        self._out.setStyleSheet("font-family: monospace;")
+        root.addWidget(self._out)
+
+        self._scan_runs()
+
+    # ── Helpers ─────────────────────────────────────────────────────────────
+    def _default_logs_dir(self):
+        try:
+            c = yaml.safe_load(open(os.path.join(HERE, "config.yaml")))
+            d = (c.get("logging", {}) or {}).get("log_dir", "../../logs_rpi")
+            return os.path.normpath(os.path.join(HERE, d))
+        except Exception:
+            return os.path.normpath(os.path.join(HERE, "..", "..", "logs_rpi"))
+
+    def _browse_cfg(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Select config.yaml", HERE, "YAML (*.yaml *.yml)")
+        if p:
+            self._cfg_edit.setText(p)
+
+    def _browse_logs(self):
+        p = QFileDialog.getExistingDirectory(self, "Select logs directory", self._logs_edit.text())
+        if p:
+            self._logs_edit.setText(p)
+            self._scan_runs()
+
+    def _scan_runs(self):
+        self._run_list.clear()
+        run_dirs = sorted(glob.glob(os.path.join(self._logs_edit.text(), "run_*")))
+        if not run_dirs:
+            self._log(f"No run_* folders in {self._logs_edit.text()}")
+            return
+        for r in run_dirs:
+            has_csv = os.path.exists(os.path.join(r, "navigation_log.csv"))
+            has_raw = os.path.isdir(os.path.join(r, "raw_frames"))
+            tag = ("✓CSV" if has_csv else "✗CSV") + ("  ✓raw" if has_raw else "  ✗raw")
+            it = QListWidgetItem(f"{os.path.basename(r)}    [{tag}]")
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if has_csv else Qt.Unchecked)
+            if not has_csv:
+                it.setFlags(it.flags() & ~Qt.ItemIsEnabled)
+            it.setData(Qt.UserRole, r)
+            self._run_list.addItem(it)
+
+    def _selected_runs(self):
+        out = []
+        for i in range(self._run_list.count()):
+            it = self._run_list.item(i)
+            if it.checkState() == Qt.Checked:
+                out.append(it.data(Qt.UserRole))
+        return out
+
+    def _collect(self):
+        """Pool selected runs → (scale, n, gov, rows_by_run, selected, raw_runs)."""
+        selected = self._selected_runs()
+        rows_by_run, ratios = {}, []
+        gpool = {"forward": [], "slow": [], "decel": []}
+        for r in selected:
+            rows = cal.read_rows(r)
+            rows_by_run[r] = rows
+            ratios += cal.depth_ratios(rows)
+            s = cal.governor_samples(rows)
+            for k in gpool:
+                gpool[k] += s[k]
+        scale, n = cal.depth_scale_from_ratios(ratios)
+        gov = cal.summarize_governor(gpool)
+        raw_runs = [r for r in selected if os.path.isdir(os.path.join(r, "raw_frames"))]
+        return scale, n, gov, rows_by_run, selected, raw_runs
+
+    def _analyze(self):
+        if not self._selected_runs():
+            self._log("Select at least one run with a CSV.")
+            return
+        scale, n, gov, _, selected, raw_runs = self._collect()
+        lines = [f"Pooled across {len(selected)} run(s):", ""]
+        lines.append(f"  depth.scale       = {scale:.3f}   ({n} sonar/depth pairs)"
+                     if scale is not None else
+                     f"  depth.scale       = insufficient ({n} pairs) — need a working ultrasonic")
+        lines.append(f"  forward_speed_mps = {gov['forward_speed_mps']}   ({gov['n_forward']} segments)")
+        lines.append(f"  slow_speed_mps    = {gov['slow_speed_mps']}   ({gov['n_slow']} segments)")
+        lines.append(f"  max_decel_mps2    = {gov['max_decel_mps2']}   ({gov['n_decel']} coasts; "
+                     f"keeps config default if None)")
+        lines.append(f"  raw_frames runs   = {len(raw_runs)}/{len(selected)} (for anchors)")
+        self._out.setPlainText("\n".join(lines))
+
+    def _apply(self):
+        if not self._selected_runs():
+            self._log("Select at least one run with a CSV.")
+            return
+        scale, n, gov, rows_by_run, selected, raw_runs = self._collect()
+        self._btn_apply.setEnabled(False)
+        self._log("Applying…" + (" building anchors (loading V-JEPA 2)…" if self._chk_anchors.isChecked() else ""))
+        self._worker = ApplyWorker(self._cfg_edit.text(), scale, gov, raw_runs, rows_by_run,
+                                   self._chk_anchors.isChecked())
+        self._worker.finished_ok.connect(self._on_applied)
+        self._worker.failed.connect(self._on_apply_failed)
+        self._worker.start()
+
+    def _on_applied(self, msg):
+        self._out.setPlainText(msg)
+        self._btn_apply.setEnabled(True)
+
+    def _on_apply_failed(self, msg):
+        self._out.setPlainText(msg)
+        self._btn_apply.setEnabled(True)
+
+    def _log(self, msg):
+        self._out.append(msg)
+
+
+def main():
+    app = QApplication(sys.argv)
+    win = CalibrationWindow()
+    win.show()
+    return app.exec_()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

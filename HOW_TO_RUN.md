@@ -318,13 +318,13 @@ The full step-by-step (prerequisites, verification, troubleshooting) lives in
 
 **Fastest path — zero extra driving:** turn on `logging.save_raw_frames`, do one
 or more normal runs (logging on, working sonar), then calibrate at your desk with
-the **separate calibration UI** (never drives the robot):
+the **separate calibration UI** (a PyQt5 window that never drives the robot):
 ```bash
-streamlit run Code/Server/calibration_ui.py
+python Code/Server/calibration_ui.py
 ```
-Tick the run folders → review the pooled `depth.scale` / governor speeds / anchor
-counts → **Apply to config** (verifies + reminds you to restart the server). Or the
-CLI: `python Code/Server/calibrate_from_logs.py --run ../../logs_rpi/<run> [more…] --anchors --apply config.yaml`.
+Tick the run folders → **Analyze** the pooled `depth.scale` / governor speeds /
+anchor counts → **Apply to config** (verifies + reminds you to restart the server).
+Or the CLI: `python Code/Server/calibrate_from_logs.py --run ../../logs_rpi/<run> [more…] --anchors --apply config.yaml`.
 See CALIBRATION.md → "Zero-driving calibration from logs".
 
 The manual, in-corridor essentials:

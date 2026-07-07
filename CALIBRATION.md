@@ -31,14 +31,15 @@ You don't need to drive *for* calibration. A normal run already records everythi
 needed, and the numbers are derived offline — the ultrasonic distance logged each
 frame is a free ground-truth ruler.
 
-**Easiest: the calibration UI** (a separate desk-only app — it never drives the robot):
+**Easiest: the calibration UI** (a separate desk-only PyQt5 window — it never drives
+the robot):
 ```bash
-streamlit run Code/Server/calibration_ui.py
+python Code/Server/calibration_ui.py
 ```
-Tick the run folders → see the pooled `depth.scale` / governor speeds / anchor
-counts → **Apply to config** (which verifies what was written and reminds you to
-restart the server). Or use the CLI **`calibrate_from_logs.py`** directly: same
-math, same results.
+Tick the run folders → **Analyze** to see the pooled `depth.scale` / governor speeds
+/ anchor counts → **Apply to config** (which verifies what was written and reminds
+you to restart the server). Or use the CLI **`calibrate_from_logs.py`** directly:
+same math, same results.
 
 **One-time setup** — turn on raw-frame capture (only needed for anchors):
 ```yaml
