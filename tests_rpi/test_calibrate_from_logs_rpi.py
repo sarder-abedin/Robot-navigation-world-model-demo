@@ -15,7 +15,8 @@ SERVER = os.path.join(os.path.dirname(__file__), "..", "Code", "Server")
 sys.path.insert(0, SERVER)
 
 from calibrate_from_logs import (
-    autolabel_rows, depth_scale_from_rows, governor_from_rows, patch_config_block,
+    autolabel_rows, depth_ratios, depth_scale_from_ratios, depth_scale_from_rows,
+    governor_from_rows, governor_samples, patch_config_block, summarize_governor,
 )
 
 
@@ -40,6 +41,28 @@ def test_depth_scale_needs_enough_pairs_and_skips_blind_sonar():
     rows = [_row(ultrasonic_cm=-1, depth_center_m=1.0) for _ in range(30)]  # all blind
     scale, n = depth_scale_from_rows(rows)
     assert scale is None and n == 0
+
+
+def test_depth_and_governor_pool_across_multiple_runs():
+    # Two runs, each too small alone, pool to a robust estimate.
+    run_a = [_row(ultrasonic_cm=100, depth_center_m=1.25) for _ in range(12)]
+    run_b = [_row(ultrasonic_cm=150, depth_center_m=1.875) for _ in range(12)]  # same 0.8 ratio
+    assert depth_scale_from_rows(run_a)[0] is None      # 12 < 20 min alone
+    pooled = depth_ratios(run_a) + depth_ratios(run_b)
+    scale, n = depth_scale_from_ratios(pooled)
+    assert n == 24 and scale == pytest.approx(0.8, abs=0.01)
+
+    # Governor samples pool across runs too.
+    def fwd_run(v_cm_per_step):
+        return [_row(action="FORWARD", timestamp=round(i * 0.1, 2), ultrasonic_cm=200 - i * v_cm_per_step)
+                for i in range(10)]
+    pool = {"forward": [], "slow": [], "decel": []}
+    for run in (fwd_run(3), fwd_run(3)):
+        s = governor_samples(run)
+        for k in pool:
+            pool[k] += s[k]
+    g = summarize_governor(pool)
+    assert g["n_forward"] == 2 and g["forward_speed_mps"] == pytest.approx(0.30, abs=0.02)
 
 
 # ── Governor speeds ─────────────────────────────────────────────────────────────

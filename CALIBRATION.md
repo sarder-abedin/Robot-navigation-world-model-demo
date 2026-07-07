@@ -28,8 +28,17 @@ governor + goal arrival) → governor (depends on depth + motor reality).
 ## ⚡ Zero-driving calibration from logs (recommended)
 
 You don't need to drive *for* calibration. A normal run already records everything
-needed, and **`calibrate_from_logs.py`** derives the numbers offline — the
-ultrasonic distance logged each frame is a free ground-truth ruler.
+needed, and the numbers are derived offline — the ultrasonic distance logged each
+frame is a free ground-truth ruler.
+
+**Easiest: the calibration UI** (a separate desk-only app — it never drives the robot):
+```bash
+streamlit run Code/Server/calibration_ui.py
+```
+Tick the run folders → see the pooled `depth.scale` / governor speeds / anchor
+counts → **Apply to config** (which verifies what was written and reminds you to
+restart the server). Or use the CLI **`calibrate_from_logs.py`** directly: same
+math, same results.
 
 **One-time setup** — turn on raw-frame capture (only needed for anchors):
 ```yaml
@@ -41,16 +50,20 @@ Then **do one normal run** (Obstacle Avoidance is fine) with **run logging on** 
 a **working ultrasonic**, letting the robot approach and stop near obstacles a few
 times. That single run's folder is your calibration data.
 
-**Then, at your desk:**
+**Then, at your desk** — pass **one or more** run folders (more runs = more robust;
+they're pooled):
 ```bash
 cd Code/Server
-# depth scale + governor speeds (numpy only):
-python calibrate_from_logs.py --run ../../logs_rpi/run_YYYYMMDD_HHMMSS_predictive
-# review the printed values, then write them in:
-python calibrate_from_logs.py --run <dir> --apply config.yaml
-# also build V-JEPA 2 anchors (needs raw_frames/ + the model; run on the GPU/MPS box):
-python calibrate_from_logs.py --run <dir> --anchors --apply config.yaml
+# depth scale + governor speeds (numpy only), pooled across several runs:
+python calibrate_from_logs.py --run ../../logs_rpi/run_A ../../logs_rpi/run_B
+# review the printed values, then write them in (also builds anchors if raw frames exist):
+python calibrate_from_logs.py --run ../../logs_rpi/run_* --anchors --apply config.yaml
 ```
+`--apply` patches `config.yaml`, then **re-reads it and prints the effective values +
+the absolute config path**, and reminds you to **restart the server** (it reads
+`config.yaml` at startup) so the calibrated values take effect on the next run. The
+anchors path is written **absolute** so the server finds it regardless of its
+working directory.
 
 What it computes:
 - **`depth.scale`** = median(ultrasonic ÷ depth) over frames with a valid sonar reading.
