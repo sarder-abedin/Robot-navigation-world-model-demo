@@ -36,10 +36,13 @@ the robot):
 ```bash
 python Code/Server/calibration_ui.py
 ```
-Tick the run folders → **Analyze** to see the pooled `depth.scale` / governor speeds
-/ anchor counts → **Apply to config** (which verifies what was written and reminds
-you to restart the server). Or use the CLI **`calibrate_from_logs.py`** directly:
-same math, same results.
+**Tick one OR MORE runs — they're pooled** (more runs = more robust). Runs under the
+logs directory are listed automatically (**Scan logs dir**), and **+ Add run
+folder…** pulls in individual runs from *anywhere* (e.g. logs/raw frames spread
+across different locations). Then **Analyze** shows the pooled `depth.scale` /
+governor speeds / anchor counts → **Apply to config** (verifies what was written and
+reminds you to restart the server). Or use the CLI **`calibrate_from_logs.py --run
+<dir> [more…]`** directly: same math, same results.
 
 **One-time setup** — turn on raw-frame capture (only needed for anchors):
 ```yaml
