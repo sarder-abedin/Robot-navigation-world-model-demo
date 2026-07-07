@@ -25,6 +25,56 @@ governor + goal arrival) → governor (depends on depth + motor reality).
 
 ---
 
+## ⚡ Zero-driving calibration from logs (recommended)
+
+You don't need to drive *for* calibration. A normal run already records everything
+needed, and **`calibrate_from_logs.py`** derives the numbers offline — the
+ultrasonic distance logged each frame is a free ground-truth ruler.
+
+**One-time setup** — turn on raw-frame capture (only needed for anchors):
+```yaml
+# Code/Server/config.yaml
+logging:
+  save_raw_frames: true     # writes logs_rpi/<run>/raw_frames/ (un-annotated)
+```
+Then **do one normal run** (Obstacle Avoidance is fine) with **run logging on** and
+a **working ultrasonic**, letting the robot approach and stop near obstacles a few
+times. That single run's folder is your calibration data.
+
+**Then, at your desk:**
+```bash
+cd Code/Server
+# depth scale + governor speeds (numpy only):
+python calibrate_from_logs.py --run ../../logs_rpi/run_YYYYMMDD_HHMMSS_predictive
+# review the printed values, then write them in:
+python calibrate_from_logs.py --run <dir> --apply config.yaml
+# also build V-JEPA 2 anchors (needs raw_frames/ + the model; run on the GPU/MPS box):
+python calibrate_from_logs.py --run <dir> --anchors --apply config.yaml
+```
+
+What it computes:
+- **`depth.scale`** = median(ultrasonic ÷ depth) over frames with a valid sonar reading.
+- **`forward_speed_mps` / `slow_speed_mps`** = distance-vs-time slope during FORWARD/SLOW
+  stretches; **`max_decel_mps2`** from a FORWARD→STOP coast when present (else the
+  config default is kept).
+- **anchors** (`--anchors`) — auto-labels the raw frames blocked/clear from *independent*
+  signals (YOLO + ultrasonic + action, **never** the world model) and builds anchors
+  with the same encoder as the manual tool. No sorting.
+
+**Requirements & limits:**
+- The **ultrasonic must have been working** in that run (frames with no echo are
+  skipped; the tool says "insufficient" if too few remain). This is the one thing to
+  confirm first.
+- **Anchors** only work on runs recorded *after* `save_raw_frames` was turned on
+  (older runs have annotated frames only). Run `--anchors` where V-JEPA 2 loads.
+- Governor **deceleration** is the least reliable from logs (short coast on a tank
+  robot); when it can't measure one it leaves your configured default in place.
+
+The manual, in-corridor procedures below are the fallback when you can't get a clean
+logged run (e.g. the sonar is dead).
+
+---
+
 ## 1. Calibrate the V-JEPA 2 anchors
 
 **What it does.** V-JEPA 2 scores each scene by cosine similarity to two reference

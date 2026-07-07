@@ -67,6 +67,7 @@ assets/         ← Demo video clips
 | `Code/Server/depth_perception.py` | Depth-Anything V2 → free-space distance ahead + clear direction (LEFT/CENTER/RIGHT); class-agnostic (sees walls); `depth_at_norm()` per-pixel goal-depth sampler |
 | `Code/Server/goal_navigator.py` | Tracks a user-selected goal (CSRT, template-match fallback) → bearing + depth; `goal_steering()` turns the safety decision into a goal-directed TURN/FORWARD in **Goal-Following** mode (safety always overrides). Server starts **idle**; `--ai-start` opts headless into driving |
 | `Code/Server/calibrate_anchors.py` | Builds V-JEPA 2 corridor anchors from blocked/clear frame folders → `anchors.npz` |
+| `Code/Server/calibrate_from_logs.py` | **Zero-driving** calibration from a stored `logs_rpi/<run>/`: derives `depth.scale` + governor speeds (sonar as ground-truth ruler) and, with `--anchors`, auto-labels raw frames → anchors; `--apply` patches `config.yaml` |
 | `Code/Robot/calibrate_governor.py` | On-robot: measures governor m/s constants (sonar+motors), safely patches `config.yaml` |
 | `Code/Server/visualization.py` | HUD overlay: keeps spatial cues on the video (boxes, risk bar, action, depth L/C/R bars, goal marker+arrow+readout); text overlays (V-JEPA2/motion, sonic, fps, ssv2, depth-distance) default OFF and are shown in the UI panel below the video instead |
 | `Code/Server/robot_control.py` | `TCPRobotController` sends `CMD_AIMOVE` to Pi; direct `RobotController` reroute/backup run as preemptible worker threads (never block the pipeline); ultrasonic risk (fail-safe on no-echo) |

@@ -515,9 +515,16 @@ class AIPipeline:
                     "net_frames_dropped": self._net_dropped_total,
                     "net_kbps":          net["kbps"],
                 }
+                # Raw (un-annotated) frame + depth for offline calibration from logs.
+                depth_row = {
+                    "center": regions.get("CENTER"),
+                    "left": regions.get("LEFT"),
+                    "right": regions.get("RIGHT"),
+                } if depth_result.buffer_ready else None
                 self._nav_logger.log_frame(
                     annotated, decision, det_result, sonic_cm,
                     ssv2_sentence=ssv2_sentence, metrics=metrics,
+                    raw_frame=frame_bgr, depth=depth_row,
                 )
 
             # ── 10. Broadcast AI status to TCP client ─────────────────────────

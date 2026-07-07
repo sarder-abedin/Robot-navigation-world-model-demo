@@ -46,6 +46,14 @@ METRIC_FIELDS = [
 ]
 
 
+def _fmt_depth(v) -> str:
+    """Format a depth value (m) for the CSV; -1 when unknown/None."""
+    try:
+        return f"{float(v):.3f}" if v is not None and float(v) > 0 else "-1"
+    except (TypeError, ValueError):
+        return "-1"
+
+
 def _metric_row(metrics: dict | None) -> dict:
     """Format the metric columns for one CSV row (0 when absent)."""
     metrics = metrics or {}
@@ -65,6 +73,12 @@ class NavigationLogger:
         self._log_dir = Path(log_cfg["log_dir"])
         self._save_frames = log_cfg.get("save_annotated_frames", True)
         self._frame_interval = log_cfg.get("annotated_frame_interval", 5)
+        # Raw (un-annotated) frames for offline V-JEPA 2 anchor calibration. Kept
+        # in a SEPARATE raw_frames/ folder so the anchor tool never ingests HUD
+        # overlays. Off by default (extra disk); enable before a run you plan to
+        # calibrate from. See CALIBRATION.md / calibrate_from_logs.py.
+        self._save_raw = log_cfg.get("save_raw_frames", False)
+        self._raw_interval = int(log_cfg.get("raw_frame_interval", self._frame_interval))
         self._csv_enabled = log_cfg.get("csv_log", True)
         self._nav_mode = navigation_mode
 
@@ -75,6 +89,9 @@ class NavigationLogger:
         if self._save_frames:
             self._frames_dir = self._run_dir / "frames"
             self._frames_dir.mkdir(exist_ok=True)
+        if self._save_raw:
+            self._raw_dir = self._run_dir / "raw_frames"
+            self._raw_dir.mkdir(exist_ok=True)
 
         self._csv_path = self._run_dir / "navigation_log.csv"
         self._csv_file = None
@@ -93,14 +110,20 @@ class NavigationLogger:
         ultrasonic_cm: float = -1.0,
         ssv2_sentence: str = "",
         metrics: dict | None = None,
+        raw_frame: np.ndarray | None = None,
+        depth: dict | None = None,
     ) -> None:
         """Legacy full-pipeline logging (kept for backward compat with tests).
 
         `metrics` optionally carries per-frame inference latencies (ms) and
         network/stream statistics (see METRIC_FIELDS); absent → logged as 0.
+        `raw_frame` (BGR, un-annotated) is saved to raw_frames/ when save_raw_frames
+        is on — for offline anchor calibration. `depth` = {"center","left","right"}
+        metres, logged so depth scale can be calibrated from the logs.
         """
         ts = time.time()
         self._frame_idx += 1
+        depth = depth or {}
 
         if self._csv_writer:
             row = {
@@ -120,6 +143,9 @@ class NavigationLogger:
                 "ultrasonic_cm":   f"{ultrasonic_cm:.1f}",
                 "ssv2":            ssv2_sentence,
                 "explanation":     decision_result.explanation,
+                "depth_center_m":  _fmt_depth(depth.get("center")),
+                "depth_left_m":    _fmt_depth(depth.get("left")),
+                "depth_right_m":   _fmt_depth(depth.get("right")),
             }
             row.update(_metric_row(metrics))
             self._csv_writer.writerow(row)
@@ -129,6 +155,10 @@ class NavigationLogger:
         if self._save_frames and (self._frame_idx % self._frame_interval == 0):
             fname = self._frames_dir / f"frame_{self._frame_idx:06d}.jpg"
             cv2.imwrite(str(fname), annotated_frame)
+
+        if self._save_raw and raw_frame is not None and (self._frame_idx % self._raw_interval == 0):
+            fname = self._raw_dir / f"frame_{self._frame_idx:06d}.jpg"
+            cv2.imwrite(str(fname), raw_frame)
 
     def log_detection_frame(
         self,
@@ -196,6 +226,7 @@ class NavigationLogger:
             "wm_label", "temporal_pattern",
             "obstacles", "in_center", "closest_area",
             "ultrasonic_cm", "ssv2", "explanation",
+            "depth_center_m", "depth_left_m", "depth_right_m",
             *METRIC_FIELDS,
         ]
         self._csv_file = open(self._csv_path, "w", newline="", encoding="utf-8")
