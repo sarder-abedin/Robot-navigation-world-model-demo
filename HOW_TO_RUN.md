@@ -314,7 +314,18 @@ available in the PyQt5 viewer.
 Several signals are only *qualitatively* right until calibrated for your robot and
 space — the V-JEPA 2 risk/label, the speed governor's metres, and the depth scale.
 The full step-by-step (prerequisites, verification, troubleshooting) lives in
-**[CALIBRATION.md](CALIBRATION.md)**. The essentials:
+**[CALIBRATION.md](CALIBRATION.md)**.
+
+**Fastest path — zero extra driving:** turn on `logging.save_raw_frames`, do one
+normal run (logging on, working sonar), then derive everything at your desk:
+```bash
+cd Code/Server
+python calibrate_from_logs.py --run ../../logs_rpi/<run> --anchors --apply config.yaml
+```
+It reads the run's CSV + raw frames and patches `depth.scale`, the governor speeds,
+and V-JEPA 2 anchors. See CALIBRATION.md → "Zero-driving calibration from logs".
+
+The manual, in-corridor essentials:
 
 ```bash
 # 1. V-JEPA 2 anchors (biggest quality win) — run where V-JEPA 2 loads (GPU/MPS box)

@@ -309,6 +309,12 @@ logging:
   log_level: "INFO"
   save_annotated_frames: true
   annotated_frame_interval: 5
+  # Raw (un-annotated) camera frames → logs_rpi/<run>/raw_frames/, for offline
+  # V-JEPA 2 anchor calibration (calibrate_from_logs.py --anchors). OFF by default
+  # (extra disk); turn on before a run you plan to calibrate from. Zero extra
+  # driving — reuse any normal run.
+  save_raw_frames: false
+  raw_frame_interval: 5
   csv_log: true
   # Initial state of run logging (CSV + annotated frames). The operator can flip
   # this at runtime from the UI toggle, or at startup with --logging on/off or

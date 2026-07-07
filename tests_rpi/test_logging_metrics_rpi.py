@@ -75,6 +75,23 @@ def test_log_frame_writes_latency_and_network_columns(tmp_path):
     assert row["net_recv_fps"] == "12.50"
 
 
+def test_log_frame_saves_raw_and_depth_columns(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg["logging"]["save_raw_frames"] = True
+    cfg["logging"]["raw_frame_interval"] = 1
+    nav = NavigationLogger(cfg, "predictive")
+    raw = np.full((4, 4, 3), 7, np.uint8)
+    nav.log_frame(np.zeros((4, 4, 3), np.uint8), _Decision(), _Det(),
+                  raw_frame=raw, depth={"center": 0.45, "left": 0.4, "right": 0.9})
+    nav.close()
+    run_dir = next(tmp_path.rglob("navigation_log.csv")).parent
+    # raw frame written to the SEPARATE raw_frames/ folder
+    assert list((run_dir / "raw_frames").glob("*.jpg"))
+    with open(run_dir / "navigation_log.csv") as f:
+        row = next(csv.DictReader(f))
+    assert row["depth_center_m"] == "0.450" and row["depth_right_m"] == "0.900"
+
+
 def test_log_frame_without_metrics_defaults_to_zero(tmp_path):
     nav = NavigationLogger(_cfg(tmp_path), "baseline")
     nav.log_frame(np.zeros((4, 4, 3), np.uint8), _Decision(), _Det())  # no metrics
