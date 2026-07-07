@@ -107,14 +107,20 @@ class CalibrationWindow(QMainWindow):
         pg.addWidget(QLabel("Logs directory:"), 1, 0)
         pg.addWidget(self._logs_edit, 1, 1)
         b2 = QPushButton("Browse…"); b2.clicked.connect(self._browse_logs); pg.addWidget(b2, 1, 2)
-        b3 = QPushButton("Scan runs"); b3.clicked.connect(self._scan_runs); pg.addWidget(b3, 2, 2)
+        b3 = QPushButton("Scan logs dir"); b3.clicked.connect(self._scan_runs); pg.addWidget(b3, 2, 2)
         root.addWidget(paths)
 
-        # Run selection
-        runs_box = QGroupBox("1 · Select runs  (more runs = more robust; ✓CSV needed, ✓raw for anchors)")
+        # Run selection — pool one OR MORE runs from anywhere (more runs = more robust)
+        runs_box = QGroupBox("1 · Select runs  (tick any number — they're pooled; ✓CSV needed, ✓raw for anchors)")
         rl = QVBoxLayout(runs_box)
         self._run_list = QListWidget()
         rl.addWidget(self._run_list)
+        run_btns = QHBoxLayout()
+        b_add = QPushButton("+ Add run folder…"); b_add.clicked.connect(self._add_run_folder)
+        b_add.setToolTip("Add an individual run folder from anywhere (can be outside the logs dir above).")
+        b_clear = QPushButton("Clear list"); b_clear.clicked.connect(self._run_list.clear)
+        run_btns.addWidget(b_add); run_btns.addWidget(b_clear); run_btns.addStretch(1)
+        rl.addLayout(run_btns)
         root.addWidget(runs_box)
 
         # Actions
@@ -157,23 +163,46 @@ class CalibrationWindow(QMainWindow):
             self._logs_edit.setText(p)
             self._scan_runs()
 
+    def _existing_paths(self) -> set:
+        return {self._run_list.item(i).data(Qt.UserRole) for i in range(self._run_list.count())}
+
+    def _add_run_item(self, run_dir: str, check: bool = True) -> bool:
+        """Add one run to the list (deduped by path). Returns True if added."""
+        run_dir = os.path.normpath(run_dir)
+        if run_dir in self._existing_paths():
+            return False
+        has_csv = os.path.exists(os.path.join(run_dir, "navigation_log.csv"))
+        has_raw = os.path.isdir(os.path.join(run_dir, "raw_frames"))
+        tag = ("✓CSV" if has_csv else "✗CSV") + ("  ✓raw" if has_raw else "  ✗raw")
+        it = QListWidgetItem(f"{os.path.basename(run_dir)}    [{tag}]")
+        it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+        it.setCheckState(Qt.Checked if (has_csv and check) else Qt.Unchecked)
+        if not has_csv:
+            it.setFlags(it.flags() & ~Qt.ItemIsEnabled)
+        it.setToolTip(run_dir)
+        it.setData(Qt.UserRole, run_dir)
+        self._run_list.addItem(it)
+        return True
+
     def _scan_runs(self):
-        self._run_list.clear()
+        """Append (not replace) the run_* folders under the logs dir; dedupes."""
         run_dirs = sorted(glob.glob(os.path.join(self._logs_edit.text(), "run_*")))
         if not run_dirs:
             self._log(f"No run_* folders in {self._logs_edit.text()}")
             return
-        for r in run_dirs:
-            has_csv = os.path.exists(os.path.join(r, "navigation_log.csv"))
-            has_raw = os.path.isdir(os.path.join(r, "raw_frames"))
-            tag = ("✓CSV" if has_csv else "✗CSV") + ("  ✓raw" if has_raw else "  ✗raw")
-            it = QListWidgetItem(f"{os.path.basename(r)}    [{tag}]")
-            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-            it.setCheckState(Qt.Checked if has_csv else Qt.Unchecked)
-            if not has_csv:
-                it.setFlags(it.flags() & ~Qt.ItemIsEnabled)
-            it.setData(Qt.UserRole, r)
-            self._run_list.addItem(it)
+        added = sum(self._add_run_item(r) for r in run_dirs)
+        self._log(f"Scanned {self._logs_edit.text()} — added {added} new run(s) "
+                  f"({self._run_list.count()} total in the list).")
+
+    def _add_run_folder(self):
+        """Add a single run folder chosen from anywhere (may be outside the logs dir)."""
+        p = QFileDialog.getExistingDirectory(self, "Select a run folder", self._logs_edit.text())
+        if not p:
+            return
+        if not os.path.exists(os.path.join(p, "navigation_log.csv")):
+            self._log(f"'{os.path.basename(p)}' has no navigation_log.csv — added anyway (disabled).")
+        if not self._add_run_item(p):
+            self._log(f"'{os.path.basename(p)}' is already in the list.")
 
     def _selected_runs(self):
         out = []
