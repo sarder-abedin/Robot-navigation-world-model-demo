@@ -37,6 +37,7 @@ class Action(str, Enum):
     STOP = "STOP"
     REROUTE = "REROUTE"
     BACKUP = "BACKUP"      # short reverse (obstacle too close / rushing in to turn)
+    TURN = "TURN"          # in-place spin toward a heading (goal-following; no backup)
 
 
 # How cautious each action is (higher = more cautious). Used to cap a forward
@@ -44,6 +45,9 @@ class Action(str, Enum):
 _CAUTION = {
     Action.FORWARD: 0, Action.SLOW: 1,
     Action.STOP: 2, Action.REROUTE: 2, Action.BACKUP: 2,
+    # TURN is an in-place rotation (no translation), so the speed governor —
+    # which only caps forward motion — leaves it alone.
+    Action.TURN: 0,
 }
 
 

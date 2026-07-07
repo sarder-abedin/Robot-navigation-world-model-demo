@@ -161,6 +161,14 @@ class RobotController:
         self._maneuver_thread = threading.Thread(target=_run, daemon=True, name="BackupDirect")
         self._maneuver_thread.start()
 
+    def turn(self, direction: str = "") -> None:
+        """Goal-following: steady in-place spin toward the goal (no backup)."""
+        self._cancel_maneuver()
+        if (direction or "").strip().lower() == "right":
+            self._set(self._speed_slow, -self._speed_slow)   # tank spin right
+        else:
+            self._set(-self._speed_slow, self._speed_slow)   # tank spin left
+
     def safe_stop(self) -> None:
         self._cancel_maneuver()
         self._set(0, 0)
@@ -224,6 +232,11 @@ class MockRobotController:
 
     def backup(self) -> None:
         self.last_command = "BACKUP"
+        logger.info("[MockRobot] %s", self.last_command)
+
+    def turn(self, direction: str = "") -> None:
+        turn = (direction or "").strip().lower() or "left"
+        self.last_command = f"TURN({turn})"
         logger.info("[MockRobot] %s", self.last_command)
 
     def safe_stop(self) -> None:
@@ -301,6 +314,11 @@ class TCPRobotController:
         # Short reverse pulse executed on the Pi.
         self._send("BACKUP")
 
+    def turn(self, direction: str = "") -> None:
+        # Goal-following: continuous in-place spin toward the goal (no backup).
+        d = (direction or "").strip().lower()
+        self._send(f"TURN#{d.upper()}" if d in ("left", "right") else "TURN#LEFT")
+
     def safe_stop(self) -> None:
         self._conn.send_stop()
         logger.warning("SAFE STOP – CMD_STOP sent to robot")
@@ -346,6 +364,15 @@ def execute_action(controller, action: str, reroute_direction: str = "") -> None
     from decision import Action
     if action == Action.REROUTE:
         controller.reroute(reroute_direction)
+        return
+    if action == Action.TURN:
+        # Goal-following in-place spin toward the goal (no backup). Fall back to
+        # reroute on old controllers that don't have turn().
+        turn = getattr(controller, "turn", None)
+        if turn is not None:
+            turn(reroute_direction)
+        else:
+            controller.reroute(reroute_direction)
         return
     dispatch = {
         Action.FORWARD:  controller.forward,

@@ -100,6 +100,7 @@ class PCNavigationServer:
     CMD_LOGGING = "CMD_LOGGING"
     CMD_GOAL       = "CMD_GOAL"        # UI→PC: set goal at normalized image coords (per-mille)
     CMD_GOAL_CLEAR = "CMD_GOAL_CLEAR"  # UI→PC: clear the goal
+    CMD_GOALFOLLOW = "CMD_GOALFOLLOW"  # UI→PC: 1 = Goal-Following mode, 0 = Obstacle-Avoidance
 
     def __init__(self, cfg: dict, nav_mode: str):
         self._cfg = cfg
@@ -266,6 +267,12 @@ class PCNavigationServer:
 
         elif cmd == self.CMD_GOAL_CLEAR:
             self._ai.clear_goal()
+
+        elif cmd == self.CMD_GOALFOLLOW:
+            # Navigation-mode switch: 1 = Goal Following (steer to goal), 0 =
+            # Obstacle Avoidance only. Safety/avoidance always overrides steering.
+            val = self._parser.intParameter[0] if self._parser.intParameter else 0
+            self._ai.set_goal_following(val == 1)
 
         elif cmd == self.CMD_KILL:
             logger.warning("CMD_KILL from UI viewer – shutting down")

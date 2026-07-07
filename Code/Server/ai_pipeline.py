@@ -102,6 +102,10 @@ class AIPipeline:
         self._goal_tracker = GoalTracker(cfg)
         self._goal_state = None     # latest GoalState (tracked position, bearing, depth)
         self._goal_reached_handled = False   # fired the stop-on-arrival once
+        self._goal_lost_handled = False      # fired the stop-on-lost once (following mode)
+        self._goal_following = False         # Goal-Following mode (steer to goal) vs avoidance-only
+        self._goal_center_tol = float(
+            ((cfg.get("goal", {}) or {}).get("center_tolerance_deg", 12.0)))
 
         self._last_annotated_bgr: np.ndarray | None = None
         self._annotated_lock = threading.Lock()
@@ -192,15 +196,27 @@ class AIPipeline:
         gy = min(max(float(y_norm), 0.0), 1.0)
         self._goal_tracker.set_target(gx, gy)
         self._goal_reached_handled = False   # a new goal re-arms arrival detection
-        logger.info("Navigation goal set at (%.3f, %.3f) [tracking + HUD only – no motion]", gx, gy)
+        self._goal_lost_handled = False
+        logger.info("Navigation goal set at (%.3f, %.3f)", gx, gy)
 
     def clear_goal(self) -> None:
         """Clear the user-selected navigation goal."""
         self._goal_tracker.clear()
         self._goal_reached_handled = False
+        self._goal_lost_handled = False
         with self._state_lock:
             self._goal_state = None
         logger.info("Navigation goal cleared")
+
+    def set_goal_following(self, enabled: bool) -> None:
+        """Enable Goal-Following mode (steer to the goal) vs obstacle-avoidance only.
+
+        Safety/avoidance always overrides goal-seeking (see goal_navigator.goal_steering).
+        """
+        with self._state_lock:
+            self._goal_following = bool(enabled)
+        logger.info("Navigation mode: %s",
+                    "GOAL FOLLOWING (steer to goal)" if enabled else "OBSTACLE AVOIDANCE")
 
     def get_goal_state(self):
         with self._state_lock:
@@ -427,7 +443,7 @@ class AIPipeline:
                 )
 
             # ── 7. Execute motor command ──────────────────────────────────────
-            # ── 7b. Goal tracking (Phase 2: bearing + depth, HUD only) ────────
+            # ── 7b. Goal tracking + (Goal-Following mode) goal-directed steering ─
             goal_state = None
             if self._goal_tracker.active:
                 goal_state = self._goal_tracker.update(
@@ -439,6 +455,26 @@ class AIPipeline:
                     self._goal_reached_handled = True
                     self.set_motor_enabled(False)
                     logger.info("Goal reached (≤ arrival distance) – stopping, awaiting UI command")
+                # In Goal-Following mode, a lost goal stops the robot (don't wander).
+                elif (self._goal_following and goal_state.lost
+                        and not self._goal_lost_handled):
+                    self._goal_lost_handled = True
+                    self.set_motor_enabled(False)
+                    logger.info("Goal lost while following – stopping, awaiting new goal")
+                # Goal-Following: steer toward the goal when the path is clear
+                # (safety/avoidance from decide() always overrides — see goal_steering).
+                if self._goal_following and not goal_state.reached:
+                    from goal_navigator import goal_steering
+                    new_action, turn_dir = goal_steering(
+                        decision.action, goal_state, self._goal_center_tol)
+                    if new_action != decision.action:
+                        from dataclasses import replace
+                        decision = replace(
+                            decision, action=new_action,
+                            reroute_direction=turn_dir,
+                            explanation=f"goal-follow → {new_action.value.lower()} "
+                                        f"(bearing {goal_state.bearing_deg:+.0f}°)",
+                        )
             with self._state_lock:
                 motor_enabled = self._motor_enabled
                 logging_enabled = self._logging_enabled

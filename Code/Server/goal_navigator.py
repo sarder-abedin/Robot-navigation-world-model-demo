@@ -39,6 +39,32 @@ class GoalState:
     distance_m: float | None = None  # depth at the goal pixel (m); None if unknown
 
 
+def goal_steering(base_action, goal_state, center_tol_deg: float = 12.0):
+    """Phase 3: turn the safety decision into a goal-directed one.
+
+    Priority is subsumption — **safety always wins**. If the avoidance stack chose
+    anything other than a clear-path FORWARD/SLOW (i.e. STOP/REROUTE/BACKUP because
+    of an obstacle), we obey it and don't steer toward the goal. Only when the path
+    is clear do we point at the goal: spin in place (TURN) toward it until its
+    bearing is within center_tol_deg, then drive FORWARD/SLOW toward it.
+
+    Returns (action, turn_direction). turn_direction is "" unless action is TURN.
+    A None / inactive / reached / lost goal leaves the action unchanged.
+    """
+    from decision import Action
+    if goal_state is None or not getattr(goal_state, "active", False):
+        return base_action, ""
+    if goal_state.reached or goal_state.lost:
+        return base_action, ""
+    # Obstacle avoidance in progress → safety wins, don't chase the goal.
+    if base_action not in (Action.FORWARD, Action.SLOW):
+        return base_action, ""
+    # Path is clear: aim at the goal. Turn in place until it's roughly ahead.
+    if abs(goal_state.bearing_deg) > center_tol_deg:
+        return Action.TURN, ("right" if goal_state.bearing_deg > 0 else "left")
+    return base_action, ""   # goal is ahead → keep driving toward it
+
+
 def _make_csrt():
     """Return a CSRT tracker instance if this OpenCV build has one, else None."""
     if hasattr(cv2, "TrackerCSRT_create"):

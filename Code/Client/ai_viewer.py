@@ -66,6 +66,7 @@ ACTION_CSS = {
     "STOP":     "background:#8b0000; color:white;",
     "REROUTE":  "background:#7a3a00; color:white;",
     "BACKUP":   "background:#a0521a; color:white;",
+    "TURN":     "background:#1a5a7a; color:white;",
     "---":      "background:#444;    color:#aaa;",
 }
 WM_CSS = {
@@ -123,7 +124,8 @@ class AIViewer(QMainWindow):
         self._control_mode: str = "AUTO"   # "AUTO" | "MANUAL"
         self._manual_speed: int = SPEED_FULL
         self._keys_held: set[int] = set()  # avoid repeated motor sends on auto-repeat
-        self._goal_selected: bool = False  # AI activation is gated until a goal is set
+        self._goal_selected: bool = False  # a goal has been set (needed for Goal-Following)
+        self._nav_mode: str = "avoid"      # "avoid" (obstacle avoidance) | "goal" (goal following)
         self._fps_times: list[float] = []  # video-frame arrival times for the FPS readout
 
         self._build_ui()
@@ -174,9 +176,22 @@ class AIViewer(QMainWindow):
         self._pix_h = 0
         root.addWidget(self._video_label, alignment=Qt.AlignHCenter)
 
-        # ── Goal point (click on the video) ───────────────────────────────────
-        goal_box = QGroupBox("Navigation Goal  (tracked bearing/depth; no motion)")
-        goal_col = QVBoxLayout(goal_box)
+        # ── Navigation Mode: Obstacle Avoidance vs Goal Following ─────────────
+        navmode_box = QGroupBox("Navigation Mode")
+        navmode_row = QHBoxLayout(navmode_box)
+        self._radio_avoid = QRadioButton("Obstacle Avoidance")
+        self._radio_avoid.setToolTip("AI avoids obstacles (predictive/baseline). No goal needed.")
+        self._radio_avoid.setChecked(True)
+        self._radio_goal = QRadioButton("Goal Following")
+        self._radio_goal.setToolTip("Set a goal on the video; the robot steers to it (avoidance still overrides).")
+        self._radio_avoid.toggled.connect(self._on_nav_mode_changed)
+        navmode_row.addWidget(self._radio_avoid)
+        navmode_row.addWidget(self._radio_goal)
+        root.addWidget(navmode_box)
+
+        # ── Goal point (Goal-Following mode only) ─────────────────────────────
+        self._goal_box = QGroupBox("Navigation Goal  (click the video, then activate AI)")
+        goal_col = QVBoxLayout(self._goal_box)
         goal_row = QHBoxLayout()
         self._btn_set_goal = QPushButton("🎯  Set Goal (click video)")
         self._btn_set_goal.setCheckable(True)
@@ -192,7 +207,8 @@ class AIViewer(QMainWindow):
         self._goal_status_lbl = QLabel("")
         self._goal_status_lbl.setAlignment(Qt.AlignCenter)
         goal_col.addWidget(self._goal_status_lbl)
-        root.addWidget(goal_box)
+        root.addWidget(self._goal_box)
+        self._goal_box.setVisible(False)   # shown only in Goal-Following mode
 
         # ── AI state panel ────────────────────────────────────────────────────
         state_box = QGroupBox("AI State")
@@ -233,8 +249,8 @@ class AIViewer(QMainWindow):
 
         root.addWidget(state_box)
 
-        # ── Navigation Mode ───────────────────────────────────────────────────
-        mode_box = QGroupBox("Navigation Mode  (AI mode only)")
+        # ── AI Model (predictive vs baseline) ─────────────────────────────────
+        mode_box = QGroupBox("AI Model  (obstacle-avoidance behaviour)")
         mode_row = QHBoxLayout(mode_box)
 
         self._btn_predictive = QPushButton("PREDICTIVE")
@@ -554,10 +570,16 @@ class AIViewer(QMainWindow):
             )
             self._recv_thread.start()
 
-            # Start IDLE: don't drive on connect. The operator must select a goal
-            # and then activate AI. Gate the activation buttons accordingly.
+            # Start IDLE in the current nav mode. Obstacle Avoidance can be
+            # activated right away; Goal Following needs a goal first.
             self._goal_selected = False
             self._send_ai_mode(0)
+            try:
+                self._cmd_sock.sendall(
+                    f"CMD_GOALFOLLOW#{1 if self._nav_mode == 'goal' else 0}\n".encode("utf-8")
+                )
+            except Exception:
+                pass
             self._update_activation_gate()
 
             # Video connection (non-fatal if unavailable)
@@ -833,16 +855,40 @@ class AIViewer(QMainWindow):
         else:
             self._goal_status_lbl.setText("")
 
+    def _on_nav_mode_changed(self, _checked: bool = False) -> None:
+        """Switch between Obstacle Avoidance and Goal Following.
+
+        Obstacle Avoidance needs no goal; Goal Following reveals the goal controls
+        and requires a goal before AI can be activated. Switching modes returns the
+        robot to idle so the operator re-activates deliberately in the new mode.
+        """
+        self._nav_mode = "goal" if self._radio_goal.isChecked() else "avoid"
+        self._goal_box.setVisible(self._nav_mode == "goal")
+        if self._connected and self._cmd_sock:
+            try:
+                # Idle on any mode switch, then tell the server the new mode.
+                self._cmd_sock.sendall(b"CMD_AIMODE#0\n")
+                self._cmd_sock.sendall(
+                    f"CMD_GOALFOLLOW#{1 if self._nav_mode == 'goal' else 0}\n".encode("utf-8")
+                )
+            except Exception as exc:
+                self._status_bar.setText(f"Send error: {exc}")
+        self._update_activation_gate()
+
     def _update_activation_gate(self) -> None:
-        """AI activation (AUTO/PREDICTIVE/BASELINE) is enabled only once connected
-        AND a goal has been selected — the intended connect → set-goal → activate
-        flow. MANUAL driving stays available regardless."""
-        armed = self._connected and self._goal_selected
+        """Enable AI activation (AUTO/PREDICTIVE/BASELINE) based on the nav mode:
+        Obstacle Avoidance only needs a connection; Goal Following also needs a goal.
+        MANUAL driving stays available regardless."""
+        if self._nav_mode == "goal":
+            armed = self._connected and self._goal_selected
+            tip = "" if armed else "Set a goal on the video first, then activate AI."
+        else:
+            armed = self._connected
+            tip = "" if armed else "Connect to the server first."
         for btn in (self._btn_auto, self._btn_predictive, self._btn_baseline):
             btn.setEnabled(armed)
-        tip = ("" if armed else "Select a goal on the video first, then activate AI.")
-        for btn in (self._btn_auto, self._btn_predictive, self._btn_baseline):
-            btn.setToolTip(tip or btn.toolTip())
+            if tip:
+                btn.setToolTip(tip)
 
     def _send_logging(self, on: bool) -> None:
         """Toggle server-side run logging (CMD_LOGGING#1|0)."""
