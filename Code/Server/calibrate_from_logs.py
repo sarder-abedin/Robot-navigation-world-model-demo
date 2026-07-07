@@ -56,10 +56,10 @@ def _f(row: dict, key: str, default: float = float("nan")) -> float:
 
 # ── 1. Depth scale (sonar = ground truth) ─────────────────────────────────────
 
-def depth_scale_from_rows(rows: list[dict], sonar_lo_cm: float = 15.0,
-                          sonar_hi_cm: float = 350.0, min_pairs: int = 20):
-    """Return (scale, n_pairs). scale = actual/reported; None if too few pairs."""
-    ratios = []
+def depth_ratios(rows: list[dict], sonar_lo_cm: float = 15.0,
+                 sonar_hi_cm: float = 350.0) -> list[float]:
+    """Per-frame ultrasonic/depth ratios (the raw samples; pool these across runs)."""
+    out = []
     for r in rows:
         son = _f(r, "ultrasonic_cm")
         dc = _f(r, "depth_center_m")
@@ -67,10 +67,21 @@ def depth_scale_from_rows(rows: list[dict], sonar_lo_cm: float = 15.0,
             continue
         ratio = (son / 100.0) / dc
         if 0.2 <= ratio <= 5.0:                 # drop wild mismatches
-            ratios.append(ratio)
+            out.append(ratio)
+    return out
+
+
+def depth_scale_from_ratios(ratios: list[float], min_pairs: int = 20):
+    """Return (scale, n_pairs). scale = actual/reported; None if too few pairs."""
     if len(ratios) < min_pairs:
         return None, len(ratios)
     return float(np.median(ratios)), len(ratios)
+
+
+def depth_scale_from_rows(rows: list[dict], **kw):
+    """Single-run convenience wrapper (kept for tests)."""
+    min_pairs = kw.pop("min_pairs", 20)
+    return depth_scale_from_ratios(depth_ratios(rows, **kw), min_pairs)
 
 
 # ── 2. Governor speeds (distance-vs-time during FORWARD/SLOW) ──────────────────
@@ -84,9 +95,13 @@ def _speed_from_samples(samples: list[tuple[float, float]]) -> float:
     return max(0.0, -float(np.polyfit(t, d, 1)[0]))
 
 
-def governor_from_rows(rows: list[dict], sonar_lo_cm: float = 15.0,
-                       sonar_hi_cm: float = 350.0, min_advance_m: float = 0.10) -> dict:
-    """Estimate forward/slow speed + decel from contiguous action segments."""
+def governor_samples(rows: list[dict], sonar_lo_cm: float = 15.0,
+                     sonar_hi_cm: float = 350.0, min_advance_m: float = 0.10) -> dict:
+    """Collect per-segment speed/decel samples from ONE run's (time-ordered) rows.
+
+    Returns {"forward":[...], "slow":[...], "decel":[...]} — pool these across runs,
+    then summarize. Segments never cross a run boundary (call once per run).
+    """
     fwd, slow, decels = [], [], []
     seg: list[tuple[float, float]] = []       # (t, d_m) in the current action run
     seg_action = None
@@ -107,7 +122,6 @@ def governor_from_rows(rows: list[dict], sonar_lo_cm: float = 15.0,
         son, t = _f(r, "ultrasonic_cm"), _f(r, "timestamp")
         valid = sonar_lo_cm <= son <= sonar_hi_cm and not math.isnan(t)
         if act != seg_action:
-            # A FORWARD stretch that ends in STOP → coast = extra distance closed.
             if seg_action == "FORWARD" and act == "STOP" and prev_fwd_speed and valid:
                 v, d_at_stop = prev_fwd_speed
                 coast = d_at_stop - son / 100.0
@@ -118,13 +132,23 @@ def governor_from_rows(rows: list[dict], sonar_lo_cm: float = 15.0,
         if act in ("FORWARD", "SLOW") and valid:
             seg.append((t, son / 100.0))
     flush()
+    return {"forward": fwd, "slow": slow, "decel": decels}
 
+
+def summarize_governor(samples: dict) -> dict:
+    """Median the pooled per-segment samples into governor constants."""
+    fwd, slow, decels = samples["forward"], samples["slow"], samples["decel"]
     return {
         "forward_speed_mps": float(np.median(fwd)) if fwd else None,
         "slow_speed_mps": float(np.median(slow)) if slow else None,
         "max_decel_mps2": float(np.median(decels)) if decels else None,
         "n_forward": len(fwd), "n_slow": len(slow), "n_decel": len(decels),
     }
+
+
+def governor_from_rows(rows: list[dict], **kw) -> dict:
+    """Single-run convenience wrapper (kept for tests)."""
+    return summarize_governor(governor_samples(rows, **kw))
 
 
 # ── 3. Auto-label frames blocked / clear (independent of the world model) ──────
@@ -214,30 +238,35 @@ def patch_config_block(path: str, block: str, updates: dict) -> str:
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
-def _build_anchors_from_run(run_dir: str, rows: list[dict], out: str, config: str) -> bool:
+def _build_anchors_from_runs(runs: list[tuple[str, list[dict]]], out: str, config: str) -> bool:
+    """Pool auto-labelled raw frames from ALL runs, then build anchors once."""
     import cv2
     import yaml
-    raw_dir = os.path.join(run_dir, "raw_frames")
-    if not os.path.isdir(raw_dir):
-        print(f"  anchors: no raw_frames/ in {run_dir} — enable logging.save_raw_frames "
-              f"and do one normal run first.", file=sys.stderr)
-        return False
-    blocked_idx, clear_idx = autolabel_rows(rows)
-    blocked_idx, clear_idx = _balance(sorted(set(blocked_idx)), sorted(set(clear_idx)))
+    blocked_imgs, clear_imgs = [], []
 
-    def load(idxs):
+    def load(raw_dir, idxs):
         imgs = []
         for idx in idxs:
-            p = os.path.join(raw_dir, f"frame_{idx:06d}.jpg")
-            bgr = cv2.imread(p)
+            bgr = cv2.imread(os.path.join(raw_dir, f"frame_{idx:06d}.jpg"))
             if bgr is not None:
                 imgs.append(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
         return imgs
 
-    blocked, clear = load(blocked_idx), load(clear_idx)
+    for run_dir, rows in runs:
+        raw_dir = os.path.join(run_dir, "raw_frames")
+        if not os.path.isdir(raw_dir):
+            print(f"  anchors: {run_dir} has no raw_frames/ — skipped "
+                  f"(enable logging.save_raw_frames for that run).", file=sys.stderr)
+            continue
+        b_idx, c_idx = autolabel_rows(rows)
+        blocked_imgs += load(raw_dir, sorted(set(b_idx)))
+        clear_imgs += load(raw_dir, sorted(set(c_idx)))
+
+    # Balance the pooled classes so neither anchor is dominated by one run.
+    blocked, clear = _balance(blocked_imgs, clear_imgs, cap=80)
     if len(blocked) < 3 or len(clear) < 3:
-        print(f"  anchors: too few labelled raw frames (blocked={len(blocked)}, "
-              f"clear={len(clear)}) — need a run with both blocked and clear stretches.",
+        print(f"  anchors: too few labelled raw frames across runs (blocked={len(blocked)}, "
+              f"clear={len(clear)}) — need runs with both blocked and clear stretches.",
               file=sys.stderr)
         return False
     from world_model import WorldModel
@@ -245,30 +274,63 @@ def _build_anchors_from_run(run_dir: str, rows: list[dict], out: str, config: st
     wm.load()
     wm.build_anchors(blocked, clear)
     wm.save_anchors(out)
-    print(f"  anchors: built from {len(blocked)} blocked + {len(clear)} clear raw frames → {out}")
+    print(f"  anchors: built from {len(blocked)} blocked + {len(clear)} clear raw frames "
+          f"(pooled across {len(runs)} run(s)) → {out}")
     return True
 
 
+def _verify_applied(config_path: str) -> None:
+    """Re-read the patched config and print the effective calibrated values, so it's
+    obvious they'll be picked up on the next run."""
+    import yaml
+    abspath = os.path.abspath(config_path)
+    cfg = yaml.safe_load(open(config_path))
+    scale = (cfg.get("depth", {}) or {}).get("scale")
+    gov = (cfg.get("decision", {}) or {}).get("governor", {}) or {}
+    ap = (cfg.get("world_model", {}) or {}).get("anchors_path", "")
+    print("\n── Written to config (effective on next server start) ──")
+    print(f"  config file : {abspath}")
+    print(f"  depth.scale : {scale}")
+    print(f"  governor    : forward={gov.get('forward_speed_mps')} "
+          f"slow={gov.get('slow_speed_mps')} decel={gov.get('max_decel_mps2')}")
+    print(f"  anchors_path: {ap}" + ("  ✓ file present" if ap and os.path.exists(ap)
+                                      else ("  ✗ FILE MISSING" if ap else "")))
+    print("  → RESTART the server (it reads config.yaml at startup) to load these.")
+
+
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Calibrate depth/governor/anchors from a stored run")
-    ap.add_argument("--run", required=True, help="logs_rpi/<run> directory")
+    ap = argparse.ArgumentParser(description="Calibrate depth/governor/anchors from stored run(s)")
+    ap.add_argument("--run", nargs="+", required=True,
+                    help="one or more logs_rpi/<run> directories (pooled for robustness)")
     ap.add_argument("--apply", default="", help="config.yaml to patch in place (optional)")
-    ap.add_argument("--anchors", action="store_true", help="also build V-JEPA 2 anchors (needs raw_frames/ + the model)")
+    ap.add_argument("--anchors", action="store_true",
+                    help="also build V-JEPA 2 anchors (needs raw_frames/ + the model)")
     ap.add_argument("--anchors-out", default="anchors.npz")
     args = ap.parse_args(argv)
 
-    rows = read_rows(args.run)
-    print(f"Read {len(rows)} logged frames from {args.run}")
+    # Read every run; pool depth ratios and governor samples across all of them.
+    runs = []
+    all_ratios = []
+    gov_pool = {"forward": [], "slow": [], "decel": []}
+    for run_dir in args.run:
+        rows = read_rows(run_dir)
+        runs.append((run_dir, rows))
+        r = depth_ratios(rows)
+        s = governor_samples(rows)
+        all_ratios += r
+        for k in gov_pool:
+            gov_pool[k] += s[k]
+        print(f"Read {len(rows):>5} frames from {run_dir}  "
+              f"(depth pairs={len(r)}, fwd seg={len(s['forward'])}, slow seg={len(s['slow'])})")
+    print(f"→ pooled across {len(runs)} run(s): {len(all_ratios)} depth pairs, "
+          f"{len(gov_pool['forward'])} FORWARD + {len(gov_pool['slow'])} SLOW segments")
 
-    scale, n = depth_scale_from_rows(rows)
-    gov = governor_from_rows(rows)
+    scale, n = depth_scale_from_ratios(all_ratios)
+    gov = summarize_governor(gov_pool)
 
     print("\n── Depth scale ──")
-    if scale is None:
-        print(f"  insufficient sonar/depth pairs ({n}) — need a run with a working "
-              f"ultrasonic and depth enabled.")
-    else:
-        print(f"  depth.scale = {scale:.3f}   (from {n} sonar/depth pairs)")
+    print(f"  depth.scale = {scale:.3f}   (from {n} pooled sonar/depth pairs)" if scale is not None
+          else f"  insufficient sonar/depth pairs ({n}) across runs — need working-ultrasonic runs.")
 
     print("\n── Governor ──")
     print(f"  forward_speed_mps = {gov['forward_speed_mps']}  (from {gov['n_forward']} segments)")
@@ -279,21 +341,26 @@ def main(argv=None) -> int:
     if args.apply:
         if scale is not None:
             patch_config_block(args.apply, "depth", {"scale": round(scale, 3)})
-            print(f"  patched depth.scale in {args.apply}")
+            print(f"  patched depth.scale")
         gov_updates = {k: round(v, 3) for k, v in gov.items()
                        if k in ("forward_speed_mps", "slow_speed_mps", "max_decel_mps2") and v}
         if gov_updates:
             patch_config_block(args.apply, "governor", gov_updates)
-            print(f"  patched governor {sorted(gov_updates)} in {args.apply}")
+            print(f"  patched governor {sorted(gov_updates)}")
 
     if args.anchors:
         print("\n── Anchors ──")
         cfg_path = args.apply or "config.yaml"
-        if _build_anchors_from_run(args.run, rows, args.anchors_out, cfg_path) and args.apply:
-            patch_config_block(args.apply, "world_model", {"anchors_path": args.anchors_out})
-            print(f"  patched world_model.anchors_path in {args.apply}")
+        # Absolute path so the server finds the anchors regardless of its working dir.
+        anchors_out = os.path.abspath(args.anchors_out)
+        if _build_anchors_from_runs(runs, anchors_out, cfg_path) and args.apply:
+            patch_config_block(args.apply, "world_model", {"anchors_path": anchors_out})
+            print(f"  patched world_model.anchors_path")
 
-    print("\nDone." + ("" if args.apply else "  (re-run with --apply <config.yaml> to write these in.)"))
+    if args.apply:
+        _verify_applied(args.apply)
+    else:
+        print("\nDone.  (re-run with --apply <config.yaml> to write these in.)")
     return 0
 
 
