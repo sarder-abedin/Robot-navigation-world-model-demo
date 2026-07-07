@@ -203,6 +203,10 @@ goal:
   horizontal_fov_deg: 66.0     # camera horizontal field of view → bearing in degrees
   max_lost_frames: 15          # consecutive missed frames before the goal is "lost"
   arrival_distance_m: 0.4      # goal depth ≤ this → "reached" → stop + notify the UI
+  # Goal-Following steering: if the goal's bearing exceeds this many degrees the
+  # robot turns in place toward it; within it, it drives forward. (Safety/avoidance
+  # always overrides.) Larger = drive straighter, turn less fussily.
+  center_tolerance_deg: 12.0
 
 # ── Decision fusion ────────────────────────────────────────────────────────────
 # Thresholds must be coordinated with robot speed and pipeline latency: the

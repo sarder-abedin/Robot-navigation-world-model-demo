@@ -44,6 +44,7 @@ ACTION_COLOURS = {
     "STOP":    ( 0,   0, 220),
     "REROUTE": ( 0, 100, 255),
     "BACKUP":  ( 0, 165, 255),   # orange
+    "TURN":    (200, 160,  0),   # goal-following spin (teal-ish, BGR)
 }
 
 WM_COLOURS = {

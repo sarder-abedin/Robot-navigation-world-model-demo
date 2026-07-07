@@ -65,7 +65,7 @@ assets/         ← Demo video clips
 | `Code/Server/decision.py` | Risk fusion + hysteresis; ultrasonic hard-stop (separate); closed-loop context-aware reroute (wait/turn/backup); applies the speed governor |
 | `Code/Server/speed_governor.py` | Kinematic safe-speed governor: caps action to `d_stop(v)=v·t_react+v²/(2a)+margin` |
 | `Code/Server/depth_perception.py` | Depth-Anything V2 → free-space distance ahead + clear direction (LEFT/CENTER/RIGHT); class-agnostic (sees walls); `depth_at_norm()` per-pixel goal-depth sampler |
-| `Code/Server/goal_navigator.py` | Tracks a user-selected goal point (CSRT, template-match fallback) → bearing + depth for the HUD (Phase 2: no motion). Server starts **idle**; `--ai-start` opts headless into driving |
+| `Code/Server/goal_navigator.py` | Tracks a user-selected goal (CSRT, template-match fallback) → bearing + depth; `goal_steering()` turns the safety decision into a goal-directed TURN/FORWARD in **Goal-Following** mode (safety always overrides). Server starts **idle**; `--ai-start` opts headless into driving |
 | `Code/Server/calibrate_anchors.py` | Builds V-JEPA 2 corridor anchors from blocked/clear frame folders → `anchors.npz` |
 | `Code/Robot/calibrate_governor.py` | On-robot: measures governor m/s constants (sonar+motors), safely patches `config.yaml` |
 | `Code/Server/visualization.py` | HUD overlay: keeps spatial cues on the video (boxes, risk bar, action, depth L/C/R bars, goal marker+arrow+readout); text overlays (V-JEPA2/motion, sonic, fps, ssv2, depth-distance) default OFF and are shown in the UI panel below the video instead |
@@ -82,13 +82,14 @@ assets/         ← Demo video clips
 Pi → PC:  CMD_SONIC#<sonic_cm>                        (ultrasonic distance; local hard-stop)
 Pi → PC:  4-byte LE uint32 + JPEG  (camera stream, port 8004, for ALL server-side AI)
           (the server also still accepts legacy CMD_DETECTION for backward compat)
-PC → Pi:  CMD_AIMOVE#<FORWARD|SLOW|STOP|REROUTE|BACKUP>[#<LEFT|RIGHT>]  (AI action; REROUTE carries the depth-derived turn direction; BACKUP = short reverse)
+PC → Pi:  CMD_AIMOVE#<FORWARD|SLOW|STOP|REROUTE|BACKUP|TURN>[#<LEFT|RIGHT>]  (AI action; REROUTE=back-up+spin, BACKUP=short reverse, TURN=in-place spin toward goal (Goal-Following, no backup); LEFT/RIGHT on REROUTE/TURN)
 PC → Pi:  CMD_MOTOR#<L>#<R>                         (manual from UI viewer)
 PC → Pi:  CMD_STOP / CMD_KILL / CMD_AIMODE#<0|1|2>
 UI → PC:  CMD_AIMODE#<0|1|2>  |  CMD_MOTOR#<L>#<R>  |  CMD_KILL#0
 UI → PC:  CMD_LOGGING#<0|1>                         (toggle server-side run logging)
-UI → PC:  CMD_GOAL#<x_permille>#<y_permille>        (set goal at normalized image coords ×1000; Phase 2: tracked marker + bearing/depth on HUD, no motion yet)
+UI → PC:  CMD_GOAL#<x_permille>#<y_permille>        (set goal at normalized image coords ×1000)
 UI → PC:  CMD_GOAL_CLEAR                            (clear the goal)
+UI → PC:  CMD_GOALFOLLOW#<0|1>                      (nav mode: 1=Goal Following (steer to goal), 0=Obstacle Avoidance)
 PC → UI:  CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>#<clear_dist_m>#<clear_dir>#<goal_status>
           (ssv2 + depth + goal_status appended for the UI panel; goal_status ∈ none|tracking|lost|reached; on `reached` the PC stops the robot and waits for a new UI command; trailing fields optional for old clients)
 PC → UI:  4-byte LE uint32 + JPEG  (annotated HUD frames, port 8003)

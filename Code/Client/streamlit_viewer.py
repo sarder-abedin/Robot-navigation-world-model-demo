@@ -33,6 +33,7 @@ ACTION_BG = {
     "STOP":    "#8b0000",
     "REROUTE": "#7a3a00",
     "BACKUP":  "#a0521a",
+    "TURN":    "#1a5a7a",
     "---":     "#444444",
 }
 WM_COLOR = {

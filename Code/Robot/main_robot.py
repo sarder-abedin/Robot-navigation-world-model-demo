@@ -489,6 +489,17 @@ def _execute_aimove(action: str, motor, speed_full: int, speed_slow: int,
         else:
             logger.info("[MockMotor] BACKUP")
 
+    elif action == "TURN":
+        # Goal-following: steady in-place spin toward the goal (no back-up). Like
+        # FORWARD it's a continuous motor state — the PC re-sends it each frame and
+        # a later FORWARD/STOP changes it. _cancel_reroute() above already ran.
+        turn = direction if direction in ("left", "right") else "left"
+        spin_l, spin_r = (-speed_slow, speed_slow) if turn == "left" else (speed_slow, -speed_slow)
+        if motor:
+            motor.setMotorModel(spin_l, spin_r)
+        else:
+            logger.info("[MockMotor] TURN %s L=%d R=%d", turn, spin_l, spin_r)
+
     elif action == "REROUTE":
         # Timed back-up + spin runs in a worker thread so STOP/KILL/MOTOR can
         # preempt it instead of being ignored for the full maneuver. The turn

@@ -17,7 +17,8 @@ SERVER = os.path.join(os.path.dirname(__file__), "..", "Code", "Server")
 sys.path.insert(0, SERVER)
 
 import cv2
-from goal_navigator import GoalState, GoalTracker
+from decision import Action
+from goal_navigator import GoalState, GoalTracker, goal_steering
 from visualization import Visualizer
 
 
@@ -177,6 +178,65 @@ def test_hud_lost_goal_renders_without_error():
 def test_permille_roundtrip_precision():
     for nx in (0.0, 0.123, 0.5, 0.999, 1.0):
         assert abs(int(nx * 1000) / 1000.0 - nx) <= 0.001
+
+
+# ── Phase 3 goal-following steering (safety always overrides) ──────────────────
+
+def _goal(**kw):
+    base = dict(active=True, lost=False, reached=False, x=0.5, y=0.5, bearing=0.0, bearing_deg=0.0)
+    base.update(kw)
+    return GoalState(**base)
+
+
+def test_goal_steering_turns_toward_goal_when_clear():
+    # Path clear (FORWARD) + goal well to the right → spin right toward it.
+    a, d = goal_steering(Action.FORWARD, _goal(bearing_deg=25.0), center_tol_deg=12.0)
+    assert a == Action.TURN and d == "right"
+    a, d = goal_steering(Action.FORWARD, _goal(bearing_deg=-25.0), center_tol_deg=12.0)
+    assert a == Action.TURN and d == "left"
+
+
+def test_goal_steering_drives_forward_when_goal_ahead():
+    # Goal within tolerance → keep driving forward toward it (unchanged).
+    a, d = goal_steering(Action.FORWARD, _goal(bearing_deg=5.0), center_tol_deg=12.0)
+    assert a == Action.FORWARD and d == ""
+
+
+def test_goal_steering_safety_always_wins():
+    # Avoidance/stop actions are never overridden by goal-seeking.
+    for safe in (Action.STOP, Action.REROUTE, Action.BACKUP):
+        a, d = goal_steering(safe, _goal(bearing_deg=25.0), center_tol_deg=12.0)
+        assert a == safe and d == ""
+
+
+def test_goal_steering_inactive_reached_lost_unchanged():
+    assert goal_steering(Action.FORWARD, None)[0] == Action.FORWARD
+    assert goal_steering(Action.FORWARD, _goal(active=False, bearing_deg=25))[0] == Action.FORWARD
+    assert goal_steering(Action.FORWARD, _goal(reached=True, bearing_deg=25))[0] == Action.FORWARD
+    assert goal_steering(Action.FORWARD, _goal(lost=True, bearing_deg=25))[0] == Action.FORWARD
+
+
+def test_turn_action_wiring():
+    import robot_control as rc
+
+    class FakeConn:
+        def __init__(s): s.msgs = []
+        def send_aimove(s, a): s.msgs.append(a); return True
+    conn = FakeConn()
+    ctl = rc.TCPRobotController({"robot": {"ultrasonic_stop_cm": 30.0}}, conn)
+    rc.execute_action(ctl, Action.TURN, "right")
+    assert conn.msgs == ["TURN#RIGHT"]
+
+    # Old controller without turn() falls back to reroute.
+    class OldCtl:
+        def __init__(s): s.did = None
+        def forward(s): pass
+        def slow_forward(s): pass
+        def stop(s): pass
+        def reroute(s, d=""): s.did = ("reroute", d)
+    old = OldCtl()
+    rc.execute_action(old, Action.TURN, "left")
+    assert old.did == ("reroute", "left")
 
 
 # ── HUD declutter: text overlays default off (shown in the UI panel instead) ─────
