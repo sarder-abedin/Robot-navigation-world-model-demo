@@ -317,13 +317,15 @@ The full step-by-step (prerequisites, verification, troubleshooting) lives in
 **[CALIBRATION.md](CALIBRATION.md)**.
 
 **Fastest path — zero extra driving:** turn on `logging.save_raw_frames`, do one
-normal run (logging on, working sonar), then derive everything at your desk:
+or more normal runs (logging on, working sonar), then calibrate at your desk with
+the **separate calibration UI** (never drives the robot):
 ```bash
-cd Code/Server
-python calibrate_from_logs.py --run ../../logs_rpi/<run> --anchors --apply config.yaml
+streamlit run Code/Server/calibration_ui.py
 ```
-It reads the run's CSV + raw frames and patches `depth.scale`, the governor speeds,
-and V-JEPA 2 anchors. See CALIBRATION.md → "Zero-driving calibration from logs".
+Tick the run folders → review the pooled `depth.scale` / governor speeds / anchor
+counts → **Apply to config** (verifies + reminds you to restart the server). Or the
+CLI: `python Code/Server/calibrate_from_logs.py --run ../../logs_rpi/<run> [more…] --anchors --apply config.yaml`.
+See CALIBRATION.md → "Zero-driving calibration from logs".
 
 The manual, in-corridor essentials:
 
