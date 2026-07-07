@@ -48,6 +48,30 @@ def test_fill_template(template, obj, expected):
     assert fill_template(template, obj) == expected
 
 
+@pytest.mark.parametrize("template,obj,fallback,expected", [
+    # No YOLO object → the fallback noun fills the slot (no leaked "something").
+    ("Showing [something] behind [something]", "", "obstacle", "Showing obstacle behind obstacle"),
+    ("Moving something closer", "", "obstacle", "Moving obstacle closer"),
+    ("[Something] falling like a rock", "", "wall", "Wall falling like a rock"),
+    # A real YOLO label still wins over the fallback.
+    ("Moving something closer", "person", "obstacle", "Moving person closer"),
+    # Empty fallback → old behaviour (keep "something").
+    ("Moving something closer", "", "", "Moving something closer"),
+])
+def test_fill_template_fallback(template, obj, fallback, expected):
+    from ssv2_model import fill_template
+    assert fill_template(template, obj, fallback) == expected
+
+
+def test_recognizer_reads_unknown_object_label(cfg):
+    from ssv2_model import SSv2Recognizer
+    cfg["ssv2"]["unknown_object_label"] = "wall"
+    assert SSv2Recognizer(cfg)._unknown_label == "wall"
+    # default is "obstacle"
+    cfg["ssv2"].pop("unknown_object_label", None)
+    assert SSv2Recognizer(cfg)._unknown_label == "obstacle"
+
+
 def test_stub_composes_sentence_without_model(cfg):
     """With transformers/model unavailable the stub still fills the object."""
     from ssv2_model import SSv2Recognizer

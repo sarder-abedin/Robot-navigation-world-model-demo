@@ -100,7 +100,9 @@ PC → UI:  4-byte LE uint32 + JPEG  (annotated HUD frames, port 8003)
   classifier (VideoMAE, `MCG-NJU/videomae-base-finetuned-ssv2`) over the clip
   buffer. The predicted template's "something" slot is filled with the largest
   obstacle's YOLO class (from the PC's own detection on the streamed frame), e.g.
-  "person moving closer". Annotation/logging ONLY — it does NOT drive navigation (the
+  "person moving closer"; when YOLO has no named object it falls back to
+  `ssv2.unknown_object_label` (default "obstacle") so the caption never leaks the
+  raw "something". Annotation/logging ONLY — it does NOT drive navigation (the
   fast heuristic in `temporal_action.py` still supplies `temporal_risk`).
   Falls back to a stub (still fills the object) when transformers/weights are absent.
 - **Device:** both heavy models (V-JEPA 2 + SSv2) use `device: auto` via
