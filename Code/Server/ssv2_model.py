@@ -50,20 +50,24 @@ class SSv2Result:
     is_stub: bool = False
 
 
-def fill_template(template: str, object_label: str) -> str:
+def fill_template(template: str, object_label: str, fallback: str = "") -> str:
     """Fill the SSv2 'something' placeholder(s) with the detected object.
 
     Real SSv2/VideoMAE labels use bracketed placeholders, e.g.
     "Showing [something] behind [something]" or "Moving [something] closer".
-    We handle both the bracketed "[something]" form and the bare "something",
-    in either case. If no object was detected we just strip the placeholder
-    brackets for readability ("Showing something behind something").
+    We handle both the bracketed "[something]" form and the bare "something".
+
+    The slot is filled with `object_label` (YOLO's class) when available; if YOLO
+    has no named object (a wall, or the object wasn't detected this frame) we fall
+    back to `fallback` (e.g. "obstacle") so the caption reads "Moving obstacle
+    closer" instead of leaking the raw placeholder "something". If both are empty
+    we just strip the brackets for readability.
     """
     if not template:
         return ""
-    obj = (object_label or "").strip()
+    obj = (object_label or "").strip() or (fallback or "").strip()
     if not obj:
-        # No detected object → drop the [ ] brackets so the sentence reads cleanly.
+        # Nothing to fill with → drop the [ ] brackets so the sentence reads cleanly.
         return re.sub(r"\[([Ss]omething)\]", r"\1", template)
     out = re.sub(r"\[[Ss]omething\]", obj, template)   # "[something]" / "[Something]"
     out = re.sub(r"\b[Ss]omething\b", obj, out)         # bare "something" / "Something"
@@ -79,6 +83,10 @@ class SSv2Recognizer:
         self._num_frames = int(ssv2_cfg.get("num_frames", 16))
         self._device_str = ssv2_cfg.get("device", "cpu")
         self._run_every = max(1, int(ssv2_cfg.get("run_every_n_frames", 16)))
+        # Noun used to fill the "something" slot when YOLO has no named object
+        # (a wall, or nothing detected this frame), so the caption never leaks the
+        # raw placeholder. Set "" to keep the old strip-brackets behaviour.
+        self._unknown_label = str(ssv2_cfg.get("unknown_object_label", "obstacle"))
         self._min_conf = float(ssv2_cfg.get("min_confidence", 0.15))
 
         self._model = None
@@ -147,7 +155,7 @@ class SSv2Recognizer:
             cached = self._last
             return SSv2Result(
                 template=cached.template,
-                sentence=fill_template(cached.template, object_label) or cached.sentence,
+                sentence=fill_template(cached.template, object_label, self._unknown_label) or cached.sentence,
                 object_label=object_label,
                 confidence=cached.confidence,
                 buffer_ready=True,
@@ -191,7 +199,7 @@ class SSv2Recognizer:
         template = self._id2label.get(int(idx.item()), "UNKNOWN")
         return SSv2Result(
             template=template,
-            sentence=fill_template(template, object_label),
+            sentence=fill_template(template, object_label, self._unknown_label),
             object_label=object_label,
             confidence=float(conf.item()),
             buffer_ready=True,

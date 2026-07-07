@@ -170,6 +170,10 @@ ssv2:
   # you want a snappier SSv2 caption at the cost of throughput, or disable it.
   run_every_n_frames: 32       # CPU cadence; auto-halved on a GPU
   min_confidence: 0.15         # below this the sentence is shown as tentative
+  # Fills the SSv2 "something" slot when YOLO has no named object (a wall, or
+  # nothing detected this frame) so the caption reads e.g. "Moving obstacle
+  # closer" instead of the raw placeholder "something". Set "" to keep "something".
+  unknown_object_label: "obstacle"
 
 # ── Depth free-space channel (Depth-Anything V2, class-agnostic geometry) ─────
 # Monocular depth → nearest obstacle straight ahead (metres, feeds the governor)

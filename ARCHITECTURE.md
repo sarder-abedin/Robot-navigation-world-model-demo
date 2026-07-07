@@ -83,7 +83,10 @@ model contributes, the safety layers, and the TCP wire protocol.
 labels are templated phrases with a *"something"* placeholder — we fill that slot
 with the **largest obstacle's YOLO class** (from the PC's own YOLO detection),
 producing a human sentence like **"person moving closer"** or
-**"chair pushed from left to right"**.
+**"chair pushed from left to right"**. When YOLO has no named object (a wall, or
+nothing detected that frame) the slot falls back to `ssv2.unknown_object_label`
+(default **"obstacle"**) so the caption reads "moving obstacle closer" rather than
+leaking the raw placeholder "something".
 
 - It is **annotation + logging only** — it does **not** drive navigation (the
   fast heuristic in `temporal_action.py` still supplies `temporal_risk`), so
