@@ -69,6 +69,8 @@ assets/         ← Demo video clips
 | `Code/Server/calibrate_anchors.py` | Builds V-JEPA 2 corridor anchors from blocked/clear frame folders → `anchors.npz` |
 | `Code/Server/calibrate_from_logs.py` | **Zero-driving** calibration from stored `logs_rpi/<run>/` (one or more, pooled): derives `depth.scale` + governor speeds (sonar as ground-truth ruler) and, with `--anchors`, auto-labels raw frames → anchors; `--apply` patches `config.yaml` (absolute anchors path) + verifies |
 | `Code/Server/calibration_ui.py` | **Separate desk-only PyQt5 UI** for the above (`python calibration_ui.py`): pick runs → Analyze pooled values → Apply to config (anchor build off-thread; never drives the robot) |
+| `Code/Server/run_report.py` | Offline matplotlib plots + summary of one run's `navigation_log.csv` (risk/distance/action/latency/network); `save_pngs()` → `<run>/viz/`. Backend-agnostic + unit-tested |
+| `Code/Server/run_visualizer.py` | **Desk-only PyQt5 run visualizer** (`python run_visualizer.py`): pick a run → embedded plots + a synced annotated-frame scrubber → Save PNGs |
 | `Code/Robot/calibrate_governor.py` | On-robot: measures governor m/s constants (sonar+motors), safely patches `config.yaml` |
 | `Code/Server/visualization.py` | HUD overlay: keeps spatial cues on the video (boxes, risk bar, action, depth L/C/R bars, goal marker+arrow+readout); text overlays (V-JEPA2/motion, sonic, fps, ssv2, depth-distance) default OFF and are shown in the UI panel below the video instead |
 | `Code/Server/robot_control.py` | `TCPRobotController` sends `CMD_AIMOVE` to Pi; direct `RobotController` reroute/backup run as preemptible worker threads (never block the pipeline); ultrasonic risk (fail-safe on no-echo) |

@@ -431,9 +431,22 @@ logs_rpi/
 └── run_20240515_143022_predictive/
     ├── navigation_log.csv   # one row per frame
     ├── system.log           # Python logging output
-    └── frames/              # annotated JPEGs (every 5th frame)
+    ├── frames/              # annotated JPEGs (every 5th frame)
+    ├── raw_frames/          # raw JPEGs — only if logging.save_raw_frames (for anchors)
+    └── viz/                 # PNG plots — written by the run visualizer's "Save"
 ```
 
 The CSV captures all three risk signals separately (`detector_risk`,
 `world_model_risk`, `temporal_risk`) so you can plot predictive vs baseline risk
 trajectories from the same scenario.
+
+### Visualize a run (offline)
+
+```bash
+python Code/Server/run_visualizer.py
+```
+A desk-only PyQt5 window: pick a run → see the risk / distance / action-timeline /
+latency / network plots (zoom/pan) with a **synced annotated-frame scrubber** (drag
+to move a time cursor across all charts) → **Save PNGs** writes one image per chart
+plus `summary.txt` into `<run>/viz/`. Headless alternative:
+`python -c "import sys; sys.path.insert(0,'Code/Server'); import run_report; run_report.save_pngs('logs_rpi/<run>')"`.
