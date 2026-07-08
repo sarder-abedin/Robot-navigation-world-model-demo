@@ -36,6 +36,8 @@ pywebview>=5.0
 # PyQt5 desktop viewer (Code/Client/ai_viewer.py) – native desktop use only
 # Not installed in Docker (no arm64 wheel); run natively on Mac/Linux if preferred.
 PyQt5>=5.15.0
+# Offline run visualizer / report (Code/Server/run_visualizer.py + run_report.py)
+matplotlib>=3.6.0
 
 # ── Config / utilities ────────────────────────────────────────────────────────
 PyYAML>=6.0
