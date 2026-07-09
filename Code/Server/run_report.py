@@ -47,11 +47,17 @@ def load_run(run_dir: str) -> dict:
     if not rows:
         raise ValueError(f"empty log: {path}")
     ts = _col(rows, "timestamp")
-    t0 = np.nanmin(ts)
+    # Relative time (s). If the timestamp column is missing/blank in every row,
+    # np.nanmin would warn and poison the whole x-axis with NaN — fall back to the
+    # frame index so the charts still render.
+    if np.isfinite(ts).any():
+        rel_t = ts - np.nanmin(ts)
+    else:
+        rel_t = np.arange(len(rows), dtype=float)
     d = {
         "run_dir": run_dir,
         "cols": set(rows[0].keys()),
-        "t": ts - t0,
+        "t": rel_t,
         "timestamp": ts,
         "frame_idx": _col(rows, "frame_idx"),
         "action": np.array([(r.get("action") or "").strip() for r in rows]),
@@ -183,8 +189,11 @@ def build_all_figures(data) -> dict:
 
 def summary(data) -> dict:
     t = data["t"]
-    dur = float(t[-1] - t[0]) if len(t) > 1 else 0.0
     n = len(t)
+    # Duration from the finite time span (robust to a bad boundary timestamp); the
+    # rate is frames / span = (n-1) intervals / span, not n / span.
+    finite_t = t[np.isfinite(t)]
+    dur = float(np.nanmax(finite_t) - np.nanmin(finite_t)) if finite_t.size > 1 else 0.0
     acts, counts = np.unique(data["action"], return_counts=True)
     action_pct = {a: round(100.0 * c / n, 1) for a, c in zip(acts, counts)}
     wm = data["world_model_risk"][np.isfinite(data["world_model_risk"])]
@@ -195,7 +204,7 @@ def summary(data) -> dict:
     return {
         "frames": n,
         "duration_s": round(dur, 1),
-        "processed_fps": round(n / dur, 1) if dur > 0 else 0.0,
+        "processed_fps": round((n - 1) / dur, 1) if dur > 0 else 0.0,
         "action_pct": action_pct,
         "wm_risk_mean": round(float(np.mean(wm)), 3) if wm.size else None,
         "wm_risk_std": round(float(np.std(wm)), 4) if wm.size else None,
