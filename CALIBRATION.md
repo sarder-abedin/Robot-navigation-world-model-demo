@@ -36,13 +36,25 @@ the robot):
 ```bash
 python Code/Server/calibration_ui.py
 ```
-**Tick one OR MORE runs — they're pooled** (more runs = more robust). Runs under the
-logs directory are listed automatically (**Scan logs dir**), and **+ Add run
-folder…** pulls in individual runs from *anywhere* (e.g. logs/raw frames spread
-across different locations). Then **Analyze** shows the pooled `depth.scale` /
-governor speeds / anchor counts → **Apply to config** (verifies what was written and
-reminds you to restart the server). Or use the CLI **`calibrate_from_logs.py --run
-<dir> [more…]`** directly: same math, same results.
+It's a **step-by-step guided workflow**: each numbered step shows a badge
+(**MANDATORY** / **RECOMMENDED** / **OPTIONAL**) and a live status (done / do this
+next / waiting / not-ready) so you always know what to do next. The guidance is a
+*soft guide* — it points you at the recommended next step and flags steps that
+aren't ready, but never blocks you from running a step out of order. The steps:
+
+| Step | Level | What it does |
+|---|---|---|
+| **0 · Record a run** | Mandatory | Prerequisite — a normal run logged with a working ultrasonic (and `save_raw_frames` on for anchors). Info only; nothing here drives the robot. |
+| **1 · Select run(s)** | Mandatory | Tick one run (✓CSV required, ✓raw needed for anchors). **Pooling several runs is optional** but more robust. **Scan logs dir** lists runs; **+ Add run folder…** pulls one in from anywhere. |
+| **2 · Analyze** | Mandatory | Derive the values without writing anything; fills in the status of Steps 3–5. |
+| **3 · Depth scale** | Recommended | `median(sonar ÷ depth)` readout — needs enough valid sonar/depth pairs. |
+| **4 · Governor speeds** | Recommended | forward/slow m/s + deceleration from distance-vs-time. |
+| **5 · V-JEPA 2 anchors** | Recommended | Tick “Build anchors on Apply” — needs a ✓raw run (auto-disabled otherwise). |
+| **6 · Apply to config** | Mandatory | Write the derived values into `config.yaml` (comments kept, `.bak` backup) and verify what landed. |
+| **7 · Restart the server** | Mandatory | The server reads `config.yaml` only at startup. |
+
+Or use the CLI **`calibrate_from_logs.py --run <dir> [more…]`** directly: same
+math, same results.
 
 **One-time setup** — turn on raw-frame capture (only needed for anchors):
 ```yaml

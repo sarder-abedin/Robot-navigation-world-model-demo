@@ -322,8 +322,13 @@ the **separate calibration UI** (a PyQt5 window that never drives the robot):
 ```bash
 python Code/Server/calibration_ui.py
 ```
-Tick the run folders → **Analyze** the pooled `depth.scale` / governor speeds /
-anchor counts → **Apply to config** (verifies + reminds you to restart the server).
+It's a **step-by-step guided workflow** — each numbered step carries a
+**MANDATORY / RECOMMENDED / OPTIONAL** badge and a live status (done / do this next
+/ waiting / not-ready) so you always know the next move (soft guidance — it never
+blocks you from going out of order): **1 · Select run(s)** (tick one; pooling more
+is optional) → **2 · Analyze** → **3 · Depth scale**, **4 · Governor speeds**,
+**5 · Anchors** (readouts, all recommended) → **6 · Apply to config** (verifies) →
+**7 · Restart the server**.
 Or the CLI: `python Code/Server/calibrate_from_logs.py --run ../../logs_rpi/<run> [more…] --anchors --apply config.yaml`.
 See CALIBRATION.md → "Zero-driving calibration from logs".
 
