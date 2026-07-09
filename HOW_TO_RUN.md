@@ -38,6 +38,23 @@ pip install -r requirements_server.txt
 **Option 2 — Docker:** no local Python needed; see
 [Option C – Docker](#option-c--docker-recommended-for-reproducibility).
 
+#### Apple Silicon GPU (MPS)
+
+The two heavy models (V-JEPA 2 + SSv2) and the depth channel are configured with
+`device: "mps"` in `Code/Server/config.yaml`, so on an M-series Mac they run on the
+**Apple GPU (Metal)** — lower latency, fewer dropped camera frames, faster STOP, and
+room to run V-JEPA 2 more often for earlier predictive warnings. Requirements:
+
+- **Run the server NATIVELY (Option 1 venv), not in Docker.** Docker on a Mac has no
+  Metal passthrough, so a container always falls back to CPU regardless of `device`.
+- The native `pip install -r requirements_server.txt` gives you an MPS-capable
+  `torch` (any `torch>=2.1`); nothing extra to install.
+- The server enables `PYTORCH_ENABLE_MPS_FALLBACK=1` automatically when it selects
+  MPS, so the handful of ops Metal doesn't implement run on CPU instead of crashing.
+- On startup the log line `V-JEPA 2 loaded: … on mps` confirms it's using the GPU.
+  `device: "mps"` still falls back to CUDA→CPU on non-Mac hardware (with a note in
+  the log); use `device: "auto"` instead if you want CUDA preferred when present.
+
 ### Raspberry Pi (TCP client – robot hardware) — **Docker-based**
 
 The Pi runs **in Docker** (the supported path) as a **thin client** that runs no
