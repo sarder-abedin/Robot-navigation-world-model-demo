@@ -60,6 +60,28 @@ def test_is_gpu():
     assert du.is_gpu("cpu") is False
 
 
+def test_mps_enables_cpu_fallback_env(monkeypatch):
+    # Picking MPS must turn on the CPU op-fallback so ops Metal lacks don't crash
+    # the heavy models; non-MPS devices must not set it.
+    monkeypatch.delenv("PYTORCH_ENABLE_MPS_FALLBACK", raising=False)
+    du = _install_stub_torch(cuda=False, mps=True)
+    _dev, name = du.resolve_device("auto")           # → mps
+    assert name == "mps"
+    assert os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") == "1"
+
+    monkeypatch.delenv("PYTORCH_ENABLE_MPS_FALLBACK", raising=False)
+    du = _install_stub_torch(cuda=True, mps=False)
+    _dev, name = du.resolve_device("auto")           # → cuda
+    assert name == "cuda"
+    assert "PYTORCH_ENABLE_MPS_FALLBACK" not in os.environ
+
+    # An explicit user setting is preserved (setdefault, not overwrite).
+    monkeypatch.setenv("PYTORCH_ENABLE_MPS_FALLBACK", "0")
+    du = _install_stub_torch(cuda=False, mps=True)
+    du.resolve_device("mps")
+    assert os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") == "0"
+
+
 def teardown_module(module):
     # Don't leave the stub torch installed for other test modules.
     sys.modules.pop("torch", None)
