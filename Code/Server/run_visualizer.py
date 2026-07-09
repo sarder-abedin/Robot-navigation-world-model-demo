@@ -120,19 +120,34 @@ class RunVisualizer(QMainWindow):
         if not run:
             self._summary.setText("Select a run in the list first.")
             return
+        # Build everything (load + plots + scrubber) atomically: on any failure,
+        # reset to a clean empty state rather than leaving a half-updated window.
         try:
-            self._data = rr.load_run(run)
+            data = rr.load_run(run)
+            self._data = data
+            self._summary.setText(rr.summary_text(data))
+            self._build_plots()
+            self._setup_scrubber(run)
         except Exception as exc:
-            self._summary.setText(f"Failed to load: {exc}")
+            self._data = None
+            self._clear_plots()
+            self._slider.setEnabled(False)
+            self._btn_save.setEnabled(False)
+            self._summary.setText(f"Failed to load {os.path.basename(run)}: {exc}")
             return
-        self._summary.setText(rr.summary_text(self._data))
-        self._build_plots()
-        self._setup_scrubber(run)
         self._btn_save.setEnabled(True)
 
-    def _build_plots(self):
-        self._tabs.clear()
+    def _clear_plots(self):
+        """Remove and delete the previous run's tabs/canvases/figures (no leak)."""
+        for i in reversed(range(self._tabs.count())):
+            w = self._tabs.widget(i)
+            self._tabs.removeTab(i)
+            if w is not None:
+                w.deleteLater()
         self._cursors = []
+
+    def _build_plots(self):
+        self._clear_plots()
         for name, fig in rr.build_all_figures(self._data).items():
             page = QWidget(); pl = QVBoxLayout(page)
             canvas = FigureCanvas(fig)
@@ -148,13 +163,18 @@ class RunVisualizer(QMainWindow):
         self._frames = []
         self._frame_times = []
         fidx, ftime = self._data["frame_idx"], self._data["t"]
-        for p in frames:
+        have_idx = np.isfinite(fidx).any()
+        for k, p in enumerate(frames):
             try:
                 idx = int(os.path.basename(p).split("_")[1].split(".")[0])
             except (IndexError, ValueError):
                 continue
-            # time of the nearest logged frame index
-            j = int(np.argmin(np.abs(fidx - idx)))
+            if have_idx:
+                j = int(np.argmin(np.abs(fidx - idx)))     # nearest logged frame index
+            else:
+                # Degenerate log with no usable frame_idx → map by position instead
+                # of pinning every frame's cursor at t[0].
+                j = min(k, len(ftime) - 1)
             self._frames.append(p)
             self._frame_times.append(float(ftime[j]))
         has = bool(self._frames)
@@ -180,9 +200,12 @@ class RunVisualizer(QMainWindow):
             canvas.draw_idle()
 
     def _save(self):
-        run = self._selected_run()
-        if not run:
+        # Save the LOADED run (the one shown), not whatever is highlighted in the
+        # list — otherwise the saved PNGs wouldn't match the displayed plots/summary.
+        if self._data is None:
+            self._summary.setText("Load a run before saving.")
             return
+        run = self._data["run_dir"]
         try:
             paths = rr.save_pngs(run)
             self._summary.setText(rr.summary_text(self._data)

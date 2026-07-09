@@ -80,6 +80,23 @@ def test_save_pngs_writes_files(tmp_path):
         assert os.path.getsize(p) > 0
 
 
+def test_missing_timestamp_falls_back_to_index(tmp_path):
+    # A CSV whose timestamp column is entirely blank must not poison the x-axis
+    # with NaN — load_run falls back to a frame index.
+    cols = [c for c in FULL_COLS if c != "timestamp"]  # no timestamp at all
+    d = rr.load_run(_write_run(tmp_path, n=8, cols=cols))
+    assert np.isfinite(d["t"]).all()          # no NaN axis
+    assert d["t"][0] == 0.0 and d["t"][-1] == 7.0
+    rr.build_all_figures(d)                    # renders without error
+    assert rr.summary(d)["duration_s"] == 7.0  # finite duration
+
+
+def test_processed_fps_is_frames_minus_one_over_span(tmp_path):
+    # 11 frames spanning 1.0 s (0.1 s steps) → 10 intervals → 10 fps, not 11.
+    d = rr.load_run(_write_run(tmp_path, n=11))
+    assert rr.summary(d)["processed_fps"] == 10.0
+
+
 def test_older_csv_without_new_columns(tmp_path):
     old_cols = ["timestamp", "frame_idx", "nav_mode", "action", "risk_score",
                 "detector_risk", "world_model_risk", "temporal_risk", "wm_label",
