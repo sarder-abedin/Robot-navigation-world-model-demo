@@ -42,6 +42,7 @@ Kill switch controls
 
 from __future__ import annotations
 
+import os
 import socket
 import struct
 import sys
@@ -58,6 +59,9 @@ from PyQt5.QtWidgets import (
     QLineEdit, QMainWindow, QProgressBar, QPushButton,
     QRadioButton, QShortcut, QSizePolicy, QVBoxLayout, QWidget,
 )
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import nav_map   # noqa: E402  (framework-agnostic map geometry + status parsing)
 
 # ── Colour maps ────────────────────────────────────────────────────────────────
 ACTION_CSS = {
@@ -102,6 +106,164 @@ MAX_FRAME_BYTES = 10 * 1024 * 1024   # reject a desynced/garbage frame length
 
 SPEED_FULL = 1500
 SPEED_SLOW = 600
+
+# Action → robot-glyph colour on the map (mirrors ACTION_CSS so the two views match).
+ACTION_RGB = {
+    "FORWARD": (26, 122, 26), "SLOW": (200, 132, 26), "STOP": (170, 20, 20),
+    "REROUTE": (122, 58, 0), "BACKUP": (160, 82, 26), "TURN": (26, 90, 122),
+    "---": (110, 110, 110),
+}
+GOAL_RGB = {
+    "tracking": (60, 200, 255), "lost": (200, 200, 60),
+    "reached": (60, 220, 90), "none": (110, 110, 110),
+}
+
+
+class NavMapWidget(QWidget):
+    """Top-down egocentric navigation map (robot fixed at bottom-centre, facing up).
+
+    Draws the current depth free-space (LEFT/CENTER/RIGHT), the ultrasonic reading,
+    the chosen clear direction, and the goal by bearing + distance — all relative to
+    the robot *right now* (there is no odometry, so nothing is world-anchored). All
+    geometry comes from nav_map (unit-tested); this widget only paints it.
+    """
+
+    def __init__(self, max_range_m: float = 5.0, fov_deg: float = 66.0, parent=None):
+        super().__init__(parent)
+        self._model = nav_map.MapModel(max_range_m=max_range_m, fov_deg=fov_deg)
+        self._max_range_m = max_range_m
+        self._fov_deg = fov_deg
+        self.setMinimumSize(300, 315)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.setToolTip("Local (egocentric) navigation map — robot at bottom, facing up. "
+                        "Not a world map (no odometry).")
+
+    def set_model(self, model: "nav_map.MapModel") -> None:
+        self._model = model
+        self.update()
+
+    # ── painting ──────────────────────────────────────────────────────────────
+    def paintEvent(self, _ev):
+        m = self._model
+        w, h = self.width(), self.height()
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        p.fillRect(0, 0, w, h, QColor(18, 18, 20))
+
+        margin = 26.0
+        origin = (w / 2.0, h - margin)
+        ox, oy = origin
+        ppm = nav_map.fit_scale(w, h, margin, m.max_range_m, m.fov_deg)
+
+        self._draw_rings(p, origin, ppm, m)
+        self._draw_fov(p, origin, ppm, m)
+        self._draw_sectors(p, origin, ppm, m)
+        self._draw_ultrasonic(p, origin, ppm, m)
+        self._draw_goal(p, origin, ppm, m)
+        self._draw_robot(p, origin, m)
+
+        # Caption
+        p.setPen(QColor(140, 140, 150))
+        p.setFont(QFont("sans", 7))
+        p.drawText(6, 12, "LOCAL MAP · egocentric (no odometry)")
+        p.end()
+
+    def _draw_rings(self, p, origin, ppm, m):
+        ox, oy = origin
+        p.setFont(QFont("sans", 7))
+        for r in range(1, int(m.max_range_m) + 1):
+            rad = r * ppm
+            p.setPen(QtGui.QPen(QColor(55, 55, 62), 1, Qt.DotLine))
+            # upper half-circle only (the robot looks forward/up)
+            p.drawArc(QtCore.QRectF(ox - rad, oy - rad, 2 * rad, 2 * rad), 0, 180 * 16)
+            p.setPen(QColor(90, 90, 100))
+            p.drawText(QtCore.QPointF(ox + 3, oy - rad + 2), f"{r} m")
+
+    def _draw_fov(self, p, origin, ppm, m):
+        p.setPen(QtGui.QPen(QColor(70, 70, 80), 1, Qt.DashLine))
+        for edge in (-m.fov_deg / 2.0, m.fov_deg / 2.0):
+            x, y = nav_map.polar_to_world(m.max_range_m, edge)
+            sx, sy = nav_map.world_to_screen(x, y, origin, ppm)
+            p.drawLine(QtCore.QPointF(*origin), QtCore.QPointF(sx, sy))
+
+    def _draw_sectors(self, p, origin, ppm, m):
+        ox, oy = origin
+        dists = {"LEFT": m.depth_left_m, "CENTER": m.depth_center_m, "RIGHT": m.depth_right_m}
+        for name, d in dists.items():
+            start, end = nav_map.sector_edge_bearings(m.fov_deg, name)
+            known = d is not None and d > 0
+            reach = d if known else m.max_range_m
+            rad = reach * ppm
+            r, g, b = nav_map.proximity_color(d if known else None)
+            # Free-space pie slice for the third, out to the measured obstacle.
+            # Qt angles: 0° = +x (right), CCW, in 1/16°. Screen y is down, and our
+            # bearing is clockwise-from-up, so on-screen angle = 90 - bearing.
+            a0 = 90.0 - end
+            span = end - start
+            fill = QColor(r, g, b, 70 if known else 30)
+            p.setBrush(fill)
+            p.setPen(Qt.NoPen)
+            p.drawPie(QtCore.QRectF(ox - rad, oy - rad, 2 * rad, 2 * rad),
+                      int(round(a0 * 16)), int(round(span * 16)))
+            if known:
+                # Obstacle boundary arc at the measured distance.
+                p.setBrush(Qt.NoBrush)
+                p.setPen(QtGui.QPen(QColor(r, g, b), 2.4))
+                p.drawArc(QtCore.QRectF(ox - rad, oy - rad, 2 * rad, 2 * rad),
+                          int(round(a0 * 16)), int(round(span * 16)))
+                # Highlight the chosen open direction.
+                if m.clear_dir == name:
+                    cb = nav_map.sector_center_bearings(m.fov_deg)[name]
+                    x, y = nav_map.polar_to_world(reach * 0.6, cb)
+                    sx, sy = nav_map.world_to_screen(x, y, origin, ppm)
+                    p.setPen(QColor(60, 220, 90))
+                    p.setBrush(QColor(60, 220, 90))
+                    p.drawEllipse(QtCore.QPointF(sx, sy), 3, 3)
+
+    def _draw_ultrasonic(self, p, origin, ppm, m):
+        if m.sonic_m is None:
+            return
+        x, y = nav_map.polar_to_world(min(m.sonic_m, m.max_range_m), 0.0)
+        sx, sy = nav_map.world_to_screen(x, y, origin, ppm)
+        col = QColor(255, 70, 70) if m.sonic_m < 0.25 else QColor(90, 200, 220)
+        p.setPen(QtGui.QPen(col, 2))
+        p.setBrush(col)
+        p.drawEllipse(QtCore.QPointF(sx, sy), 3.5, 3.5)
+        p.setFont(QFont("sans", 7))
+        p.drawText(QtCore.QPointF(sx + 6, sy), f"sonar {m.sonic_m:.2f}m")
+
+    def _draw_goal(self, p, origin, ppm, m):
+        if not m.has_goal:
+            return
+        r, g, b = GOAL_RGB.get(m.goal_status, GOAL_RGB["none"])
+        col = QColor(r, g, b)
+        # If the depth at the goal is unknown, draw it at the ring edge as a bearing hint.
+        d = m.goal_dist_m if (m.goal_dist_m and m.goal_dist_m > 0) else m.max_range_m
+        x, y = nav_map.polar_to_world(min(d, m.max_range_m), m.goal_bearing_deg)
+        sx, sy = nav_map.world_to_screen(x, y, origin, ppm)
+        p.setPen(QtGui.QPen(col, 1.5, Qt.DashLine))
+        p.drawLine(QtCore.QPointF(*origin), QtCore.QPointF(sx, sy))
+        p.setPen(QtGui.QPen(col, 2))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QtCore.QPointF(sx, sy), 6, 6)
+        p.drawLine(QtCore.QPointF(sx - 8, sy), QtCore.QPointF(sx + 8, sy))
+        p.drawLine(QtCore.QPointF(sx, sy - 8), QtCore.QPointF(sx, sy + 8))
+        p.setFont(QFont("sans", 7))
+        p.drawText(QtCore.QPointF(sx + 9, sy - 6), f"goal ({m.goal_status})")
+
+    def _draw_robot(self, p, origin, m):
+        ox, oy = origin
+        r, g, b = ACTION_RGB.get(m.action, ACTION_RGB["---"])
+        p.setBrush(QColor(r, g, b))
+        p.setPen(QtGui.QPen(QColor(230, 230, 235), 1.2))
+        tri = QtGui.QPolygonF([
+            QtCore.QPointF(ox, oy - 12), QtCore.QPointF(ox - 8, oy + 6),
+            QtCore.QPointF(ox + 8, oy + 6),
+        ])
+        p.drawPolygon(tri)
+        p.setPen(QColor(230, 230, 235))
+        p.setFont(QFont("sans", 8, QFont.Bold))
+        p.drawText(QtCore.QPointF(ox + 12, oy + 6), m.action)
 
 
 class AIViewer(QMainWindow):
@@ -174,7 +336,26 @@ class AIViewer(QMainWindow):
         self._video_label.mousePressEvent = self._on_video_click
         self._pix_w = 0   # size of the last displayed pixmap (for click→image mapping)
         self._pix_h = 0
-        root.addWidget(self._video_label, alignment=Qt.AlignHCenter)
+
+        # Video + live 2D navigation map, side by side.
+        self._map = NavMapWidget()
+        self._map.setFixedHeight(315)
+        video_row = QHBoxLayout()
+        video_row.addStretch(1)
+        video_row.addWidget(self._video_label)
+        video_row.addWidget(self._map, 1)
+        video_row.addStretch(1)
+        root.addLayout(video_row)
+
+        map_row = QHBoxLayout()
+        self._chk_map = QCheckBox("Show 2D navigation map")
+        self._chk_map.setChecked(True)
+        self._chk_map.setToolTip("Top-down egocentric map (robot-centred; no odometry, so it's a live local view).")
+        self._chk_map.toggled.connect(self._map.setVisible)
+        map_row.addStretch(1)
+        map_row.addWidget(self._chk_map)
+        map_row.addStretch(1)
+        root.addLayout(map_row)
 
         # ── Navigation Mode: pick one on connect (nothing pre-selected) ───────
         navmode_box = QGroupBox("Navigation Mode  (pick one to begin)")
@@ -766,7 +947,11 @@ class AIViewer(QMainWindow):
 
     def _process_status(self, line: str) -> None:
         # CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>
-        #             #<ssv2>#<clear_dist_m>#<clear_dir>   (trailing fields optional)
+        #   #<ssv2>#<clear_dist_m>#<clear_dir>#<goal_status>
+        #   #<depth_left_m>#<depth_right_m>#<goal_bearing_deg>#<goal_dist_m>
+        #   (trailing fields optional — old servers omit them)
+        # Feed the 2D navigation map (parsing is shared with nav_map, unit-tested).
+        self._map.set_model(nav_map.parse_status(line))
         parts = line.split("#")
         if len(parts) < 6:
             return

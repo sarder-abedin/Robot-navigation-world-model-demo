@@ -619,9 +619,12 @@ class AIPipeline:
 
         Format:
           CMD_AISTATUS#<action>#<risk*100>#<wm_label>#<pattern>#<sonic_cm>#<ssv2>
-                       #<clear_dist_m>#<clear_dir>#<goal_status>\r\n
-        goal_status ∈ none|tracking|lost|reached. Fields are appended, never
-        reordered, so older clients that split on the first 6–8 fields keep working.
+                       #<clear_dist_m>#<clear_dir>#<goal_status>
+                       #<depth_left_m>#<depth_right_m>#<goal_bearing_deg>#<goal_dist_m>\r\n
+        goal_status ∈ none|tracking|lost|reached. The trailing depth_left/right +
+        goal bearing/distance feed the 2D navigation map (-1 = unknown). Fields are
+        appended, never reordered, so older clients that split on the first 6–10
+        fields keep working.
         """
         if self._tcp_server is None:
             return
@@ -636,9 +639,14 @@ class AIPipeline:
             ssv2 = (ssv2_sentence or "").replace("#", " ")
             # Depth free-space (shown in the UI panel below the video). -1 / "" when
             # the depth model isn't ready.
+            # Per-side depth (LEFT/CENTER/RIGHT metres) for the 2D map; -1 = unknown.
+            clear_left = clear_right = -1.0
             if depth_result is not None and getattr(depth_result, "buffer_ready", False):
                 clear_dist = getattr(depth_result, "clear_distance_m", -1.0)
                 clear_dir = getattr(depth_result, "clear_direction", "") or ""
+                regions = getattr(depth_result, "region_distances_m", {}) or {}
+                clear_left = regions.get("LEFT", -1.0)
+                clear_right = regions.get("RIGHT", -1.0)
             else:
                 clear_dist, clear_dir = -1.0, ""
             # Goal status for the UI ("Goal reached" banner etc.).
@@ -650,6 +658,10 @@ class AIPipeline:
                 goal_status = "lost"
             else:
                 goal_status = "tracking"
+            # Goal bearing (deg) + depth (m) so the map can place the goal marker.
+            goal_bearing = float(getattr(goal_state, "bearing_deg", 0.0) or 0.0) if goal_state else 0.0
+            goal_dist = getattr(goal_state, "distance_m", None) if goal_state else None
+            goal_dist = goal_dist if (goal_dist is not None and goal_dist > 0) else -1.0
             msg = (
                 f"CMD_AISTATUS#{action}"
                 f"#{int(decision.risk_score * 100)}"
@@ -659,7 +671,11 @@ class AIPipeline:
                 f"#{ssv2}"
                 f"#{clear_dist:.2f}"
                 f"#{clear_dir}"
-                f"#{goal_status}\r\n"
+                f"#{goal_status}"
+                f"#{clear_left:.2f}"
+                f"#{clear_right:.2f}"
+                f"#{goal_bearing:.1f}"
+                f"#{goal_dist:.2f}\r\n"
             )
             if self._tcp_server.isCmdServerConnected():
                 self._tcp_server.sendDataToCmdClinet(msg)
