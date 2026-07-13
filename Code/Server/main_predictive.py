@@ -99,7 +99,7 @@ class PredictiveServer:
 
     # New commands added by this project
     CMD_AIMODE   = "CMD_AIMODE"    # #0 stop AI  #1 baseline  #2 predictive
-    CMD_AISTATUS = "CMD_AISTATUS"  # sent TO client: action#risk#wm#pattern#sonic
+    CMD_AISTATUS = "CMD_AISTATUS"  # →client: action#risk#wm#pattern#sonic#ssv2#clear_dist#clear_dir#goal_status#depth_left#depth_right#goal_bearing#goal_dist
     CMD_KILL     = "CMD_KILL"      # #0 full server shutdown
     CMD_AIMOVE   = "CMD_AIMOVE"    # FORWARD/SLOW/STOP/REROUTE — from client PC AI
 

@@ -280,7 +280,7 @@ Both modes run on the **same code path** — only the weight vector changes.
 | `CMD_GOAL_CLEAR` | UI → PC | `CMD_GOAL_CLEAR` | Clear the navigation goal |
 | `CMD_GOALFOLLOW` | UI → PC | `CMD_GOALFOLLOW#<0\|1>` | Nav mode: **1 = Goal Following** (robot steers to the goal; obstacle avoidance always overrides), **0 = Obstacle Avoidance** (no goal needed) |
 | `CMD_KILL` | UI → PC | `CMD_KILL#0` | Shutdown from operator |
-| `CMD_AISTATUS` | PC → UI | `CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>#<clear_dist_m>#<clear_dir>#<goal_status>` | Live AI state for the UI panel. `goal_status` ∈ none/tracking/lost/reached; on **reached** the PC stops the robot until a new UI command. Trailing fields optional for old clients |
+| `CMD_AISTATUS` | PC → UI | `CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>#<clear_dist_m>#<clear_dir>#<goal_status>#<depth_left_m>#<depth_right_m>#<goal_bearing_deg>#<goal_dist_m>` | Live AI state for the UI panel + the 2D navigation map. `goal_status` ∈ none/tracking/lost/reached; on **reached** the PC stops the robot until a new UI command. The trailing depth_left/right + goal bearing/distance drive the ai_viewer egocentric map (-1 = unknown). Trailing fields optional for old clients |
 | Video frames | Pi → PC | 4-byte LE uint32 length + JPEG | Camera stream for V-JEPA 2 (port 8004) |
 | Video frames | PC → UI | 4-byte LE uint32 length + JPEG | Annotated frames (port 8003) |
 

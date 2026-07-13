@@ -78,7 +78,8 @@ assets/         ← Demo video clips
 | `Code/Robot/tcp_robot_client.py` | Pi-side TCP client; `send_sonic()` / `send_frame()`; TCP keepalive on both sockets |
 | `Code/Client/streamlit_viewer.py` | Browser UI (port 8501); bundled in the server Docker image |
 | `Code/Client/desktop_viewer.py` | Native desktop window wrapping the Streamlit UI (pywebview); native-only |
-| `Code/Client/ai_viewer.py` | PyQt5 UI; on connect the operator **picks a Navigation Mode first** (Obstacle Avoidance / Goal Following) then explicitly activates; MANUAL driving available pre-pick; run-logging toggle (`CMD_LOGGING`) |
+| `Code/Client/ai_viewer.py` | PyQt5 UI; on connect the operator **picks a Navigation Mode first** (Obstacle Avoidance / Goal Following) then explicitly activates; MANUAL driving available pre-pick; run-logging toggle (`CMD_LOGGING`); a live **2D egocentric navigation map** (`NavMapWidget`) beside the video — robot-centred top-down view of depth L/C/R free-space, sonar, clear direction and the goal (no odometry → local/instantaneous, not world-anchored) |
+| `Code/Client/nav_map.py` | Framework-agnostic core of the 2D map: `parse_status()` (CMD_AISTATUS → `MapModel`) + polar→world→screen geometry, FOV sector bearings, proximity colour. No PyQt → **unit-tested** (`tests_rpi/test_nav_map_rpi.py`); `ai_viewer.NavMapWidget` is the thin QPainter layer on top |
 
 ## TCP protocol (summary)
 
@@ -94,8 +95,8 @@ UI → PC:  CMD_LOGGING#<0|1>                         (toggle server-side run lo
 UI → PC:  CMD_GOAL#<x_permille>#<y_permille>        (set goal at normalized image coords ×1000)
 UI → PC:  CMD_GOAL_CLEAR                            (clear the goal)
 UI → PC:  CMD_GOALFOLLOW#<0|1>                      (nav mode: 1=Goal Following (steer to goal), 0=Obstacle Avoidance)
-PC → UI:  CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>#<clear_dist_m>#<clear_dir>#<goal_status>
-          (ssv2 + depth + goal_status appended for the UI panel; goal_status ∈ none|tracking|lost|reached; on `reached` the PC stops the robot and waits for a new UI command; trailing fields optional for old clients)
+PC → UI:  CMD_AISTATUS#<action>#<risk_pct>#<wm_label>#<pattern>#<sonic_cm>#<ssv2_sentence>#<clear_dist_m>#<clear_dir>#<goal_status>#<depth_left_m>#<depth_right_m>#<goal_bearing_deg>#<goal_dist_m>
+          (ssv2 + depth + goal_status appended for the UI panel; goal_status ∈ none|tracking|lost|reached; on `reached` the PC stops the robot and waits for a new UI command; the trailing depth_left/right + goal bearing/distance feed the ai_viewer 2D map, -1 = unknown; trailing fields optional for old clients)
 PC → UI:  4-byte LE uint32 + JPEG  (annotated HUD frames, port 8003)
 ```
 

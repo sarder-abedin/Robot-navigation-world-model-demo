@@ -157,9 +157,14 @@ python ai_viewer.py
 ```
 
 > All three show the same live video, risk bars, V-JEPA 2 / SSv2 labels and
-> AUTO/MANUAL controls. Inside Docker the **browser** viewer starts automatically
-> (a native window needs a display, so `desktop_viewer.py` / `ai_viewer.py` are
-> native-only).
+> AUTO/MANUAL controls. The **PyQt5 `ai_viewer.py`** also draws a live **2D
+> navigation map** beside the video — a top-down, robot-centred view of the depth
+> free-space (left/centre/right), the ultrasonic reading, the chosen clear
+> direction and the goal (by bearing + distance). It's *egocentric* (there's no
+> odometry), so it shows the robot's local surroundings right now, not a
+> world-fixed map; toggle it with "Show 2D navigation map". Inside Docker the
+> **browser** viewer starts automatically (a native window needs a display, so
+> `desktop_viewer.py` / `ai_viewer.py` are native-only).
 
 ---
 
