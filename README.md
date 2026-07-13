@@ -67,9 +67,22 @@ For live mode, the native venv path, GPU builds and the full Docker flags, see
 
 ## Success criteria
 
-- Robot reaches the goal point reliably in both modes
-- Predictive mode visibly begins decelerating **earlier** than baseline mode
-- The V-JEPA 2 label shows `BLOCKED` before the YOLO11 detector fills the risk bar
-- Motion is smoother in predictive mode (fewer full stops from a cold start)
-- System runs stably at ≥ 8 FPS in demo mode
-- All signals are logged to CSV for post-run analysis
+- **Obstacle Avoidance** — the robot slows early, stops before walls/obstacles, and
+  reroutes toward the more-open side. It never depends on one sensor: the ultrasonic
+  **hard-stop** halts it even when vision misses (e.g. a bare wall), and the kinematic
+  **speed governor** caps speed so it can always stop within the measured clear distance.
+- **Goal Following** — given a goal clicked on the video, the robot steers toward it
+  (turns in place when off-bearing, drives forward when aligned) and stops on arrival
+  (`reached`); the avoidance stack always overrides steering.
+- **Closed-loop avoidance** — on a persistent obstacle it picks a context-appropriate
+  maneuver (WAIT for a crossing / person, TURN toward the open side until it clears,
+  BACK UP when too close) instead of freezing, with guards against endless spin/backup.
+- **Predictive advantage** — predictive mode visibly begins decelerating **earlier**
+  than baseline, the V-JEPA 2 label reads `BLOCKED` (with calibrated anchors) before the
+  YOLO11 detector fills the risk bar, and motion is smoother (fewer cold-start full stops).
+- **Calibrated distances** — after calibration the HUD `Depth: <d> m` matches a tape
+  measure and the governor uses real SI speeds (see [CALIBRATION.md](CALIBRATION.md)).
+- **Stable & observable** — the pipeline runs stably at interactive frame rates (tens of
+  FPS on a GPU/MPS box; reduced on CPU, where the SSv2 cadence is throttled), the operator
+  UI stays responsive with a live 2D navigation map, and every frame's signals are logged
+  to CSV for offline analysis and visualization (`run_visualizer.py`).
