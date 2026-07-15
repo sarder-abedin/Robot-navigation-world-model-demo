@@ -29,6 +29,23 @@ picamera2 JpegEncoder` means the robot image is stale.
 V-JEPA 2 weights (~300 MB) are downloaded from HuggingFace automatically on first
 run. No GPU required — CPU-only inference works out of the box.
 
+### V-JEPA 2 falls back to the stub (log: "V-JEPA 2 load failed … using stub encoder")
+
+If the server logs `V-JEPA 2 load failed (…) – using stub encoder`, the real world
+model isn't running and every `wm=` risk you see is synthetic — predictive mode is
+effectively baseline. The usual cause is a **transformers version that predates the
+`VJEPA2` architecture** (added in **transformers 4.53**). The SSv2 and depth models
+load on older builds, so seeing them come up doesn't prove V-JEPA 2 will:
+
+```bash
+pip install -U 'transformers>=4.53'      # then restart the server
+```
+
+Note: an `Unrecognized processing class … Can't instantiate a processor` message on
+its own is harmless — V-JEPA 2 does its own preprocessing and the server now loads
+the model without the HF processor. It only falls back to the stub if the **model**
+class itself is unavailable (the version issue above).
+
 ### Hardware acceleration (MPS / CUDA / Docker-no-Metal)
 
 Both heavy models (V-JEPA 2 and SSv2) default to `device: auto`, which picks the

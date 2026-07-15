@@ -88,7 +88,11 @@ class WorldModel:
             self._load_vjepa2()
             logger.info("V-JEPA 2 loaded: %s on %s", self._model_id, dev_name)
         except Exception as exc:
-            logger.warning("V-JEPA 2 load failed (%s) – using stub encoder", exc)
+            hint = ""
+            if "recognize" in str(exc).lower() or "vjepa" in str(exc).lower():
+                hint = (" — this transformers build may predate V-JEPA 2; "
+                        "upgrade it (pip install -U 'transformers>=4.53')")
+            logger.warning("V-JEPA 2 load failed (%s) – using stub encoder%s", exc, hint)
             self._model = _StubEncoder(embed_dim=1024)
         # Prefer calibrated corridor anchors when available; else synthetic.
         if self._anchors_path and os.path.exists(self._anchors_path):
@@ -184,8 +188,20 @@ class WorldModel:
     # ── Private ───────────────────────────────────────────────────────────────
 
     def _load_vjepa2(self) -> None:
-        from transformers import AutoModel, AutoProcessor  # type: ignore
-        self._processor = AutoProcessor.from_pretrained(self._model_id)
+        from transformers import AutoModel  # type: ignore
+        # V-JEPA 2 does its OWN preprocessing (_preprocess_frame: resize + ImageNet
+        # normalise), so the HF AutoProcessor is optional and, in fact, unused for
+        # inference. Some transformers versions ship the VJEPA2 *model* but can't
+        # instantiate an AutoProcessor for this repo ("Unrecognized processing
+        # class …") — that must NOT sink the real encoder into the stub. Load it
+        # best-effort and carry on without it.
+        self._processor = None
+        try:
+            from transformers import AutoProcessor  # type: ignore
+            self._processor = AutoProcessor.from_pretrained(self._model_id)
+        except Exception as exc:
+            logger.info("V-JEPA 2 processor unavailable (%s) – using built-in "
+                        "preprocessing (processor is not needed for inference)", exc)
         self._model = AutoModel.from_pretrained(self._model_id)
         self._model.to(self._device)
         self._model.eval()
