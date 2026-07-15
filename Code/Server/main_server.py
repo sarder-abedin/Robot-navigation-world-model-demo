@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import logging
 import signal
 import struct
@@ -37,6 +38,16 @@ import threading
 import time
 
 import yaml
+
+# Native crashes (e.g. a torch/MPS op segfaulting during inference) can't be
+# caught as Python exceptions — the process just dies with "segmentation fault".
+# faulthandler prints a C-level Python traceback on the fatal signal so the
+# crashing call site is visible instead of a bare segfault. (No-op if stderr is
+# unavailable.)
+try:
+    faulthandler.enable()
+except (ValueError, RuntimeError):
+    pass
 
 logger = logging.getLogger(__name__)
 _shutdown = False
