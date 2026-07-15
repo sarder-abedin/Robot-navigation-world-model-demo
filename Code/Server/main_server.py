@@ -156,28 +156,29 @@ class PCNavigationServer:
         mode = self._cfg.get("mode", "demo")
         srv_cfg = self._cfg.get("server", {})
 
-        # Attach dependencies and LOAD + WARM UP all models BEFORE opening any
-        # listener. Model loading and each model's first (cold) inference take tens
-        # of seconds on MPS; doing it up front means the robot never connects to a
-        # server whose first live frames would each block for seconds (which trips
-        # the Pi's motor watchdog). The robot client just retries until we're ready.
+        # Open the listeners FIRST so the robot/UI connect right away (never a long
+        # "connection refused" window while models load). Frames the robot streams
+        # just buffer until the pipeline starts driving.
         self._ai.attach(
             tcp_server=self._tcp,
             robot_connection=self._robot_conn,
             camera_buffer=self._cam_buf,
         )
         self._cam_buf.start()
-        logger.info("Loading and warming up AI models (YOLO / V-JEPA 2 / SSv2 / "
-                    "depth) before accepting connections…")
-        self._ai.prepare()
-
-        # Models are ready — now open the robot + UI listeners.
         if mode == "live" and self._robot_conn:
             self._robot_conn.start()
         self._tcp.startTcpServer(
             port1=srv_cfg.get("cmd_port", 5003),
             port2=srv_cfg.get("video_port", 8003),
         )
+
+        # Load + warm the models, THEN start driving. The robot may connect and idle
+        # (motor watchdog holds it stopped) during this window — that's benign. Only
+        # the inline models (YOLO + depth) are warmed synchronously; V-JEPA 2 + SSv2
+        # warm up off the drive loop on the background worker, so this stays bounded.
+        logger.info("Loading + warming AI models; the robot may connect and idle "
+                    "until the pipeline starts driving…")
+        self._ai.prepare()
         self._ai.start()
 
         # Start the command receive thread (for UI viewer commands)

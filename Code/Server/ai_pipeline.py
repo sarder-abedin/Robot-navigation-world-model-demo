@@ -179,9 +179,12 @@ class AIPipeline:
         self._prepared = True
 
     def _warmup(self) -> None:
-        """Run one dummy inference per model so the costly first-call compile /
-        graph build happens now (during startup) instead of on the first live
-        frame. Best-effort — a warmup failure must never block startup."""
+        """Warm ONLY the models that run inline in the drive loop (YOLO + depth) so
+        their costly first-call compile happens now instead of on the first live
+        frame. V-JEPA 2 and SSv2 are deliberately NOT warmed here — they run on the
+        background worker (_wm_loop), so their multi-second cold forwards must not
+        block startup (doing so once left the robot unable to connect). The worker
+        absorbs their first-call cost off the drive loop. Best-effort."""
         dummy = np.zeros((240, 320, 3), dtype=np.uint8)
         t0 = time.monotonic()
         try:
@@ -189,27 +192,13 @@ class AIPipeline:
                 self._detector.detect(cv2.cvtColor(dummy, cv2.COLOR_RGB2BGR))
         except Exception as exc:
             logger.debug("YOLO warmup skipped: %s", exc)
-        # A clip long enough for either heavy model (V-JEPA 2 needs camera.clip_length
-        # frames; SSv2 samples 16 from it).
-        clip_len = int((self._cfg.get("camera", {}) or {}).get("clip_length", 64))
-        clip = [dummy] * max(clip_len, 16)
-        try:
-            if self._world_model is not None:
-                self._world_model.predict(clip)
-        except Exception as exc:
-            logger.debug("V-JEPA 2 warmup skipped: %s", exc)
-        try:
-            if self._ssv2 is not None:
-                self._ssv2.recognize(clip, "")
-        except Exception as exc:
-            logger.debug("SSv2 warmup skipped: %s", exc)
         try:
             if self._depth is not None:
                 self._depth.estimate(dummy)
         except Exception as exc:
             logger.debug("Depth warmup skipped: %s", exc)
-        logger.info("Model warmup complete (%.1fs) – first live frame will be fast",
-                    time.monotonic() - t0)
+        logger.info("Inline-model warmup complete (%.1fs); V-JEPA 2 + SSv2 warm up "
+                    "on the background worker", time.monotonic() - t0)
 
     def start(self) -> None:
         if not self._prepared:
