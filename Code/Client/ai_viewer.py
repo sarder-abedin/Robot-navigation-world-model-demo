@@ -57,7 +57,7 @@ from PyQt5.QtGui import QColor, QFont, QImage, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QProgressBar, QPushButton,
-    QRadioButton, QShortcut, QSizePolicy, QVBoxLayout, QWidget,
+    QRadioButton, QScrollArea, QShortcut, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -284,6 +284,7 @@ class AIViewer(QMainWindow):
         self._video_thread: threading.Thread | None = None
 
         self._control_mode: str = "AUTO"   # "AUTO" | "MANUAL"
+        self._ai_active_mode: int = 0      # last CMD_AIMODE sent: 0 idle, 1 baseline, 2 predictive
         self._manual_speed: int = SPEED_FULL
         self._keys_held: set[int] = set()  # avoid repeated motor sends on auto-repeat
         self._goal_selected: bool = False  # a goal has been set (needed for Goal-Following)
@@ -305,11 +306,28 @@ class AIViewer(QMainWindow):
     # ── UI ─────────────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
+        # Everything lives inside a scroll area, so shrinking the window never
+        # clips or misplaces controls — it just scrolls. A minimum size keeps the
+        # layout from collapsing into an unusable state.
+        self.setMinimumSize(460, 560)
         central = QWidget()
-        self.setCentralWidget(central)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(central)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        self.setCentralWidget(scroll)
         root = QVBoxLayout(central)
         root.setSpacing(6)
         root.setContentsMargins(8, 8, 8, 8)
+
+        # ── Quick-start strip: the three steps to drive, so it's obvious what to do
+        steps = QLabel("① Connect   →   ② pick a Navigation Mode   →   "
+                       "③ AUTO (AI drives) or MANUAL (you drive)")
+        steps.setStyleSheet("color:#cfd8dc; background:#2a2f33; border-radius:4px; "
+                            "padding:5px 8px; font-size:11px;")
+        steps.setAlignment(Qt.AlignCenter)
+        steps.setWordWrap(True)
+        root.addWidget(steps)
 
         # ── Connection row ────────────────────────────────────────────────────
         conn_row = QHBoxLayout()
@@ -358,7 +376,7 @@ class AIViewer(QMainWindow):
         root.addLayout(map_row)
 
         # ── Navigation Mode: pick one on connect (nothing pre-selected) ───────
-        navmode_box = QGroupBox("Navigation Mode  (pick one to begin)")
+        navmode_box = QGroupBox("Navigation Mode  ·  what the AI should do (pick one to begin)")
         navmode_col = QVBoxLayout(navmode_box)
         navmode_row = QHBoxLayout()
         self._radio_avoid = QRadioButton("Obstacle Avoidance")
@@ -438,7 +456,7 @@ class AIViewer(QMainWindow):
         root.addWidget(state_box)
 
         # ── AI Model (predictive vs baseline) ─────────────────────────────────
-        mode_box = QGroupBox("AI Model  (obstacle-avoidance behaviour)")
+        mode_box = QGroupBox("AI Model  ·  used while AUTO (predictive = V-JEPA 2, baseline = reactive)")
         mode_row = QHBoxLayout(mode_box)
 
         self._btn_predictive = QPushButton("PREDICTIVE")
@@ -464,56 +482,77 @@ class AIViewer(QMainWindow):
         # data is written on the server (logs_rpi/), not on this UI machine.
         log_box = QGroupBox("Run Logging  (stored on the server PC)")
         log_row = QHBoxLayout(log_box)
-        self._chk_logging = QCheckBox("Record run log (CSV + frames)")
+        self._chk_logging = QCheckBox("Record run log (CSV + frames) — on by default")
         self._chk_logging.setToolTip(
-            "Start/stop server-side run logging. Files are written to logs_rpi/ on "
-            "the PC running main_server.py. You can also start it with --logging on."
+            "Server-side run logging (logs_rpi/ on the PC running main_server.py). "
+            "ON by default; untick to stop recording this run."
         )
+        # Checked before wiring the signal so it doesn't fire _send_logging while
+        # disconnected (which would revert it); the real CMD_LOGGING is sent on connect.
+        self._chk_logging.setChecked(True)
         self._chk_logging.toggled.connect(self._send_logging)
         log_row.addWidget(self._chk_logging)
         root.addWidget(log_box)
 
         # ── Drive Control ─────────────────────────────────────────────────────
-        drive_box = QGroupBox("Drive Control")
+        drive_box = QGroupBox("Drive  ·  AUTO = AI drives, MANUAL = you drive")
         drive_layout = QVBoxLayout(drive_box)
         drive_layout.setSpacing(4)
 
-        # AUTO / MANUAL toggle row
+        # AUTO / MANUAL toggle row — the two buttons share the width equally and
+        # never shrink below a readable size.
         toggle_row = QHBoxLayout()
-        self._btn_auto = QPushButton("AUTO MODE  (AI drives)")
+        self._btn_auto = QPushButton("AUTO  ·  AI drives")
         self._btn_auto.setStyleSheet(_AUTO_BTN_ACTIVE)
+        self._btn_auto.setMinimumHeight(36)
+        self._btn_auto.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._btn_auto.setToolTip("Let the AI decision fuser control the robot (Ctrl+A)")
         self._btn_auto.clicked.connect(self._switch_to_auto)
         toggle_row.addWidget(self._btn_auto)
 
-        self._btn_manual = QPushButton("MANUAL MODE  (you drive)")
+        self._btn_manual = QPushButton("MANUAL  ·  you drive")
         self._btn_manual.setStyleSheet(_MANUAL_BTN_INACTIVE)
+        self._btn_manual.setMinimumHeight(36)
+        self._btn_manual.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._btn_manual.setToolTip("Take direct control via buttons or arrow keys (Ctrl+M)")
         self._btn_manual.clicked.connect(self._switch_to_manual)
         toggle_row.addWidget(self._btn_manual)
         drive_layout.addLayout(toggle_row)
 
-        # Drive button grid (shown only in MANUAL mode)
+        # Manual panel (shown only in MANUAL mode): a fixed-size D-pad, CENTRED so it
+        # keeps its size and position no matter how the window is resized.
         self._drive_widget = QWidget()
-        dg = QtWidgets.QGridLayout(self._drive_widget)
-        dg.setSpacing(4)
+        manual_col = QVBoxLayout(self._drive_widget)
+        manual_col.setSpacing(6)
+        manual_col.setContentsMargins(0, 0, 0, 0)
 
+        dpad = QWidget()
+        dg = QtWidgets.QGridLayout(dpad)
+        dg.setSpacing(6)
+        dg.setContentsMargins(0, 0, 0, 0)
         self._btn_fwd  = self._make_drive_btn("▲", lambda: self._drive_press("FWD"))
         self._btn_back = self._make_drive_btn("▼", lambda: self._drive_press("BACK"))
         self._btn_left = self._make_drive_btn("◄", lambda: self._drive_press("LEFT"))
         self._btn_right = self._make_drive_btn("►", lambda: self._drive_press("RIGHT"))
-        self._btn_drive_stop = QPushButton("■ STOP")
+        self._btn_drive_stop = QPushButton("■")
         self._btn_drive_stop.setStyleSheet(_DRIVE_STOP_BTN)
+        self._btn_drive_stop.setFixedSize(64, 52)
+        self._btn_drive_stop.setToolTip("Stop motors")
         self._btn_drive_stop.clicked.connect(self._drive_stop)
-
         dg.addWidget(self._btn_fwd,        0, 1)
         dg.addWidget(self._btn_left,       1, 0)
         dg.addWidget(self._btn_drive_stop, 1, 1)
         dg.addWidget(self._btn_right,      1, 2)
         dg.addWidget(self._btn_back,       2, 1)
+        dpad_row = QHBoxLayout()
+        dpad_row.addStretch(1)
+        dpad_row.addWidget(dpad)
+        dpad_row.addStretch(1)
+        manual_col.addLayout(dpad_row)
 
-        # Speed selector
+        # Speed selector (centred under the D-pad)
         speed_row = QHBoxLayout()
+        speed_row.addStretch(1)
         speed_row.addWidget(QLabel("Speed:"))
         self._radio_full = QRadioButton("Full")
         self._radio_full.setChecked(True)
@@ -521,15 +560,13 @@ class AIViewer(QMainWindow):
         self._radio_slow = QRadioButton("Slow")
         speed_row.addWidget(self._radio_full)
         speed_row.addWidget(self._radio_slow)
-        speed_row.addStretch()
-        spd_widget = QWidget()
-        spd_widget.setLayout(speed_row)
-        dg.addWidget(spd_widget, 3, 0, 1, 3)
+        speed_row.addStretch(1)
+        manual_col.addLayout(speed_row)
 
-        hint = QLabel("Keyboard: Arrow keys drive  |  ↑↓←→ hold to move  |  release to stop")
+        hint = QLabel("Hold ▲▼◄► or the arrow keys to drive · release to stop")
         hint.setStyleSheet("color:#888; font-size:10px;")
         hint.setAlignment(Qt.AlignCenter)
-        dg.addWidget(hint, 4, 0, 1, 3)
+        manual_col.addWidget(hint)
 
         drive_layout.addWidget(self._drive_widget)
         self._drive_widget.setVisible(False)  # hidden in AUTO mode
@@ -597,6 +634,7 @@ class AIViewer(QMainWindow):
     def _make_drive_btn(self, symbol: str, slot) -> QPushButton:
         btn = QPushButton(symbol)
         btn.setStyleSheet(_DRIVE_BTN)
+        btn.setFixedSize(64, 52)   # fixed so the D-pad never shrinks/reflows on resize
         btn.pressed.connect(slot)
         btn.released.connect(self._drive_stop)
         return btn
@@ -763,6 +801,8 @@ class AIViewer(QMainWindow):
             self._goal_selected = False
             self._clear_nav_mode()
             self._send_ai_mode(0)
+            # Run logging is ON by default — push the checkbox state to the server.
+            self._send_logging(self._chk_logging.isChecked())
             self._update_activation_gate()
             self._status_bar.setText("Connected – pick a Navigation Mode to begin (or drive MANUAL).")
 
@@ -919,6 +959,7 @@ class AIViewer(QMainWindow):
             self._cmd_sock.sendall(b"CMD_GOAL_CLEAR\n")
             # Clearing the goal re-locks AI activation and returns the robot to idle.
             self._cmd_sock.sendall(b"CMD_AIMODE#0\n")
+            self._ai_active_mode = 0   # idled: don't let a later nav-mode switch auto-resume
             self._goal_selected = False
             self._update_activation_gate()
             self._status_bar.setText("Goal cleared – AI idle until a new goal is set.")
@@ -1031,6 +1072,7 @@ class AIViewer(QMainWindow):
             return
         try:
             self._cmd_sock.sendall(f"CMD_AIMODE#{mode}\n".encode("utf-8"))
+            self._ai_active_mode = mode   # remember so a nav-mode switch can resume it
         except Exception as exc:
             self._status_bar.setText(f"Send error: {exc}")
 
@@ -1068,19 +1110,36 @@ class AIViewer(QMainWindow):
         """
         self._nav_mode = mode
         self._goal_box.setVisible(mode == "goal")
+        kept_driving = False
         if self._connected and self._cmd_sock:
             try:
-                self._cmd_sock.sendall(b"CMD_AIMODE#0\n")   # stay idle until explicit start
                 self._cmd_sock.sendall(
                     f"CMD_GOALFOLLOW#{1 if mode == 'goal' else 0}\n".encode("utf-8"))
+                # If the AI was already driving (AUTO + a live model), keep it
+                # driving across the switch instead of idling the robot — switching
+                # nav mode mid-run used to send CMD_AIMODE#0 and stop everything.
+                # Only continue when the new mode is actually allowed (Goal Following
+                # needs a goal); otherwise idle safely.
+                was_driving = self._control_mode == "AUTO" and self._ai_active_mode in (1, 2)
+                if was_driving and self._ai_activation_allowed():
+                    self._send_ai_mode(self._ai_active_mode)   # resume same model, new nav mode
+                    kept_driving = True
+                else:
+                    self._cmd_sock.sendall(b"CMD_AIMODE#0\n")   # stay idle until explicit start
+                    self._ai_active_mode = 0
             except Exception as exc:
                 self._status_bar.setText(f"Send error: {exc}")
         self._update_activation_gate()
-        self._status_bar.setText(
-            "Goal Following – set a goal on the video, then activate AI."
-            if mode == "goal" else
-            "Obstacle Avoidance – click PREDICTIVE or BASELINE to start."
-        )
+        if kept_driving:
+            self._status_bar.setText(
+                ("Goal Following" if mode == "goal" else "Obstacle Avoidance")
+                + " – AI still driving.")
+        else:
+            self._status_bar.setText(
+                "Goal Following – set a goal on the video, then activate AI."
+                if mode == "goal" else
+                "Obstacle Avoidance – click PREDICTIVE or BASELINE to start."
+            )
 
     def _ai_activation_allowed(self) -> bool:
         """AI can be started only once connected AND a mode is picked; Goal

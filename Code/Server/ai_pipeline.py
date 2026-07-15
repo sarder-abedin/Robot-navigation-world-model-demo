@@ -113,13 +113,15 @@ class AIPipeline:
         self._thread: threading.Thread | None = None
         self._running = False
 
-        # The heavy models (V-JEPA 2 + SSv2) run on their OWN thread — their ViT-L /
-        # VideoMAE forwards take up to tens of seconds on MPS, far too slow for the
-        # drive loop (a stall there starves CMD_AIMOVE and trips the robot's motor
-        # watchdog). The worker publishes the latest results; the drive loop reads
-        # whatever is current and never blocks. SSv2 is annotation-only, so a stale
-        # caption is harmless; the drive loop feeds it the latest YOLO object label.
-        self._wm_thread: threading.Thread | None = None
+        # The heavy models (V-JEPA 2 + SSv2) run OFF the main process — their ViT-L /
+        # VideoMAE forwards hold the GIL for seconds at a time (frame preprocessing +
+        # MPS sync), which on a thread would freeze the camera-receive I/O and stall
+        # the robot stream. By default they run in a separate PROCESS
+        # (world_model.run_in_subprocess); the drive loop reads the latest published
+        # result and never blocks. `run_in_subprocess: false` falls back to the old
+        # in-process background thread (self._wm_thread + self._latest_* below).
+        self._wm_proc = None              # WorldModelProcess when run_in_subprocess
+        self._wm_thread: threading.Thread | None = None   # in-process fallback
         self._wm_lock = threading.Lock()
         self._latest_wm = None            # last WorldModelResult (None until first run)
         self._latest_ssv2 = None          # last SSv2Result   (None until first run)
@@ -210,12 +212,16 @@ class AIPipeline:
             target=self._run_loop, daemon=True, name="AIPipeline"
         )
         self._thread.start()
-        # Background worker — keeps the heavy V-JEPA 2 + SSv2 inference off the drive
-        # loop so neither ever blocks CMD_AIMOVE.
-        self._wm_thread = threading.Thread(
-            target=self._wm_loop, daemon=True, name="Perception"
-        )
-        self._wm_thread.start()
+        # V-JEPA 2 + SSv2 run off the main process so their heavy inference never
+        # blocks the drive loop or the camera I/O: a subprocess by default, or a
+        # background thread as fallback.
+        if self._wm_proc is not None:
+            self._wm_proc.start(self._cam_buf)
+        else:
+            self._wm_thread = threading.Thread(
+                target=self._wm_loop, daemon=True, name="Perception"
+            )
+            self._wm_thread.start()
         logger.info("AI pipeline started (mode=%s)", self._nav_mode)
 
     def stop(self) -> None:
@@ -232,6 +238,8 @@ class AIPipeline:
             self._visualizer.close()
         if self._thread:
             self._thread.join(timeout=3.0)
+        if self._wm_proc is not None:
+            self._wm_proc.stop()
         if self._wm_thread:
             # A V-JEPA 2 forward can be mid-flight; don't block shutdown on it.
             self._wm_thread.join(timeout=3.0)
@@ -441,9 +449,12 @@ class AIPipeline:
             # loop and starve CMD_AIMOVE (robot watchdog-STOPs). Until the first
             # result lands, fall back to the detector's instantaneous risk.
             _t = time.monotonic()
-            with self._wm_lock:
-                wm_result = self._latest_wm
-                ssv2_result = self._latest_ssv2
+            if self._wm_proc is not None:
+                wm_result, ssv2_result = self._wm_proc.latest()
+            else:
+                with self._wm_lock:
+                    wm_result = self._latest_wm
+                    ssv2_result = self._latest_ssv2
             if wm_result is None:
                 from world_model import WorldModelResult
                 wm_result = WorldModelResult(buffer_ready=False,
@@ -494,8 +505,11 @@ class AIPipeline:
             object_label = getattr(det_result, "closest_label", "") or (
                 det_result.labels[0] if det_result.labels else ""
             )
-            self._latest_object_label = object_label
-            lat["ssv2"] = 0.0    # inference is off-loop now (see _wm_loop)
+            if self._wm_proc is not None:
+                self._wm_proc.set_object_label(object_label)
+            else:
+                self._latest_object_label = object_label
+            lat["ssv2"] = 0.0    # inference is off the main process (subprocess/worker)
             if ssv2_result is not None and getattr(ssv2_result, "buffer_ready", False):
                 ssv2_sentence = ssv2_result.sentence
                 ssv2_conf = ssv2_result.confidence
@@ -711,12 +725,22 @@ class AIPipeline:
             )
             self._detector = None
 
-        self._world_model = WorldModel(cfg)
-        self._world_model.load()
-
-        from ssv2_model import SSv2Recognizer
-        self._ssv2 = SSv2Recognizer(cfg)
-        self._ssv2.load()
+        # V-JEPA 2 + SSv2: in a separate process by default (keeps their multi-second
+        # GIL-holding inference off the camera I/O), or in-process on a background
+        # thread when world_model.run_in_subprocess is false.
+        self._use_wm_subprocess = bool(
+            (cfg.get("world_model", {}) or {}).get("run_in_subprocess", True))
+        if self._use_wm_subprocess:
+            from world_model_process import WorldModelProcess
+            self._wm_proc = WorldModelProcess(cfg)   # loads models in the subprocess
+            self._world_model = None
+            self._ssv2 = None
+        else:
+            self._world_model = WorldModel(cfg)
+            self._world_model.load()
+            from ssv2_model import SSv2Recognizer
+            self._ssv2 = SSv2Recognizer(cfg)
+            self._ssv2.load()
 
         from depth_perception import DepthEstimator
         self._depth = DepthEstimator(cfg)

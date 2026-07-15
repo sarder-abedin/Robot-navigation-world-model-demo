@@ -61,7 +61,8 @@ assets/         ← Demo video clips
 | `Code/Server/main_server.py` | PC entry point; starts AI pipeline + TCP servers |
 | `Code/Server/detector.py` | YOLO11n — runs on the **PC** on the Pi's streamed frames (all modes) |
 | `Code/Server/robot_connection.py` | Parses `CMD_SONIC` from Pi; exposes `get_sonic_cm()` and `send_aimove()` |
-| `Code/Server/ai_pipeline.py` | Orchestrates YOLO → V-JEPA 2 → SSv2 → decision → broadcast; measures reaction latency for the governor |
+| `Code/Server/ai_pipeline.py` | Orchestrates YOLO → V-JEPA 2 → SSv2 → decision → broadcast; measures reaction latency for the governor. Drive loop runs YOLO + depth inline; **V-JEPA 2 + SSv2 run OFF the main process** (default: a subprocess via `world_model_process.py`, so their GIL-holding inference can't stall the camera I/O), reading the latest published result |
+| `Code/Server/world_model_process.py` | Runs V-JEPA 2 + SSv2 in a **separate OS process** (`spawn`) so their multi-second, GIL-holding forwards don't freeze the main server's camera-receive I/O (which stalled the robot stream). Lock-step clip-in/result-out over `multiprocessing.Queue`; `world_model.run_in_subprocess: false` falls back to an in-process thread |
 | `Code/Server/decision.py` | Risk fusion + hysteresis; ultrasonic hard-stop (separate); closed-loop context-aware reroute (wait/turn/backup); applies the speed governor |
 | `Code/Server/speed_governor.py` | Kinematic safe-speed governor: caps action to `d_stop(v)=v·t_react+v²/(2a)+margin` |
 | `Code/Server/depth_perception.py` | Depth-Anything V2 → free-space distance ahead + clear direction (LEFT/CENTER/RIGHT); class-agnostic (sees walls); `depth_at_norm()` per-pixel goal-depth sampler |
@@ -78,7 +79,7 @@ assets/         ← Demo video clips
 | `Code/Robot/tcp_robot_client.py` | Pi-side TCP client; `send_sonic()` / `send_frame()`; TCP keepalive on both sockets |
 | `Code/Client/streamlit_viewer.py` | Browser UI (port 8501); bundled in the server Docker image |
 | `Code/Client/desktop_viewer.py` | Native desktop window wrapping the Streamlit UI (pywebview); native-only |
-| `Code/Client/ai_viewer.py` | PyQt5 UI; on connect the operator **picks a Navigation Mode first** (Obstacle Avoidance / Goal Following) then explicitly activates; MANUAL driving available pre-pick; run-logging toggle (`CMD_LOGGING`); a live **2D egocentric navigation map** (`NavMapWidget`) beside the video — robot-centred top-down view of depth L/C/R free-space, sonar, clear direction and the goal (no odometry → local/instantaneous, not world-anchored) |
+| `Code/Client/ai_viewer.py` | PyQt5 UI (scroll-area layout so it never misplaces controls on resize; quick-start step strip; fixed-size centred MANUAL D-pad); on connect the operator **picks a Navigation Mode first** (Obstacle Avoidance / Goal Following) then explicitly activates; switching nav mode mid-run **keeps the AI driving** when safe (tracks `_ai_active_mode`) instead of idling; MANUAL driving available pre-pick; run-logging (`CMD_LOGGING`) **ON by default**, untick to stop; a live **2D egocentric navigation map** (`NavMapWidget`) beside the video — robot-centred top-down view of depth L/C/R free-space, sonar, clear direction and the goal (no odometry → local/instantaneous, not world-anchored) |
 | `Code/Client/nav_map.py` | Framework-agnostic core of the 2D map: `parse_status()` (CMD_AISTATUS → `MapModel`) + polar→world→screen geometry, FOV sector bearings, proximity colour. No PyQt → **unit-tested** (`tests_rpi/test_nav_map_rpi.py`); `ai_viewer.NavMapWidget` is the thin QPainter layer on top |
 
 ## TCP protocol (summary)
