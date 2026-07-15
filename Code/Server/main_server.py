@@ -156,23 +156,28 @@ class PCNavigationServer:
         mode = self._cfg.get("mode", "demo")
         srv_cfg = self._cfg.get("server", {})
 
-        # Start robot TCP listener (live mode)
-        if mode == "live" and self._robot_conn:
-            self._robot_conn.start()
-
-        # Start the UI TCP server (viewer connects here)
-        self._tcp.startTcpServer(
-            port1=srv_cfg.get("cmd_port", 5003),
-            port2=srv_cfg.get("video_port", 8003),
-        )
-
-        # Attach everything to the AI pipeline and start it
+        # Attach dependencies and LOAD + WARM UP all models BEFORE opening any
+        # listener. Model loading and each model's first (cold) inference take tens
+        # of seconds on MPS; doing it up front means the robot never connects to a
+        # server whose first live frames would each block for seconds (which trips
+        # the Pi's motor watchdog). The robot client just retries until we're ready.
         self._ai.attach(
             tcp_server=self._tcp,
             robot_connection=self._robot_conn,
             camera_buffer=self._cam_buf,
         )
         self._cam_buf.start()
+        logger.info("Loading and warming up AI models (YOLO / V-JEPA 2 / SSv2 / "
+                    "depth) before accepting connections…")
+        self._ai.prepare()
+
+        # Models are ready — now open the robot + UI listeners.
+        if mode == "live" and self._robot_conn:
+            self._robot_conn.start()
+        self._tcp.startTcpServer(
+            port1=srv_cfg.get("cmd_port", 5003),
+            port2=srv_cfg.get("video_port", 8003),
+        )
         self._ai.start()
 
         # Start the command receive thread (for UI viewer commands)
