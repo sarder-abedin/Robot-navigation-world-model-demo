@@ -149,8 +149,11 @@ class NavigationLogger:
             }
             row.update(_metric_row(metrics))
             self._csv_writer.writerow(row)
-            if self._frame_idx % 20 == 0:
-                self._csv_file.flush()
+            # Flush every row so a short or hard-killed run (e.g. the robot drops
+            # off after a few frames) still leaves its data on disk — buffering ~20
+            # rows meant an interrupted run wrote an empty CSV. flush() only pushes
+            # to the OS buffer, so it's cheap even at full frame rate.
+            self._csv_file.flush()
 
         if self._save_frames and (self._frame_idx % self._frame_interval == 0):
             fname = self._frames_dir / f"frame_{self._frame_idx:06d}.jpg"
@@ -195,8 +198,7 @@ class NavigationLogger:
                 "ultrasonic_cm":   f"{ultrasonic_cm:.1f}",
                 "explanation":     "pi-side detection only",
             })
-            if self._frame_idx % 20 == 0:
-                self._csv_file.flush()
+            self._csv_file.flush()   # persist every row (see log_frame)
 
         if self._save_frames and (self._frame_idx % self._frame_interval == 0):
             fname = self._frames_dir / f"frame_{self._frame_idx:06d}.jpg"
