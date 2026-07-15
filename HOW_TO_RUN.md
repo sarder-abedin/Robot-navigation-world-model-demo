@@ -55,6 +55,23 @@ room to run V-JEPA 2 more often for earlier predictive warnings. Requirements:
   `device: "mps"` still falls back to CUDA→CPU on non-Mac hardware (with a note in
   the log); use `device: "auto"` instead if you want CUDA preferred when present.
 
+#### World model runs in a separate process
+
+V-JEPA 2 (ViT-L over a 64-frame clip) and SSv2 hold the Python GIL for seconds per
+call, which — on a background thread — froze the whole server and stalled the
+robot's camera stream until it timed out. They now run in a **separate OS process**
+(`Code/Server/world_model_process.py`, `world_model.run_in_subprocess: true`), so the
+main loop only pays a tiny per-clip cost and the camera I/O stays smooth.
+
+- On startup you'll see `World-model subprocess started (pid=…)` and, once its models
+  finish loading + warming (~a minute), `World-model subprocess ready`.
+- Until then the world-model risk `wm=` stays 0 and the drive loop uses the detector's
+  instantaneous risk — the robot still drives; V-JEPA 2 just contributes a bit later.
+- Depth stays inline (it's lighter and decision-critical). If the subprocess dies, the
+  world model degrades to off (detector risk) with a logged hint — nav still runs.
+- Set `world_model.run_in_subprocess: false` to run it on an in-process thread instead
+  (simpler, but the camera stream can stutter during inference).
+
 ### Raspberry Pi (TCP client – robot hardware) — **Docker-based**
 
 The Pi runs **in Docker** (the supported path) as a **thin client** that runs no
