@@ -237,7 +237,11 @@ def main() -> None:
 
     # ── TCP connection ───────────────────────────────────────────────────────
     from tcp_robot_client import RobotTCPClient
-    client = RobotTCPClient(server_ip, cmd_port, video_port)
+    _net_cfg = cfg.get("network", {}) or {}
+    client = RobotTCPClient(
+        server_ip, cmd_port, video_port,
+        io_timeout=float(_net_cfg.get("io_timeout_seconds", 4.0)),
+    )
 
     # Motor / command parameters (read once; threads and the command loop below
     # close over these across reconnects).
@@ -375,7 +379,9 @@ def main() -> None:
         cam_thread.join(timeout=2.0)
         det_thread.join(timeout=2.0)
         if not _shutdown:
-            logger.warning("Lost connection to PC – reconnecting…")
+            logger.warning("Lost connection to PC (network/Wi-Fi drop) – motors "
+                           "STOPPED, auto-recovering: reconnecting as soon as the "
+                           "server is reachable again…")
             client.disconnect()   # reset socket state before the next connect()
             time.sleep(1.0)
 

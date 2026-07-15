@@ -24,10 +24,18 @@ logger = logging.getLogger(__name__)
 class RobotTCPClient:
     """Manages two outbound TCP connections from the robot to the PC server."""
 
-    def __init__(self, server_ip: str, cmd_port: int = 5004, video_port: int = 8004):
+    def __init__(self, server_ip: str, cmd_port: int = 5004, video_port: int = 8004,
+                 io_timeout: float = 4.0):
         self._server_ip = server_ip
         self._cmd_port = cmd_port
         self._video_port = video_port
+        # Socket send/recv timeout. On a dead link (Wi-Fi dropped mid-drive) a
+        # blocking sendall/recv would otherwise hang 15-60 s before erroring, so
+        # the robot can't notice and reconnect. With a timeout, a stuck send/recv
+        # raises within io_timeout → is_connected flips False → the reconnect loop
+        # re-establishes as soon as the network is back. Kept generous so a healthy
+        # (even lossy) link never trips it — a 9 KB frame sends in <1 ms.
+        self._io_timeout = max(1.0, float(io_timeout))
 
         self._cmd_sock: socket.socket | None = None
         self._video_sock: socket.socket | None = None
@@ -47,14 +55,14 @@ class RobotTCPClient:
             self._cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._cmd_sock.settimeout(timeout)
             self._cmd_sock.connect((self._server_ip, self._cmd_port))
-            self._cmd_sock.settimeout(None)
+            self._cmd_sock.settimeout(self._io_timeout)   # fast dead-link detection
             self._enable_keepalive(self._cmd_sock)
             logger.info("Connected to PC server cmd port %d", self._cmd_port)
 
             self._video_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._video_sock.settimeout(timeout)
             self._video_sock.connect((self._server_ip, self._video_port))
-            self._video_sock.settimeout(None)
+            self._video_sock.settimeout(self._io_timeout)   # fast dead-link detection
             self._enable_keepalive(self._video_sock)
             logger.info("Connected to PC server video port %d", self._video_port)
 
@@ -182,7 +190,7 @@ class RobotTCPClient:
     def _recv_loop(self) -> None:
         """Receive motor commands from PC on the command socket."""
         buf = ""
-        while self._running and self._cmd_sock:
+        while self._running and self._connected and self._cmd_sock:
             try:
                 data = self._cmd_sock.recv(1024)
                 if not data:
@@ -195,6 +203,12 @@ class RobotTCPClient:
                     line = line.strip()
                     if line:
                         self._cmd_queue.put(line)
+            except socket.timeout:
+                # No command this interval — the PC may just be idle (AI off). The
+                # link's health is judged by the SEND side (frame/sonic); keep
+                # waiting. If a send flagged the link dead, the while-condition
+                # (self._connected) exits us within one io_timeout.
+                continue
             except Exception as exc:
                 if self._running:
                     logger.error("Robot recv error: %s", exc)
