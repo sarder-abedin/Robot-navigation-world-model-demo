@@ -144,12 +144,6 @@ world_model:
   device: "mps"                # auto = CUDA → MPS → CPU; or force "cuda"/"mps"/"cpu"
   # Run world-model inference every N frames (expensive on CPU)
   run_every_n_frames: 8
-  # Run V-JEPA 2 (+ SSv2) in a SEPARATE process. V-JEPA 2 (ViT-L over a 64-frame
-  # clip) holds the GIL for seconds per call; on a thread that freezes the camera
-  # I/O and the robot stream stalls out. A separate process has its own GIL, so the
-  # main loop only pays a tiny pickle cost. Set false to run it in-process on a
-  # background thread (simpler, but the stream can stutter during inference).
-  run_in_subprocess: true
 
 # ── Temporal action recognition (Something-Something V2 style) ────────────────
 temporal_action:
@@ -284,7 +278,7 @@ decision:
   # governor") — the defaults are conservative guesses, not measured values:
   governor:
     enabled: true
-    forward_speed_mps: 0.04  # measured robot speed at the FORWARD action (m/s)
+    forward_speed_mps: 0.022  # measured robot speed at the FORWARD action (m/s)
     slow_speed_mps: 0.18       # measured robot speed at the SLOW action (m/s)
     max_decel_mps2: 0.6        # measured hardest deceleration the robot achieves
     target_speed_mps: 0.0      # speed to reach before contact (0 = full stop; >0 = reduce impact)
