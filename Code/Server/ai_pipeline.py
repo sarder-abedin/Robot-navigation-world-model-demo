@@ -113,13 +113,18 @@ class AIPipeline:
         self._thread: threading.Thread | None = None
         self._running = False
 
-        # V-JEPA 2 runs on its OWN thread (its ViT-L/64-frame inference is far too
-        # slow to sit in the drive loop — a single MPS/CPU forward can take seconds,
-        # which would stall CMD_AIMOVE and trip the robot's motor watchdog). The
-        # drive loop reads the most recent result; the worker refreshes it.
+        # The heavy models (V-JEPA 2 + SSv2) run on their OWN thread — their ViT-L /
+        # VideoMAE forwards take up to tens of seconds on MPS, far too slow for the
+        # drive loop (a stall there starves CMD_AIMOVE and trips the robot's motor
+        # watchdog). The worker publishes the latest results; the drive loop reads
+        # whatever is current and never blocks. SSv2 is annotation-only, so a stale
+        # caption is harmless; the drive loop feeds it the latest YOLO object label.
         self._wm_thread: threading.Thread | None = None
         self._wm_lock = threading.Lock()
         self._latest_wm = None            # last WorldModelResult (None until first run)
+        self._latest_ssv2 = None          # last SSv2Result   (None until first run)
+        self._latest_object_label = ""    # newest YOLO closest-object label for SSv2
+        self._prepared = False            # models built + warmed up
 
         # Components (initialised in start())
         self._cam_buf = None
@@ -159,8 +164,56 @@ class AIPipeline:
         self._robot_connection = robot_connection
         self._ext_cam_buf = camera_buffer
 
-    def start(self) -> None:
+    def prepare(self) -> None:
+        """Build AND warm up every model before the pipeline drives.
+
+        Call this before opening the robot/UI listeners: model loading + the first
+        (cold) inference of each model take tens of seconds on MPS, and paying that
+        here means the robot never connects to a server whose first real frames
+        would each block for seconds. Idempotent.
+        """
+        if self._prepared:
+            return
         self._build_components()
+        self._warmup()
+        self._prepared = True
+
+    def _warmup(self) -> None:
+        """Run one dummy inference per model so the costly first-call compile /
+        graph build happens now (during startup) instead of on the first live
+        frame. Best-effort — a warmup failure must never block startup."""
+        dummy = np.zeros((240, 320, 3), dtype=np.uint8)
+        t0 = time.monotonic()
+        try:
+            if self._detector is not None:
+                self._detector.detect(cv2.cvtColor(dummy, cv2.COLOR_RGB2BGR))
+        except Exception as exc:
+            logger.debug("YOLO warmup skipped: %s", exc)
+        # A clip long enough for either heavy model (V-JEPA 2 needs camera.clip_length
+        # frames; SSv2 samples 16 from it).
+        clip_len = int((self._cfg.get("camera", {}) or {}).get("clip_length", 64))
+        clip = [dummy] * max(clip_len, 16)
+        try:
+            if self._world_model is not None:
+                self._world_model.predict(clip)
+        except Exception as exc:
+            logger.debug("V-JEPA 2 warmup skipped: %s", exc)
+        try:
+            if self._ssv2 is not None:
+                self._ssv2.recognize(clip, "")
+        except Exception as exc:
+            logger.debug("SSv2 warmup skipped: %s", exc)
+        try:
+            if self._depth is not None:
+                self._depth.estimate(dummy)
+        except Exception as exc:
+            logger.debug("Depth warmup skipped: %s", exc)
+        logger.info("Model warmup complete (%.1fs) – first live frame will be fast",
+                    time.monotonic() - t0)
+
+    def start(self) -> None:
+        if not self._prepared:
+            self.prepare()
         self._running = True
         with self._state_lock:
             self._state.running = True
@@ -168,10 +221,10 @@ class AIPipeline:
             target=self._run_loop, daemon=True, name="AIPipeline"
         )
         self._thread.start()
-        # Background V-JEPA 2 worker — keeps the heavy world-model inference off the
-        # drive loop so it never blocks CMD_AIMOVE.
+        # Background worker — keeps the heavy V-JEPA 2 + SSv2 inference off the drive
+        # loop so neither ever blocks CMD_AIMOVE.
         self._wm_thread = threading.Thread(
-            target=self._wm_loop, daemon=True, name="WorldModel"
+            target=self._wm_loop, daemon=True, name="Perception"
         )
         self._wm_thread.start()
         logger.info("AI pipeline started (mode=%s)", self._nav_mode)
@@ -279,35 +332,40 @@ class AIPipeline:
     # ── Main loop ─────────────────────────────────────────────────────────────
 
     def _wm_loop(self) -> None:
-        """Refresh the V-JEPA 2 result off the drive loop.
+        """Refresh the heavy V-JEPA 2 + SSv2 results off the drive loop.
 
-        The world model's inference (ViT-L over a 64-frame clip) is slow — seconds
-        per forward on MPS/CPU. Running it here, on its own thread, means the drive
-        loop never waits on it: it publishes the latest WorldModelResult and the
-        drive loop reads whatever is current. A few-hundred-ms-stale predictive risk
-        is fine; a frozen robot (watchdog STOP because CMD_AIMOVE stalled behind a
-        blocking forward) is not. Note: a native MPS segfault still takes the whole
-        process down — decoupling only removes the *blocking*, not a hard crash.
+        Both forwards (ViT-L over a 64-frame clip; VideoMAE over 16) take up to tens
+        of seconds on MPS/CPU. Running them here, on one worker thread (serially, so
+        we never open a second concurrent accelerator stream), means the drive loop
+        never waits: it reads the latest published results and always keeps sending
+        CMD_AIMOVE. A slightly-stale predictive risk / caption is fine; a frozen
+        robot (watchdog STOP because CMD_AIMOVE stalled behind a blocking forward) is
+        not. Note: a native MPS segfault still takes the whole process down —
+        decoupling removes the *blocking*, not a hard crash.
         """
         while self._running:
-            if self._world_model is None:
-                time.sleep(0.05)
-                continue
             clip = self._cam_buf.get_clip() if self._cam_buf else None
             if not clip:
                 time.sleep(0.05)
                 continue
-            try:
-                result = self._world_model.predict(clip)
-            except Exception as exc:
-                logger.exception("V-JEPA 2 worker error (continuing): %s", exc)
-                time.sleep(0.1)
-                continue
-            if getattr(result, "buffer_ready", False):
-                with self._wm_lock:
-                    self._latest_wm = result
-            # Yield so back-to-back forwards don't peg the accelerator; predict()
-            # self-throttles via run_every_n_frames, this just avoids a busy spin.
+            if self._world_model is not None:
+                try:
+                    result = self._world_model.predict(clip)
+                    if getattr(result, "buffer_ready", False):
+                        with self._wm_lock:
+                            self._latest_wm = result
+                except Exception as exc:
+                    logger.exception("V-JEPA 2 worker error (continuing): %s", exc)
+            if self._ssv2 is not None:
+                try:
+                    ssv2_res = self._ssv2.recognize(clip, self._latest_object_label)
+                    if getattr(ssv2_res, "buffer_ready", False):
+                        with self._wm_lock:
+                            self._latest_ssv2 = ssv2_res
+                except Exception as exc:
+                    logger.exception("SSv2 worker error (continuing): %s", exc)
+            # Yield so back-to-back forwards don't peg the accelerator; predict() /
+            # recognize() self-throttle via run_every_n_frames, this avoids a spin.
             time.sleep(0.02)
 
     def _run_loop(self) -> None:
@@ -394,9 +452,9 @@ class AIPipeline:
             # loop and starve CMD_AIMOVE (robot watchdog-STOPs). Until the first
             # result lands, fall back to the detector's instantaneous risk.
             _t = time.monotonic()
-            clip = self._cam_buf.get_clip()          # still needed by SSv2 below
             with self._wm_lock:
                 wm_result = self._latest_wm
+                ssv2_result = self._latest_ssv2
             if wm_result is None:
                 from world_model import WorldModelResult
                 wm_result = WorldModelResult(buffer_ready=False,
@@ -440,16 +498,21 @@ class AIPipeline:
             lat["temporal"] = (time.monotonic() - _t) * 1000.0
 
             # ── 4b. Genuine SSv2 action recognition (annotation/log only) ─────
-            # The "something" slot is filled with the CLOSEST/largest obstacle's
-            # YOLO class (not just the first detected box). Does NOT affect nav.
+            # Runs on the background worker (it's too slow for the drive loop); here
+            # we just publish the newest object label for it and read its latest
+            # caption. The "something" slot is filled with the CLOSEST/largest
+            # obstacle's YOLO class. Does NOT affect navigation.
             object_label = getattr(det_result, "closest_label", "") or (
                 det_result.labels[0] if det_result.labels else ""
             )
-            _t = time.monotonic()
-            ssv2_result = self._ssv2.recognize(clip or [], object_label)
-            lat["ssv2"] = (time.monotonic() - _t) * 1000.0
-            ssv2_sentence = ssv2_result.sentence if ssv2_result.buffer_ready else ""
-            ssv2_conf = ssv2_result.confidence if ssv2_result.buffer_ready else 0.0
+            self._latest_object_label = object_label
+            lat["ssv2"] = 0.0    # inference is off-loop now (see _wm_loop)
+            if ssv2_result is not None and getattr(ssv2_result, "buffer_ready", False):
+                ssv2_sentence = ssv2_result.sentence
+                ssv2_conf = ssv2_result.confidence
+            else:
+                ssv2_sentence = ""
+                ssv2_conf = 0.0
 
             # ── 5. Ultrasonic guard (hard safety) ─────────────────────────────
             sonic_risk = self._robot.get_ultrasonic_risk()
@@ -616,10 +679,12 @@ class AIPipeline:
                 self._state.ssv2_confidence = ssv2_conf
 
             # ── 12. Update the reaction-time estimate (governor input) ────────
-            # EMA of the wall-clock time this frame took; the speed governor uses
-            # it as the AI's reaction latency. Biased toward recent frames so a
-            # heavy V-JEPA 2 tick raises it (→ more cautious speed) quickly.
-            proc_dt = time.monotonic() - proc_t0
+            # EMA of the wall-clock time this frame took; the speed governor uses it
+            # as the AI's reaction latency. The heavy models are off-loop now, so a
+            # frame is fast; cap the sample so a rare one-off stall (a GC pause, a
+            # cold op) can't balloon the EMA and wedge the governor into a long STOP
+            # (as a 44 s SSv2 tick once pushed t_react to ~18 s).
+            proc_dt = min(time.monotonic() - proc_t0, 0.5)
             self._reaction_ema = 0.4 * proc_dt + 0.6 * self._reaction_ema
 
     # ── Component construction ────────────────────────────────────────────────
