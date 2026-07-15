@@ -113,6 +113,14 @@ class AIPipeline:
         self._thread: threading.Thread | None = None
         self._running = False
 
+        # V-JEPA 2 runs on its OWN thread (its ViT-L/64-frame inference is far too
+        # slow to sit in the drive loop — a single MPS/CPU forward can take seconds,
+        # which would stall CMD_AIMOVE and trip the robot's motor watchdog). The
+        # drive loop reads the most recent result; the worker refreshes it.
+        self._wm_thread: threading.Thread | None = None
+        self._wm_lock = threading.Lock()
+        self._latest_wm = None            # last WorldModelResult (None until first run)
+
         # Components (initialised in start())
         self._cam_buf = None
         self._detector = None
@@ -160,6 +168,12 @@ class AIPipeline:
             target=self._run_loop, daemon=True, name="AIPipeline"
         )
         self._thread.start()
+        # Background V-JEPA 2 worker — keeps the heavy world-model inference off the
+        # drive loop so it never blocks CMD_AIMOVE.
+        self._wm_thread = threading.Thread(
+            target=self._wm_loop, daemon=True, name="WorldModel"
+        )
+        self._wm_thread.start()
         logger.info("AI pipeline started (mode=%s)", self._nav_mode)
 
     def stop(self) -> None:
@@ -176,6 +190,9 @@ class AIPipeline:
             self._visualizer.close()
         if self._thread:
             self._thread.join(timeout=3.0)
+        if self._wm_thread:
+            # A V-JEPA 2 forward can be mid-flight; don't block shutdown on it.
+            self._wm_thread.join(timeout=3.0)
         logger.info("AI pipeline stopped")
 
     # ── Runtime controls ──────────────────────────────────────────────────────
@@ -261,6 +278,38 @@ class AIPipeline:
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
+    def _wm_loop(self) -> None:
+        """Refresh the V-JEPA 2 result off the drive loop.
+
+        The world model's inference (ViT-L over a 64-frame clip) is slow — seconds
+        per forward on MPS/CPU. Running it here, on its own thread, means the drive
+        loop never waits on it: it publishes the latest WorldModelResult and the
+        drive loop reads whatever is current. A few-hundred-ms-stale predictive risk
+        is fine; a frozen robot (watchdog STOP because CMD_AIMOVE stalled behind a
+        blocking forward) is not. Note: a native MPS segfault still takes the whole
+        process down — decoupling only removes the *blocking*, not a hard crash.
+        """
+        while self._running:
+            if self._world_model is None:
+                time.sleep(0.05)
+                continue
+            clip = self._cam_buf.get_clip() if self._cam_buf else None
+            if not clip:
+                time.sleep(0.05)
+                continue
+            try:
+                result = self._world_model.predict(clip)
+            except Exception as exc:
+                logger.exception("V-JEPA 2 worker error (continuing): %s", exc)
+                time.sleep(0.1)
+                continue
+            if getattr(result, "buffer_ready", False):
+                with self._wm_lock:
+                    self._latest_wm = result
+            # Yield so back-to-back forwards don't peg the accelerator; predict()
+            # self-throttles via run_every_n_frames, this just avoids a busy spin.
+            time.sleep(0.02)
+
     def _run_loop(self) -> None:
         frame_idx = 0
         last_seq = -1
@@ -340,11 +389,15 @@ class AIPipeline:
             lat["yolo"] = (time.monotonic() - _t) * 1000.0
 
             # ── 3. V-JEPA 2 world model prediction ───────────────────────────
+            # Read the latest result the background worker (_wm_loop) has published
+            # — never run the heavy forward inline here, or it would stall the drive
+            # loop and starve CMD_AIMOVE (robot watchdog-STOPs). Until the first
+            # result lands, fall back to the detector's instantaneous risk.
             _t = time.monotonic()
-            clip = self._cam_buf.get_clip()
-            if clip:
-                wm_result = self._world_model.predict(clip)
-            else:
+            clip = self._cam_buf.get_clip()          # still needed by SSv2 below
+            with self._wm_lock:
+                wm_result = self._latest_wm
+            if wm_result is None:
                 from world_model import WorldModelResult
                 wm_result = WorldModelResult(buffer_ready=False,
                                              predicted_risk=det_result.raw_risk)
