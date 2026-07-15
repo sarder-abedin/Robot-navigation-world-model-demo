@@ -265,6 +265,8 @@ class AIPipeline:
         frame_idx = 0
         last_seq = -1
         no_frame_ticks = 0
+        last_new_frame_t = time.monotonic()   # when the seq last advanced
+        stale_warned = False
         while self._running:
             # ── 1. Grab latest frame (only if it's a NEW one) ─────────────────
             latest = self._cam_buf.get_latest()
@@ -284,8 +286,25 @@ class AIPipeline:
             if seq == last_seq:
                 # No new frame yet — don't reprocess the same one at thousands of
                 # fps (that floods CMD_AIMOVE/CMD_AISTATUS and starves the UI).
+                # A frame in the buffer that never advances is a *stalled* stream
+                # (video channel up, frames stopped): the loop would otherwise spin
+                # here silently, sending no CMD_AIMOVE, so the robot's watchdog
+                # keeps STOPping it. Warn so this is visible (distinct from the
+                # empty-buffer case above).
+                if not stale_warned and time.monotonic() - last_new_frame_t > 3.0:
+                    logger.warning(
+                        "AI pipeline: camera frame is stale – no NEW frame for %.1fs "
+                        "(stream connected but not updating). Robot will watchdog-STOP; "
+                        "check the robot camera / video link (port 8004).",
+                        time.monotonic() - last_new_frame_t,
+                    )
+                    stale_warned = True
                 time.sleep(0.005)
                 continue
+            if stale_warned:
+                logger.info("AI pipeline: camera frames resumed.")
+                stale_warned = False
+            last_new_frame_t = time.monotonic()
             # Frames that arrived while we were busy on the previous one are skipped
             # (we only ever process the latest) — count them as network/compute drops.
             if last_seq >= 0 and seq > last_seq + 1:
