@@ -50,9 +50,17 @@ robot:
   # Tune live without rebuilding: docker run ... -e SPEED_FULL=1700 -e SPEED_SLOW=1000
   speed_full: 1600
   speed_slow: 1000
-  # Ramp PWM on big jumps so the motor inrush current doesn't brown out the Pi
-  # (symptom: the Pi drops off the network the instant it starts to drive).
+  # Ramp accelerating PWM changes so the motor inrush current doesn't brown out
+  # the Pi (symptom: the Pi drops off the network / Wi-Fi the instant it starts
+  # to drive). A slowdown or STOP always applies instantly.
   soft_start: true
+  # Max per-increment PWM jump (fraction of full scale) before soft-start splits
+  # it into steps. This MUST be below your drive fraction (speed_full / 4095) or
+  # soft-start never engages. e.g. speed_full 1600 → 0.39, so 0.08 ramps every
+  # start. Lower = gentler inrush (more brownout headroom) but slightly slower to
+  # reach speed; raise toward the drive fraction if starts feel sluggish.
+  soft_start_ramp_step: 0.08
+  soft_start_ramp_pause: 0.03   # seconds between ramp increments
   # Motor watchdog (failsafe): if no command arrives from the PC for this many
   # seconds — a pipeline/server stall, a stalled video stream, or a silently
   # half-open TCP link — the last drive command would otherwise keep the motors

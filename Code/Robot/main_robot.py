@@ -202,9 +202,12 @@ def main() -> None:
         sonic_cfg = cfg.get("ultrasonic", {})
 
         try:
+            _rc = cfg.get("robot", {})
             motor = tankMotor(
                 gpiochip=gpio_chip,
-                soft_start=cfg.get("robot", {}).get("soft_start", True),
+                soft_start=_rc.get("soft_start", True),
+                ramp_step=float(_rc.get("soft_start_ramp_step", 0.08)),
+                ramp_pause=float(_rc.get("soft_start_ramp_pause", 0.03)),
             )
         except Exception as exc:
             logger.warning(

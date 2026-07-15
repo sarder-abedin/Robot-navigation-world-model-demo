@@ -13,6 +13,7 @@ Positive → forward, negative → reverse.  Zero → coast stop.
 from __future__ import annotations
 
 import logging
+import math
 import time
 
 logger = logging.getLogger(__name__)
@@ -26,23 +27,26 @@ def _duty_to_fraction(value: int) -> float:
 
 class tankMotor:
     def __init__(self, gpiochip: int = 0, soft_start: bool = True,
-                 ramp_step: float = 0.35, ramp_pause: float = 0.02) -> None:
+                 ramp_step: float = 0.08, ramp_pause: float = 0.03) -> None:
         from gpiozero import Motor
         from gpiozero.pins.lgpio import LGPIOFactory
         factory = LGPIOFactory(chip=gpiochip)
         self._left = Motor(forward=24, backward=23, pin_factory=factory)
         self._right = Motor(forward=5, backward=6, pin_factory=factory)
-        # Soft-start: ramp big PWM jumps over a few steps so the motor inrush
-        # current doesn't spike and brown out the Pi (which shows up as the Pi
-        # dropping off the network the moment it starts to drive). A jump larger
-        # than ramp_step (fraction of full scale) is split into 4 steps ~ramp_pause
-        # apart; steady/small changes apply instantly.
+        # Soft-start: ramp an ACCELERATING PWM change into small increments so the
+        # motor inrush current doesn't spike and brown out the Pi (symptom: the Pi
+        # drops off the network the instant it starts to drive). ramp_step is the
+        # max per-increment jump (fraction of full scale); it MUST be below the
+        # drive fraction (e.g. speed_full/4095) or soft-start never engages — the
+        # old default 0.35 was above a ~0.27 crawl, so a hard 0→drive step slipped
+        # through. A slowdown/STOP always applies instantly (never delay a stop).
         self._soft_start = soft_start
-        self._ramp_step = ramp_step
-        self._ramp_pause = ramp_pause
+        self._ramp_step = max(0.02, float(ramp_step))
+        self._ramp_pause = max(0.0, float(ramp_pause))
         self._last_l = 0.0   # last signed fraction applied
         self._last_r = 0.0
-        logger.info("tankMotor initialised (gpiochip%d, soft_start=%s)", gpiochip, soft_start)
+        logger.info("tankMotor initialised (gpiochip%d, soft_start=%s, ramp_step=%.2f, "
+                    "ramp_pause=%.3fs)", gpiochip, soft_start, self._ramp_step, self._ramp_pause)
 
     @staticmethod
     def _signed_fraction(value: int) -> float:
@@ -62,12 +66,18 @@ class tankMotor:
         tl = self._signed_fraction(left)
         tr = self._signed_fraction(right)
         biggest_jump = max(abs(tl - self._last_l), abs(tr - self._last_r))
-        if self._soft_start and biggest_jump > self._ramp_step:
-            steps = 4
+        target_mag = max(abs(tl), abs(tr))
+        last_mag = max(abs(self._last_l), abs(self._last_r))
+        # Ramp only when spinning UP or reversing (target magnitude ≥ current) — a
+        # slowdown or STOP applies instantly so an emergency stop is never delayed.
+        # Steps scale with the jump so each increment stays ≈ ramp_step (peak inrush
+        # is set by the first, smallest increment), capped so the ramp adds ≤ ~0.15s.
+        if self._soft_start and target_mag >= last_mag and biggest_jump > self._ramp_step:
+            steps = max(2, min(6, math.ceil(biggest_jump / self._ramp_step)))
             for i in range(1, steps + 1):
                 self._apply_signed(self._left, self._last_l + (tl - self._last_l) * i / steps)
                 self._apply_signed(self._right, self._last_r + (tr - self._last_r) * i / steps)
-                if i < steps:
+                if i < steps and self._ramp_pause > 0:
                     time.sleep(self._ramp_pause)
         else:
             self._apply_signed(self._left, tl)

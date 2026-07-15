@@ -59,9 +59,22 @@ def test_soft_start_ramps_big_jump(motor_mod):
     m._left.calls.clear()
     m.setMotorModel(3000, 3000)          # stop → full: big jump
     steps = [c[1] for c in m._left.calls]
-    assert len(steps) == 4               # ramped in 4 steps
+    assert len(steps) == 6               # ramped in up to 6 scaled steps
     assert steps == sorted(steps)        # monotonically increasing
     assert steps[-1] > 0.7               # reaches ~full
+
+
+def test_crawl_start_ramps(motor_mod):
+    # The real-world bug: a crawl-speed start (0→~0.27) is below the OLD 0.35
+    # threshold, so soft-start used to be skipped → a hard step → inrush brownout.
+    # With ramp_step 0.08 it must now ramp.
+    m = motor_mod.tankMotor(gpiochip=0, ramp_pause=0.0)
+    m._left.calls.clear()
+    m.setMotorModel(1100, 1100)          # 1100/4095 ≈ 0.27, a typical FORWARD
+    steps = [c[1] for c in m._left.calls]
+    assert len(steps) >= 3               # ramped, not a single hard step
+    assert steps == sorted(steps)
+    assert abs(steps[-1] - 1100 / 4095) < 2e-3   # ends at target (fake rounds to 3dp)
 
 
 def test_steady_and_small_changes_apply_instantly(motor_mod):
@@ -75,12 +88,28 @@ def test_steady_and_small_changes_apply_instantly(motor_mod):
     assert len(m._left.calls) == 1
 
 
+def test_stop_from_speed_is_instant(motor_mod):
+    # A STOP (or any slowdown) must apply in ONE step — never ramp down, or an
+    # emergency stop would be delayed.
+    m = motor_mod.tankMotor(gpiochip=0, ramp_pause=0.0)
+    m.setMotorModel(3000, 3000)          # up to speed (ramped)
+    m._left.calls.clear()
+    m.setMotorModel(0, 0)                # STOP
+    assert len(m._left.calls) == 1
+    assert m._left.calls[-1][0] == "s"
+    m._left.calls.clear()
+    m.setMotorModel(3000, 3000)          # back up to speed
+    m._left.calls.clear()
+    m.setMotorModel(1000, 1000)          # slow down → instant, no ramp
+    assert len(m._left.calls) == 1
+
+
 def test_forward_to_reverse_ramps(motor_mod):
     m = motor_mod.tankMotor(gpiochip=0, ramp_pause=0.0)
     m.setMotorModel(3000, 3000)
     m._left.calls.clear()
     m.setMotorModel(-3000, -3000)        # full swing → ramp, ends in reverse
-    assert len(m._left.calls) == 4
+    assert len(m._left.calls) == 6
     assert m._left.calls[-1][0] == "b"
 
 

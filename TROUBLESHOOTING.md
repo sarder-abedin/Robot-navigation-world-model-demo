@@ -93,6 +93,19 @@ a little if the robot doesn't start moving, lower it if it's still too fast. A
 soft-start ramp (`robot.soft_start`) blunts the current spike so the Pi doesn't
 brown out on drive.
 
+**If the Pi drops off the network the instant it starts to drive** (the camera
+stream and `CMD_SONIC` both stop, the PC logs `camera frame is stale` then a cmd
+socket timeout, and the robot doesn't reconnect): that's an **inrush brownout /
+Wi-Fi glitch** from the motors switching on hard — and it happens *even with a
+freshly-charged battery*, because it's about peak current draw (di/dt), not charge.
+The soft-start must actually engage: its `soft_start_ramp_step` (default `0.08`)
+has to be **below your drive fraction** `speed_full / 4095` or the ramp is skipped
+and the motor gets a hard `0 → drive` step. (An earlier default of `0.35` was
+*above* a ~0.27 crawl, so soft-start never ran.) If it still browns out, lower
+`soft_start_ramp_step` and/or raise `soft_start_ramp_pause` for a gentler ramp,
+lower `speed_full`, and check the Pi's 5 V power path and the motor-wire routing
+(motor EMI near the Wi-Fi antenna / camera ribbon can also drop the link).
+
 ### Compose forwards env vars only if they're declared
 
 With `docker compose`, an inline var like `SPEED_FULL=1500` reaches the container
