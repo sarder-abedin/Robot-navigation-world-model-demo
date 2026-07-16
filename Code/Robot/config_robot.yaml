@@ -69,6 +69,16 @@ robot:
   command_watchdog_seconds: 1.5
   reroute_turn_seconds: 1.2
 
+# ── Network / auto-recovery ───────────────────────────────────────────────────
+network:
+  # TCP send/recv timeout (seconds). If the Wi-Fi drops mid-drive (e.g. motor EMI
+  # knocks the Pi off the AP), a blocking send/recv would otherwise hang 15-60 s
+  # before the robot noticed. With this timeout a stuck send raises within a few
+  # seconds → the robot stops the motors and auto-reconnects as soon as the network
+  # is back, turning a dead run into a brief stutter. Keep it well above the normal
+  # per-frame send time (<1 ms) so a healthy (even lossy) link never trips it.
+  io_timeout_seconds: 4.0
+
 # ── Ultrasonic sensor ─────────────────────────────────────────────────────────
 ultrasonic:
   trigger_pin: 27
