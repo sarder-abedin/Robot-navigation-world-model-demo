@@ -1,5 +1,7 @@
 # Tank Robot – Predictive Indoor Navigation
-
+<p align="center">
+  <img src="assets/tank.png" alt="Robotank" width="200">
+</p>
 A predictive indoor navigation system for the **Freenove Tank Robot Kit for
 Raspberry Pi (FNK0077)** that uses **V-JEPA 2** as a world model to anticipate
 future obstacles — not just react to what is currently visible.
