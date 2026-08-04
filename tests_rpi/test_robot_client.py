@@ -244,3 +244,35 @@ class TestRobotTCPClientRecv:
         client.disconnect()
         cmd_srv.close()
         vid_srv.close()
+
+
+class TestTimeoutValidation:
+    """The socket timeouts are validated/clamped in the constructor so a bad
+    config warns and falls back instead of crashing the thin client on boot, and
+    the command vs video sockets use SEPARATE timeouts."""
+
+    def test_defaults(self):
+        from tcp_robot_client import RobotTCPClient
+        c = RobotTCPClient("127.0.0.1")
+        assert c._io_timeout == 4.0
+        assert c._video_timeout == 20.0          # video is much longer than command
+        assert c._video_timeout > c._io_timeout
+
+    def test_non_numeric_config_falls_back_not_crash(self):
+        # A malformed value (e.g. YAML string "4s") must NOT raise — it falls back.
+        from tcp_robot_client import RobotTCPClient
+        c = RobotTCPClient("127.0.0.1", io_timeout="4s", video_timeout=None)
+        assert c._io_timeout == 4.0
+        assert c._video_timeout == 20.0
+
+    def test_below_floor_is_clamped(self):
+        from tcp_robot_client import RobotTCPClient
+        c = RobotTCPClient("127.0.0.1", io_timeout=0.5, video_timeout=0.2)
+        assert c._io_timeout == 1.0
+        assert c._video_timeout == 1.0
+
+    def test_valid_values_pass_through(self):
+        from tcp_robot_client import RobotTCPClient
+        c = RobotTCPClient("127.0.0.1", io_timeout=3, video_timeout=30.0)
+        assert c._io_timeout == 3.0
+        assert c._video_timeout == 30.0

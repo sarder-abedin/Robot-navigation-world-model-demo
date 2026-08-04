@@ -238,9 +238,12 @@ def main() -> None:
     # ── TCP connection ───────────────────────────────────────────────────────
     from tcp_robot_client import RobotTCPClient
     _net_cfg = cfg.get("network", {}) or {}
+    # Pass the raw config values; RobotTCPClient validates/clamps them (a bad value
+    # warns and falls back to the default rather than crashing the client on boot).
     client = RobotTCPClient(
         server_ip, cmd_port, video_port,
-        io_timeout=float(_net_cfg.get("io_timeout_seconds", 4.0)),
+        io_timeout=_net_cfg.get("io_timeout_seconds", 4.0),
+        video_timeout=_net_cfg.get("video_timeout_seconds", 20.0),
     )
 
     # Motor / command parameters (read once; threads and the command loop below
