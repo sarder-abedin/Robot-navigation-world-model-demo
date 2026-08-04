@@ -3,6 +3,7 @@ Tests for the Raspberry Pi decision fusion module.
 Runs without GPU or hardware.  Imports from Code/Server.
 """
 
+import copy
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "Code", "Server"))
 
@@ -16,6 +17,20 @@ def cfg():
     path = os.path.join(os.path.dirname(__file__), "..", "Code", "Server", "config.yaml")
     with open(path) as f:
         return yaml.safe_load(f)
+
+
+def _governor_cfg(cfg, forward=0.35, slow=0.18, decel=0.6):
+    """A cfg copy with KNOWN governor speeds. The distance-based governor tests
+    assert the LOGIC (which distance → FORWARD/SLOW/STOP), so they must NOT depend
+    on whatever config.yaml happens to be calibrated to — a very-slow calibrated
+    forward_speed (e.g. 0.04 m/s) makes short distances trivially safe and breaks
+    the assertions. These defaults reproduce a normal-speed robot."""
+    cfg = copy.deepcopy(cfg)
+    g = cfg.setdefault("decision", {}).setdefault("governor", {})
+    g.update(enabled=True, forward_speed_mps=forward, slow_speed_mps=slow,
+             max_decel_mps2=decel, target_speed_mps=0.0, safety_margin_m=0.10,
+             min_reaction_s=0.2, max_reaction_s=3.0)
+    return cfg
 
 
 def test_low_risk_forward(cfg):
@@ -133,21 +148,21 @@ def test_high_risk_triggers_active_avoidance(cfg):
 def test_governor_caps_forward_to_slow_when_close(cfg):
     """Vision is clear (would be FORWARD) but the confirmed-clear distance only
     allows a safe SLOW → the governor downgrades to SLOW."""
-    f = DecisionFuser(cfg, "predictive")
+    f = DecisionFuser(_governor_cfg(cfg), "predictive")
     r = f.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR",
                  clear_distance_m=0.5, reaction_s=1.0)
     assert r.action == Action.SLOW
 
 
 def test_governor_caps_to_stop_when_too_close(cfg):
-    f = DecisionFuser(cfg, "predictive")
+    f = DecisionFuser(_governor_cfg(cfg), "predictive")
     r = f.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR",
                  clear_distance_m=0.2, reaction_s=1.0)
     assert r.action == Action.STOP
 
 
 def test_governor_allows_forward_with_room(cfg):
-    f = DecisionFuser(cfg, "predictive")
+    f = DecisionFuser(_governor_cfg(cfg), "predictive")
     r = f.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR",
                  clear_distance_m=3.0, reaction_s=1.0)
     assert r.action == Action.FORWARD
@@ -196,10 +211,11 @@ def test_reroute_direction_blank_when_depth_unknown(cfg):
 
 def test_governor_latency_forces_earlier_slowing(cfg):
     """Same distance, but a laggier pipeline (bigger reaction_s) is more cautious."""
-    f_fast = DecisionFuser(cfg, "predictive")
+    gcfg = _governor_cfg(cfg)
+    f_fast = DecisionFuser(gcfg, "predictive")
     fast = f_fast.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR",
                          clear_distance_m=0.6, reaction_s=0.2)
-    f_slow = DecisionFuser(cfg, "predictive")
+    f_slow = DecisionFuser(gcfg, "predictive")
     slow = f_slow.decide(0.0, 0.0, 0.0, "CLEAR", "STATIC_CLEAR",
                          clear_distance_m=0.6, reaction_s=2.0)
     order = {Action.FORWARD: 0, Action.SLOW: 1, Action.STOP: 2}
