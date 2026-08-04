@@ -71,13 +71,19 @@ robot:
 
 # ── Network / auto-recovery ───────────────────────────────────────────────────
 network:
-  # TCP send/recv timeout (seconds). If the Wi-Fi drops mid-drive (e.g. motor EMI
-  # knocks the Pi off the AP), a blocking send/recv would otherwise hang 15-60 s
-  # before the robot noticed. With this timeout a stuck send raises within a few
-  # seconds → the robot stops the motors and auto-reconnects as soon as the network
-  # is back, turning a dead run into a brief stutter. Keep it well above the normal
-  # per-frame send time (<1 ms) so a healthy (even lossy) link never trips it.
+  # Command-socket send/recv timeout (seconds). This is the DEAD-LINK detector: if
+  # the Wi-Fi drops mid-drive (e.g. motor EMI knocks the Pi off the AP), the small
+  # CMD_SONIC send (~every 0.1 s) raises within this window → the robot stops the
+  # motors and auto-reconnects as soon as the network is back, turning a dead run
+  # into a brief stutter. Command messages are tiny, so a short value can't
+  # false-trip on backpressure. Below 1.0 s is clamped to 1.0 s (with a warning).
   io_timeout_seconds: 4.0
+  # Video-socket send timeout (seconds). Bulk JPEG frames can legitimately block
+  # for seconds when the PC is momentarily behind (e.g. still loading models — the
+  # UI budgets ~15 s for warmup), so this is kept MUCH longer than io_timeout to
+  # avoid a spurious reconnect during warmup/backpressure. Dead-link detection is
+  # the command socket's job; this is only a bounded backstop.
+  video_timeout_seconds: 20.0
 
 # ── Ultrasonic sensor ─────────────────────────────────────────────────────────
 ultrasonic:

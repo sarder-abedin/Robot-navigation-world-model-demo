@@ -25,17 +25,23 @@ class RobotTCPClient:
     """Manages two outbound TCP connections from the robot to the PC server."""
 
     def __init__(self, server_ip: str, cmd_port: int = 5004, video_port: int = 8004,
-                 io_timeout: float = 4.0):
+                 io_timeout: float = 4.0, video_timeout: float = 20.0):
         self._server_ip = server_ip
         self._cmd_port = cmd_port
         self._video_port = video_port
-        # Socket send/recv timeout. On a dead link (Wi-Fi dropped mid-drive) a
-        # blocking sendall/recv would otherwise hang 15-60 s before erroring, so
-        # the robot can't notice and reconnect. With a timeout, a stuck send/recv
-        # raises within io_timeout → is_connected flips False → the reconnect loop
-        # re-establishes as soon as the network is back. Kept generous so a healthy
-        # (even lossy) link never trips it — a 9 KB frame sends in <1 ms.
-        self._io_timeout = max(1.0, float(io_timeout))
+        # Command socket: tiny CMD_SONIC messages (~every 0.1 s) + inbound commands.
+        # A short timeout detects a dead link (Wi-Fi dropped mid-drive) within a few
+        # seconds → is_connected flips False → the reconnect loop re-establishes as
+        # soon as the network is back. Tiny messages never fill the send buffer, so a
+        # short timeout can't false-trip on backpressure.
+        self._io_timeout = self._clamp_timeout(io_timeout, 4.0, "io_timeout_seconds")
+        # Video socket: bulk JPEG frames. Its send CAN legitimately block for seconds
+        # when the PC receiver is momentarily behind — e.g. the server is still loading
+        # models (the UI budgets ~15 s for warmup) — so it gets a much LONGER timeout
+        # to ride out that backpressure without a spurious reconnect. Dead-link
+        # detection is handled by the command socket above; this is only a bounded
+        # backstop so a truly dead video link can't hang the camera thread forever.
+        self._video_timeout = self._clamp_timeout(video_timeout, 20.0, "video_timeout_seconds")
 
         self._cmd_sock: socket.socket | None = None
         self._video_sock: socket.socket | None = None
@@ -46,6 +52,21 @@ class RobotTCPClient:
         self._video_lock = threading.Lock()
         self._cmd_queue: queue.Queue[str] = queue.Queue()
         self._recv_thread: threading.Thread | None = None
+
+    @staticmethod
+    def _clamp_timeout(value, default: float, name: str) -> float:
+        """Parse a socket-timeout config value; fall back to default on garbage and
+        warn (instead of crashing) so a malformed config never aborts the client;
+        clamp below the 1 s floor WITH a warning so a silent override is visible."""
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            logger.warning("Invalid %s=%r – using %.1fs", name, value, default)
+            return default
+        if v < 1.0:
+            logger.warning("%s=%.2fs is below the 1.0s floor – clamping to 1.0s", name, v)
+            return 1.0
+        return v
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -62,7 +83,7 @@ class RobotTCPClient:
             self._video_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._video_sock.settimeout(timeout)
             self._video_sock.connect((self._server_ip, self._video_port))
-            self._video_sock.settimeout(self._io_timeout)   # fast dead-link detection
+            self._video_sock.settimeout(self._video_timeout)   # tolerate warmup backpressure
             self._enable_keepalive(self._video_sock)
             logger.info("Connected to PC server video port %d", self._video_port)
 
@@ -189,13 +210,19 @@ class RobotTCPClient:
 
     def _recv_loop(self) -> None:
         """Receive motor commands from PC on the command socket."""
+        # Bind to THIS connection's socket. If a reconnect swaps self._cmd_sock, a
+        # stale recv thread must NOT flip is_connected on the NEW connection — so
+        # guard every state write with `sock is self._cmd_sock` (mirrors the PC-side
+        # robot_connection pattern) instead of touching the shared attribute blindly.
+        sock = self._cmd_sock
         buf = ""
-        while self._running and self._connected and self._cmd_sock:
+        while self._running and self._connected and sock is self._cmd_sock:
             try:
-                data = self._cmd_sock.recv(1024)
+                data = sock.recv(1024)
                 if not data:
-                    logger.warning("PC server disconnected")
-                    self._connected = False
+                    if sock is self._cmd_sock:
+                        logger.warning("PC server disconnected")
+                        self._connected = False
                     break
                 buf += data.decode("utf-8", errors="replace")
                 while "\n" in buf:
@@ -210,7 +237,8 @@ class RobotTCPClient:
                 # (self._connected) exits us within one io_timeout.
                 continue
             except Exception as exc:
-                if self._running:
-                    logger.error("Robot recv error: %s", exc)
-                self._connected = False
+                if sock is self._cmd_sock:
+                    if self._running:
+                        logger.error("Robot recv error: %s", exc)
+                    self._connected = False
                 break
