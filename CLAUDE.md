@@ -113,13 +113,14 @@ PC → UI:  4-byte LE uint32 + JPEG  (annotated HUD frames, port 8003)
   fast heuristic in `temporal_action.py` still supplies `temporal_risk`).
   Falls back to a stub (still fills the object) when transformers/weights are absent.
 - **Device:** V-JEPA 2, SSv2 and depth resolve their `device:` via
-  `device_utils.resolve_device()` (`auto` = CUDA → MPS → CPU; or force
-  `cuda`/`mps`/`cpu`, which degrades gracefully if unavailable). The config ships
-  `device: mps` so an M-series Mac uses the Apple GPU (Metal); selecting MPS also
+  `device_utils.resolve_device()`. The config ships **`device: auto`** = CUDA/ROCm →
+  MPS → CPU (or force `cuda`/`mps`/`cpu`, each degrading gracefully). **AMD ROCm
+  registers as CUDA in PyTorch**, so `auto`/`cuda` uses a Radeon with no code change
+  (see HOW_TO_RUN.md → "AMD GPU (ROCm)"). On a native Mac `auto` picks MPS and also
   sets `PYTORCH_ENABLE_MPS_FALLBACK=1` so ops Metal lacks run on CPU instead of
   crashing. SSv2's `run_every_n_frames` is auto-halved on a GPU. A Docker container
   on macOS has no Metal passthrough, so it runs on CPU (**run the server natively
-  for MPS**); NVIDIA/DGX uses CUDA with `--gpus all`.
+  for MPS**); NVIDIA uses CUDA (`--gpus all`), AMD uses ROCm (`--device=/dev/kfd`).
 - **Run logging is server-side only.** `NavigationLogger` writes CSV + annotated
   frames to the PC's `logs_rpi/`. Initial state: `--logging on|off` flag or
   `NAV_LOGGING=1/0` env; toggled live from the UI (`CMD_LOGGING`).
