@@ -80,10 +80,16 @@ RUN chmod +x /app/start_server.sh
 #     We upgrade pip first to fix it.
 #   • torch 2.8+ bundles CUDA as hard pip deps on arm64 Linux (Mac M-series Docker).
 #     requirements_server.txt caps at <2.8.0 to keep the image CPU-only by default.
-#   • For NVIDIA GPU on Linux, pass TORCH_INDEX to install the CUDA torch separately
-#     BEFORE the requirements file is processed, bypassing the cap:
+#   • For a GPU, pass TORCH_INDEX to install the accelerator torch separately BEFORE
+#     the requirements file is processed, bypassing the cap. config.yaml's
+#     device: auto then picks it up (ROCm registers as CUDA in PyTorch):
+#       # NVIDIA (CUDA) — run with --gpus all:
 #       docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 \
 #                    -f Dockerfile.server -t nav-server-gpu .
+#       # AMD (ROCm) — run with --device=/dev/kfd --device=/dev/dri --group-add video
+#       # (use the wheel index matching your ROCm; see HOW_TO_RUN.md → "AMD GPU (ROCm)"):
+#       docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/rocm6.3 \
+#                    -f Dockerfile.server -t nav-server-rocm .
 #   • opencv-python-headless is force-reinstalled so the AI pipeline never needs
 #     libGL/X11 (server always runs --no-display).
 #   • PyQt5: pre-built wheels exist for amd64 Linux only.

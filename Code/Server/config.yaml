@@ -138,10 +138,11 @@ world_model:
   anchors_path: ""
   prediction_horizon: 4        # future frames to predict
   risk_similarity_threshold: 0.55
-  # Apple Silicon GPU (Metal). "mps" runs V-JEPA 2 on the Mac GPU when the server
-  # is launched NATIVELY on macOS (Docker on a Mac has no Metal passthrough → CPU).
-  # Falls back to CUDA→CPU on other hardware. Use "auto" to prefer CUDA when present.
-  device: "mps"                # auto = CUDA → MPS → CPU; or force "cuda"/"mps"/"cpu"
+  # Compute device (portable). "auto" resolves CUDA → MPS → CPU and picks the best
+  # available: NVIDIA CUDA, AMD ROCm (which registers as CUDA in PyTorch — see the
+  # ROCm section in HOW_TO_RUN.md), or Apple MPS on a native Mac; else CPU. Force a
+  # specific one with "cuda"/"mps"/"cpu" (each degrades gracefully if unavailable).
+  device: "auto"               # auto = CUDA/ROCm → MPS → CPU; or force cuda/mps/cpu
   # Run world-model inference every N frames (expensive on CPU)
   run_every_n_frames: 8
   # Run V-JEPA 2 (+ SSv2) in a SEPARATE process. V-JEPA 2 (ViT-L over a 64-frame
@@ -170,7 +171,7 @@ ssv2:
   enabled: true
   model_id: "MCG-NJU/videomae-base-finetuned-ssv2"
   num_frames: 16
-  device: "mps"                # Apple GPU (Metal) when native on macOS; else CUDA→CPU
+  device: "auto"               # CUDA/ROCm → MPS (native Mac) → CPU (see HOW_TO_RUN.md)
   # SSv2 (VideoMAE) is the heaviest single stage (~100 ms/tick on CPU) and is
   # ANNOTATION/LOG ONLY — it does not drive navigation. Profiling on a live run
   # showed its ticks caused ~31% of camera frames to be dropped (pipeline 20 fps
@@ -193,7 +194,7 @@ ssv2:
 depth:
   enabled: true
   model_id: "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
-  device: "mps"                # Apple GPU (Metal) when native on macOS; else CUDA→CPU
+  device: "auto"               # CUDA/ROCm → MPS (native Mac) → CPU (see HOW_TO_RUN.md)
   run_every_n_frames: 6        # depth is expensive; auto-raised on CPU
   max_range_m: 5.0             # ceiling for depth readings (m)
   near_percentile: 15          # per-region percentile = "nearest obstacle" (robust to noise)

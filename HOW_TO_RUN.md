@@ -38,12 +38,19 @@ pip install -r requirements_server.txt
 **Option 2 — Docker:** no local Python needed; see
 [Option C – Docker](#option-c--docker-recommended-for-reproducibility).
 
+#### Compute device (`device: auto`)
+
+The heavy models (V-JEPA 2 + SSv2) and the depth channel default to `device: "auto"`
+in `Code/Server/config.yaml`, which resolves **CUDA/ROCm → MPS → CPU** and uses the
+best available accelerator — no per-machine edit needed. Force one with
+`"cuda"` / `"mps"` / `"cpu"` (each degrades gracefully if unavailable). On startup the
+log line `V-JEPA 2 loaded: … on <device>` confirms what it picked.
+
 #### Apple Silicon GPU (MPS)
 
-The two heavy models (V-JEPA 2 + SSv2) and the depth channel are configured with
-`device: "mps"` in `Code/Server/config.yaml`, so on an M-series Mac they run on the
-**Apple GPU (Metal)** — lower latency, fewer dropped camera frames, faster STOP, and
-room to run V-JEPA 2 more often for earlier predictive warnings. Requirements:
+On an M-series Mac, `auto` selects the **Apple GPU (Metal / MPS)** — lower latency,
+fewer dropped camera frames, faster STOP, and room to run V-JEPA 2 more often for
+earlier predictive warnings.
 
 - **Run the server NATIVELY (Option 1 venv), not in Docker.** Docker on a Mac has no
   Metal passthrough, so a container always falls back to CPU regardless of `device`.
@@ -51,9 +58,58 @@ room to run V-JEPA 2 more often for earlier predictive warnings. Requirements:
   `torch` (any `torch>=2.1`); nothing extra to install.
 - The server enables `PYTORCH_ENABLE_MPS_FALLBACK=1` automatically when it selects
   MPS, so the handful of ops Metal doesn't implement run on CPU instead of crashing.
-- On startup the log line `V-JEPA 2 loaded: … on mps` confirms it's using the GPU.
-  `device: "mps"` still falls back to CUDA→CPU on non-Mac hardware (with a note in
-  the log); use `device: "auto"` instead if you want CUDA preferred when present.
+- Confirmation line: `V-JEPA 2 loaded: … on mps`.
+
+#### AMD GPU (ROCm)
+
+ROCm's PyTorch registers the AMD GPU **through the CUDA API**, so `device: "auto"`
+(or `"cuda"`) uses it with **no code changes** — `torch.cuda.is_available()` is `True`
+and the models run on the Radeon. Steps (native Linux is the reliable path — not
+macOS/Windows):
+
+1. **Install ROCm** for your card on a supported Linux (Ubuntu 22.04/24.04, etc.). The
+   RX 9060 XT / RDNA 4 needs **ROCm 7.2+**. Add yourself to the GPU groups and reboot:
+   ```bash
+   sudo usermod -aG render,video $USER
+   ```
+2. **Install the ROCm build of PyTorch** (it bundles the ROCm runtime), then the rest
+   of the deps *without* re-installing torch (the `torch<2.8` pin in
+   `requirements_server.txt` only exists to keep the Mac Docker image CPU-only):
+   ```bash
+   python3 -m venv roboenv && source roboenv/bin/activate
+   pip install --index-url https://download.pytorch.org/whl/rocm6.3 torch torchvision
+   pip install transformers accelerate ultralytics opencv-python-headless \
+               numpy pyyaml pillow streamlit matplotlib PyQt5
+   ```
+   (Use the wheel index matching your installed ROCm; a very new RDNA-4 card may need
+   the nightly index.)
+3. **Verify + run:**
+   ```bash
+   python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+   cd Code/Server && python main_server.py --mode live --nav predictive
+   # startup logs: V-JEPA 2 loaded: … on cuda   ← the Radeon via ROCm
+   ```
+4. **Docker** (optional): build with the ROCm wheel index and pass the AMD devices —
+   ```bash
+   docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/rocm6.3 \
+                -f Dockerfile.server -t nav-server-rocm .
+   docker run --rm --device=/dev/kfd --device=/dev/dri --group-add video \
+              --security-opt seccomp=unconfined -p 5003:5003 -p 8003:8003 \
+              -p 5004:5004 -p 8004:8004 -p 8501:8501 nav-server-rocm
+   ```
+   (If the base image lacks ROCm userspace, base it on `rocm/pytorch` instead.)
+
+**Gotchas:** if `torch.cuda.is_available()` is `False`, the card's gfx target may not
+be auto-detected — set `HSA_OVERRIDE_GFX_VERSION=12.0.0` (RDNA 4 = gfx12); with native
+ROCm 7.2 support this is usually unnecessary. The world-model subprocess uses `spawn`,
+which is ROCm/CUDA-safe. ROCm is typically **more stable than MPS** (no Metal segfaults)
+and decouples the AI from the Mac.
+
+#### NVIDIA GPU (CUDA)
+
+On an NVIDIA host, `auto` selects **CUDA**. For Docker, build the CUDA torch variant
+with the `TORCH_INDEX` build-arg and run with `--gpus all` (see
+[Option C – Docker](#option-c--docker-recommended-for-reproducibility)).
 
 #### World model runs in a separate process
 
