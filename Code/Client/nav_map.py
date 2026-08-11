@@ -49,12 +49,14 @@ class MapModel:
 
 
 def _pos_float(s: str):
-    """Parse a float; return None for blanks, non-numbers, or ≤0 sentinels (-1)."""
+    """Parse a float; return None for blanks, non-numbers, non-finite (nan/inf),
+    or ≤0 sentinels (-1). Rejecting inf/nan matters: they reach the QPainter
+    widget as arc angles (int(round(inf)) → OverflowError, round(nan) → ValueError)."""
     try:
         v = float(s)
     except (TypeError, ValueError):
         return None
-    return v if v > 0 else None
+    return v if (math.isfinite(v) and v > 0) else None
 
 
 def parse_status(line: str, max_range_m: float = 5.0, fov_deg: float = 66.0) -> MapModel:
@@ -82,7 +84,8 @@ def parse_status(line: str, max_range_m: float = 5.0, fov_deg: float = 66.0) -> 
         m.depth_right_m = _pos_float(parts[11])
     if len(parts) > 12:
         try:
-            m.goal_bearing_deg = float(parts[12])
+            gb = float(parts[12])
+            m.goal_bearing_deg = gb if math.isfinite(gb) else 0.0
         except (TypeError, ValueError):
             m.goal_bearing_deg = 0.0
     if len(parts) > 13:

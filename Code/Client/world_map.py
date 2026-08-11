@@ -198,27 +198,34 @@ class WorldModel:
 # ── parsing ─────────────────────────────────────────────────────────────────
 
 def _pos_float(s):
+    # Reject non-finite (nan/inf) as well as ≤0: a nan/inf distance projected to a
+    # world point would poison bounds() and crash the map's paintEvent.
     try:
         v = float(s)
     except (TypeError, ValueError):
         return None
-    return v if v > 0 else None
+    return v if (math.isfinite(v) and v > 0) else None
 
 
 def parse_pose(line: str) -> WorldPose | None:
     """Read the trailing pose fields from a CMD_AISTATUS line, or None if the
-    server is too old to send them (backward-compatible)."""
+    server is too old to send them (backward-compatible) or they're non-finite.
+
+    A non-finite pose (nan/inf, from a corrupt/hostile line) is rejected rather
+    than accumulated — otherwise it poisons the accumulated bounds and every
+    subsequent map repaint crashes (math.floor(nan) → ValueError)."""
     parts = line.strip().split("#")
     if not parts or parts[0] != "CMD_AISTATUS" or len(parts) <= _POSE_TH_IDX:
         return None
     try:
-        return WorldPose(
-            x_m=float(parts[_POSE_X_IDX]),
-            y_m=float(parts[_POSE_Y_IDX]),
-            heading_deg=float(parts[_POSE_TH_IDX]),
-        )
+        x = float(parts[_POSE_X_IDX])
+        y = float(parts[_POSE_Y_IDX])
+        th = float(parts[_POSE_TH_IDX])
     except (TypeError, ValueError):
         return None
+    if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(th)):
+        return None
+    return WorldPose(x_m=x, y_m=y, heading_deg=th)
 
 
 def _parse_status_fields(line: str) -> dict:
@@ -271,7 +278,12 @@ def parse_mapobj(line: str) -> list:
             dist = float(fields[2])
         except (TypeError, ValueError):
             continue
-        out.append((label, bearing, dist if dist > 0 else None))
+        # A non-finite bearing would project to a nan/inf world point (crashes the
+        # paintEvent), so skip the object entirely; a non-finite/≤0 dist just means
+        # "unknown" and falls back to the nominal look-ahead.
+        if not math.isfinite(bearing):
+            continue
+        out.append((label, bearing, dist if (math.isfinite(dist) and dist > 0) else None))
     return out
 
 

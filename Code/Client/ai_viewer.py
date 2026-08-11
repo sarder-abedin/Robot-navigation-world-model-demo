@@ -335,20 +335,27 @@ class WorldMapWidget(QWidget):
         p.end()
 
     def _draw_grid(self, p, view, w, h, to_screen):
-        # 1 m grid lines across the current view for a sense of scale.
+        # Grid lines for a sense of scale. Guard against a non-finite or huge span
+        # (a long/drifted run) so we never call math.floor(nan) or spin a loop
+        # drawing millions of lines: skip if non-finite, and widen the spacing so
+        # the count stays bounded (~1 m normally, coarser as the extent grows).
         min_x, min_y, max_x, max_y = view
+        span = max(max_x - min_x, max_y - min_y)
+        if not math.isfinite(span) or span <= 0:
+            return
+        step = 1.0 if span <= 12.0 else math.ceil(span / 12.0)
         p.setPen(QtGui.QPen(QColor(38, 38, 44), 1, Qt.DotLine))
         p.setFont(QFont("sans", 6))
-        x0 = math.floor(min_x)
+        x0 = math.floor(min_x / step) * step
         while x0 <= max_x:
             sx, _ = to_screen(x0, min_y)
             p.drawLine(QtCore.QPointF(sx, 0), QtCore.QPointF(sx, h))
-            x0 += 1.0
-        y0 = math.floor(min_y)
+            x0 += step
+        y0 = math.floor(min_y / step) * step
         while y0 <= max_y:
             _, sy = to_screen(min_x, y0)
             p.drawLine(QtCore.QPointF(0, sy), QtCore.QPointF(w, sy))
-            y0 += 1.0
+            y0 += step
 
     def _draw_trajectory(self, p, m, to_screen):
         if len(m.trajectory) < 2:

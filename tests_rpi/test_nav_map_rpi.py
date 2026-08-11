@@ -112,3 +112,35 @@ def test_proximity_colour_near_red_far_green_unknown_grey():
     assert far[1] > far[0]          # green dominates when far
     assert unknown == (120, 120, 120)
     assert nm.proximity_color(-1.0) == (120, 120, 120)   # sentinel → grey
+
+
+# ── Robustness: non-finite wire data must not reach the QPainter widget ────────
+# nav_map feeds a MapModel to NavMapWidget, which converts distances/bearings to
+# arc angles via int(round(...)). An inf/nan there is int(round(inf)) →
+# OverflowError / round(nan) → ValueError, crashing paintEvent. Reject at parse.
+
+def test_pos_float_rejects_non_finite():
+    assert nm._pos_float("inf") is None
+    assert nm._pos_float("-inf") is None
+    assert nm._pos_float("nan") is None
+    assert nm._pos_float("2.5") == 2.5
+
+
+def test_parse_status_infinite_sonic_is_none():
+    m = nm.parse_status("CMD_AISTATUS#F#10#CLEAR#P#inf")
+    assert m.sonic_m is None            # not an obstacle at infinity
+
+
+def test_parse_status_non_finite_depth_and_goal_dropped():
+    line = ("CMD_AISTATUS#F#10#CLEAR#P#50#ssv2#inf#CENTER#tracking"
+            "#nan#inf#0#inf")
+    m = nm.parse_status(line)
+    assert m.depth_center_m is None     # inf clear_dist → None
+    assert m.depth_left_m is None       # nan depth_left → None
+    assert m.depth_right_m is None      # inf depth_right → None
+    assert m.goal_dist_m is None        # inf goal_dist → None
+
+
+def test_parse_status_non_finite_goal_bearing_zeroed():
+    m = nm.parse_status("CMD_AISTATUS#F#10#CLEAR#P#50#s#1.0#C#tracking#1#1#nan#2")
+    assert m.goal_bearing_deg == 0.0    # nan bearing → 0, not propagated
