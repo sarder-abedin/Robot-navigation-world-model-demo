@@ -37,6 +37,19 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+def _format_mapobj(map_objects) -> str:
+    """Build the CMD_MAPOBJ wire line from a list of (label, bearing°, dist_m).
+
+    Layout: CMD_MAPOBJ#<label>,<bearing>,<dist>;<label>,<bearing>,<dist>;…\r\n
+    Labels are sanitised of the field separators (',', ';', '#') so a class name
+    can never corrupt the framing. An empty list yields a bare 'CMD_MAPOBJ#'."""
+    parts = []
+    for label, bearing, dist in (map_objects or []):
+        safe = str(label or "").replace("#", " ").replace(",", " ").replace(";", " ").strip()
+        parts.append(f"{safe},{float(bearing):.1f},{float(dist):.2f}")
+    return "CMD_MAPOBJ#" + ";".join(parts) + "\r\n"
+
+
 @dataclass
 class AIState:
     """Thread-safe snapshot of the current AI pipeline output."""
@@ -106,6 +119,17 @@ class AIPipeline:
         self._goal_following = False         # Goal-Following mode (steer to goal) vs avoidance-only
         self._goal_center_tol = float(
             ((cfg.get("goal", {}) or {}).get("center_tolerance_deg", 12.0)))
+
+        # World-anchored trajectory map: dead-reckon the robot's pose (x, y, θ) from
+        # the EXECUTED action × calibrated speeds × dt (no odometry → drifts). Shipped
+        # in CMD_AISTATUS so the UI can anchor an accumulating world map to it.
+        from pose_estimator import PoseEstimator
+        self._pose = PoseEstimator.from_config(cfg)
+        self._pose_last_t = None      # monotonic time of the previous pose update
+        # Camera horizontal FOV → per-object bearing for the map's YOLO markers
+        # (same convention as goal_navigator's bearing_deg: +right / −left).
+        self._map_hfov_deg = float(
+            ((cfg.get("goal", {}) or {}).get("horizontal_fov_deg", 66.0)))
 
         self._last_annotated_bgr: np.ndarray | None = None
         self._annotated_lock = threading.Lock()
@@ -621,6 +645,20 @@ class AIPipeline:
                 self._execute_action(self._robot, decision.action,
                                      getattr(decision, "reroute_direction", ""))
 
+            # ── 7c. Dead-reckon the world pose from the EXECUTED action ────────
+            # Advance (x, y, θ) by action × calibrated speed × dt only while the
+            # motors are actually driving; when idle the robot holds position
+            # (treat as STOP) but the clock keeps moving so dt stays small.
+            now = time.monotonic()
+            dt = (now - self._pose_last_t) if self._pose_last_t is not None else 0.0
+            self._pose_last_t = now
+            drive_action = decision.action if motor_enabled else "STOP"
+            pose = self._pose.update(
+                drive_action, getattr(decision, "reroute_direction", ""), dt)
+            # Per-object (label, bearing°, dist_m) so the map can place YOLO objects
+            # in the world (bearing from box centre; depth from the depth model).
+            map_objects = self._build_map_objects(det_result)
+
             # ── 8. Visualise ──────────────────────────────────────────────────
             annotated = self._visualizer.annotate(
                 frame_bgr, det_result, decision, temporal_result, sonic_cm,
@@ -667,7 +705,8 @@ class AIPipeline:
 
             # ── 10. Broadcast AI status to TCP client ─────────────────────────
             self._broadcast_status(decision, temporal_result, sonic_cm,
-                                   ssv2_sentence, depth_result, goal_state)
+                                   ssv2_sentence, depth_result, goal_state,
+                                   pose=pose, map_objects=map_objects)
 
             # ── 11. Update shared state ───────────────────────────────────────
             with self._state_lock:
@@ -759,9 +798,32 @@ class AIPipeline:
 
     # ── TCP status broadcast ──────────────────────────────────────────────────
 
+    def _build_map_objects(self, det_result) -> list:
+        """Per-YOLO-object (label, bearing_deg, dist_m) for the world map.
+
+        bearing comes from the box-centre x within the camera FOV (+right / −left,
+        matching goal_navigator); dist is sampled from the depth model at the box
+        centre (-1 when depth is unavailable). The UI projects these into the world
+        frame using the robot pose."""
+        objs: list = []
+        w = getattr(det_result, "frame_width", 0) or 0
+        h = getattr(det_result, "frame_height", 0) or 0
+        if not getattr(det_result, "boxes", None) or w <= 0 or h <= 0:
+            return objs
+        for (x1, y1, x2, y2), label in zip(det_result.boxes, det_result.labels):
+            xc_norm = min(max(((x1 + x2) / 2.0) / w, 0.0), 1.0)
+            yc_norm = min(max(((y1 + y2) / 2.0) / h, 0.0), 1.0)
+            bearing = (xc_norm - 0.5) * self._map_hfov_deg    # +right / −left
+            try:
+                dist = self._depth.depth_at_norm(xc_norm, yc_norm)
+            except Exception:
+                dist = None
+            objs.append((label, bearing, dist if (dist and dist > 0) else -1.0))
+        return objs
+
     def _broadcast_status(self, decision, temporal_result, sonic_cm: float,
                           ssv2_sentence: str = "", depth_result=None,
-                          goal_state=None) -> None:
+                          goal_state=None, pose=None, map_objects=None) -> None:
         """
         Send a compact status string to all connected command clients so the
         lightweight client UI can display live AI state (in the panel below the
@@ -770,11 +832,16 @@ class AIPipeline:
         Format:
           CMD_AISTATUS#<action>#<risk*100>#<wm_label>#<pattern>#<sonic_cm>#<ssv2>
                        #<clear_dist_m>#<clear_dir>#<goal_status>
-                       #<depth_left_m>#<depth_right_m>#<goal_bearing_deg>#<goal_dist_m>\r\n
+                       #<depth_left_m>#<depth_right_m>#<goal_bearing_deg>#<goal_dist_m>
+                       #<pose_x_m>#<pose_y_m>#<pose_heading_deg>\r\n
         goal_status ∈ none|tracking|lost|reached. The trailing depth_left/right +
-        goal bearing/distance feed the 2D navigation map (-1 = unknown). Fields are
-        appended, never reordered, so older clients that split on the first 6–10
-        fields keep working.
+        goal bearing/distance feed the 2D navigation map (-1 = unknown); the final
+        pose_x/pose_y/pose_heading anchor the world-anchored trajectory map. Fields
+        are appended, never reordered, so older clients that split on the first
+        6–10 fields keep working.
+
+        Also emits a companion CMD_MAPOBJ line with the per-object YOLO markers:
+          CMD_MAPOBJ#<label>,<bearing_deg>,<dist_m>;<label>,<bearing_deg>,<dist_m>;…\r\n
         """
         if self._tcp_server is None:
             return
@@ -812,6 +879,10 @@ class AIPipeline:
             goal_bearing = float(getattr(goal_state, "bearing_deg", 0.0) or 0.0) if goal_state else 0.0
             goal_dist = getattr(goal_state, "distance_m", None) if goal_state else None
             goal_dist = goal_dist if (goal_dist is not None and goal_dist > 0) else -1.0
+            # Dead-reckoned world pose (metres, degrees) for the world-anchored map.
+            px = float(getattr(pose, "x_m", 0.0) or 0.0)
+            py = float(getattr(pose, "y_m", 0.0) or 0.0)
+            pth = float(getattr(pose, "heading_deg", 0.0) or 0.0)
             msg = (
                 f"CMD_AISTATUS#{action}"
                 f"#{int(decision.risk_score * 100)}"
@@ -825,9 +896,13 @@ class AIPipeline:
                 f"#{clear_left:.2f}"
                 f"#{clear_right:.2f}"
                 f"#{goal_bearing:.1f}"
-                f"#{goal_dist:.2f}\r\n"
+                f"#{goal_dist:.2f}"
+                f"#{px:.3f}"
+                f"#{py:.3f}"
+                f"#{pth:.1f}\r\n"
             )
             if self._tcp_server.isCmdServerConnected():
                 self._tcp_server.sendDataToCmdClinet(msg)
+                self._tcp_server.sendDataToCmdClinet(_format_mapobj(map_objects))
         except Exception as exc:
             logger.debug("Status broadcast error: %s", exc)

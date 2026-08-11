@@ -293,6 +293,15 @@ decision:
     min_reaction_s: 0.2        # floor on the measured pipeline latency
     max_reaction_s: 3.0        # cap on it (a stalled pipeline → near-stop, bounded)
 
+# ── World-anchored map: dead-reckoned pose ──────────────────────────────────────
+# The robot has NO odometry, so its world position is ESTIMATED by integrating the
+# commanded action × calibrated speed × dt (pose_estimator.py). FORWARD/SLOW reuse
+# the governor's forward_speed_mps / slow_speed_mps above (single source of truth);
+# these two add the missing constants. Open-loop → drifts; CALIBRATE on the robot.
+pose:
+  turn_rate_dps: 45.0        # measured in-place turn rate (deg/s) for TURN / REROUTE
+  backup_speed_mps: 0.04     # measured reverse speed at the BACKUP action (m/s)
+
 # ── Robot motor control ────────────────────────────────────────────────────────
 robot:
   # tankMotor.setMotorModel(left, right) — range −4095 … +4095

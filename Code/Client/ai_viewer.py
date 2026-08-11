@@ -42,6 +42,7 @@ Kill switch controls
 
 from __future__ import annotations
 
+import math
 import os
 import socket
 import struct
@@ -61,7 +62,8 @@ from PyQt5.QtWidgets import (
 )
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import nav_map   # noqa: E402  (framework-agnostic map geometry + status parsing)
+import nav_map     # noqa: E402  (framework-agnostic egocentric-map geometry + parsing)
+import world_map   # noqa: E402  (framework-agnostic world-anchored trajectory map)
 
 # ── Colour maps ────────────────────────────────────────────────────────────────
 ACTION_CSS = {
@@ -266,9 +268,163 @@ class NavMapWidget(QWidget):
         p.drawText(QtCore.QPointF(ox + 12, oy + 6), m.action)
 
 
+class WorldMapWidget(QWidget):
+    """World-anchored, ACCUMULATING navigation map (the 'random-walk' style view).
+
+    Anchored to the robot's dead-reckoned pose (shipped in CMD_AISTATUS), it grows
+    a trajectory trail plus a scatter of ultrasonic obstacles and YOLO objects in a
+    single fixed world frame — where the robot has been and what it has seen, not
+    just 'right now'. Moving objects are drawn distinctly. All geometry/accumulation
+    lives in world_map (unit-tested); this widget only paints and auto-fits the view.
+
+    The pose is open-loop (no odometry) → the whole map DRIFTS; it's a best-effort
+    local world view, not a survey-grade global map.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._m = world_map.WorldModel()
+        self.setMinimumSize(300, 315)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.setToolTip("World-anchored trajectory map (dead-reckoning, no odometry "
+                        "→ drifts). Trail = path; dots = ultrasonic; squares = YOLO "
+                        "objects (hollow = moving).")
+
+    def update_status(self, line: str) -> None:
+        self._m.update_status(line)
+        self.update()
+
+    def update_objects(self, line: str) -> None:
+        self._m.update_objects(line)
+        self.update()
+
+    def reset(self) -> None:
+        self._m.reset()
+        self.update()
+
+    # ── painting ──────────────────────────────────────────────────────────────
+    def paintEvent(self, _ev):
+        m = self._m
+        w, h = self.width(), self.height()
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        p.fillRect(0, 0, w, h, QColor(18, 18, 20))
+
+        view = m.bounds(pad_m=0.5)
+
+        def to_screen(x, y):
+            return world_map.world_to_screen(x, y, view, w, h)
+
+        self._draw_grid(p, view, w, h, to_screen)
+        self._draw_trajectory(p, m, to_screen)
+        self._draw_obstacles(p, m, to_screen)
+        self._draw_objects(p, m, to_screen)
+        self._draw_goal(p, m, to_screen)
+        self._draw_robot(p, m, to_screen)
+
+        # Caption + stats.
+        p.setPen(QColor(140, 140, 150))
+        p.setFont(QFont("sans", 7))
+        p.drawText(6, 12, "WORLD MAP · dead-reckoned (drifts, no odometry)")
+        p.setPen(QColor(110, 110, 120))
+        p.drawText(6, h - 6, f"path {len(m.trajectory)} · obstacles "
+                             f"{len(m.obstacle_points)} · objects {len(m.objects)}")
+        p.end()
+
+    def _draw_grid(self, p, view, w, h, to_screen):
+        # 1 m grid lines across the current view for a sense of scale.
+        min_x, min_y, max_x, max_y = view
+        p.setPen(QtGui.QPen(QColor(38, 38, 44), 1, Qt.DotLine))
+        p.setFont(QFont("sans", 6))
+        x0 = math.floor(min_x)
+        while x0 <= max_x:
+            sx, _ = to_screen(x0, min_y)
+            p.drawLine(QtCore.QPointF(sx, 0), QtCore.QPointF(sx, h))
+            x0 += 1.0
+        y0 = math.floor(min_y)
+        while y0 <= max_y:
+            _, sy = to_screen(min_x, y0)
+            p.drawLine(QtCore.QPointF(0, sy), QtCore.QPointF(w, sy))
+            y0 += 1.0
+
+    def _draw_trajectory(self, p, m, to_screen):
+        if len(m.trajectory) < 2:
+            return
+        pts = [QtCore.QPointF(*to_screen(pp.x_m, pp.y_m)) for pp in m.trajectory]
+        # Fading trail: older segments dimmer.
+        n = len(pts)
+        for i in range(1, n):
+            t = i / n
+            col = QColor(60, int(120 + 90 * t), int(200 + 40 * t), int(60 + 180 * t))
+            p.setPen(QtGui.QPen(col, 2.0))
+            p.drawLine(pts[i - 1], pts[i])
+        # Origin marker (where the run started).
+        p.setPen(QtGui.QPen(QColor(120, 120, 130), 1))
+        p.setBrush(Qt.NoBrush)
+        ox, oy = to_screen(m.trajectory[0].x_m, m.trajectory[0].y_m)
+        p.drawEllipse(QtCore.QPointF(ox, oy), 4, 4)
+
+    def _draw_obstacles(self, p, m, to_screen):
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(230, 70, 70, 190))
+        for (x, y) in m.obstacle_points:
+            sx, sy = to_screen(x, y)
+            p.drawEllipse(QtCore.QPointF(sx, sy), 2.6, 2.6)
+
+    def _draw_objects(self, p, m, to_screen):
+        p.setFont(QFont("sans", 7))
+        for o in m.objects:
+            sx, sy = to_screen(o.x_m, o.y_m)
+            r, g, b = world_map.label_color(o.label)
+            col = QColor(r, g, b)
+            if o.moving:
+                # Moving obstacle: hollow, thicker outline (stands out from statics).
+                p.setBrush(Qt.NoBrush)
+                p.setPen(QtGui.QPen(col, 2.4))
+                p.drawEllipse(QtCore.QPointF(sx, sy), 7, 7)
+                p.drawEllipse(QtCore.QPointF(sx, sy), 3, 3)
+            else:
+                p.setPen(QtGui.QPen(QColor(235, 235, 240), 1))
+                p.setBrush(col if o.dist_known else QColor(r, g, b, 90))
+                p.drawRect(QtCore.QRectF(sx - 4, sy - 4, 8, 8))
+            tag = o.label + (" ▶" if o.moving else "")
+            p.setPen(col.lighter(140))
+            p.drawText(QtCore.QPointF(sx + 8, sy + 3), tag)
+
+    def _draw_goal(self, p, m, to_screen):
+        if m.goal is None:
+            return
+        sx, sy = to_screen(*m.goal)
+        col = QColor(60, 220, 90)
+        p.setPen(QtGui.QPen(col, 2))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QtCore.QPointF(sx, sy), 7, 7)
+        p.drawLine(QtCore.QPointF(sx - 9, sy), QtCore.QPointF(sx + 9, sy))
+        p.drawLine(QtCore.QPointF(sx, sy - 9), QtCore.QPointF(sx, sy + 9))
+        p.setFont(QFont("sans", 7))
+        p.drawText(QtCore.QPointF(sx + 10, sy - 6), "goal")
+
+    def _draw_robot(self, p, m, to_screen):
+        if m.pose is None:
+            return
+        sx, sy = to_screen(m.pose.x_m, m.pose.y_m)
+        # Heading: 0° = +Y (up), increasing clockwise (turning right). Screen y is
+        # down, so a heading θ points at screen-angle (−90°+θ) from +x.
+        th = math.radians(m.pose.heading_deg)
+        fx, fy = math.sin(th), -math.cos(th)         # forward on screen (+Y up)
+        rx, ry = math.cos(th), math.sin(th)          # right on screen
+        tip = QtCore.QPointF(sx + fx * 11, sy + fy * 11)
+        bl = QtCore.QPointF(sx - fx * 6 - rx * 6, sy - fy * 6 - ry * 6)
+        br = QtCore.QPointF(sx - fx * 6 + rx * 6, sy - fy * 6 + ry * 6)
+        p.setBrush(QColor(90, 170, 255))
+        p.setPen(QtGui.QPen(QColor(235, 235, 240), 1.3))
+        p.drawPolygon(QtGui.QPolygonF([tip, bl, br]))
+
+
 class AIViewer(QMainWindow):
     # Qt signal so the network recv thread can safely update the UI thread
     status_received = pyqtSignal(str)
+    mapobj_received = pyqtSignal(str)     # CMD_MAPOBJ line → world map (GUI thread)
     frame_received = pyqtSignal(object)   # QImage from the video thread → main thread
     disconnected = pyqtSignal()           # worker thread requests teardown on the GUI thread
 
@@ -300,6 +456,7 @@ class AIViewer(QMainWindow):
         self._ui_timer.start(200)
 
         self.status_received.connect(self._process_status)
+        self.mapobj_received.connect(self._process_mapobj)
         self.frame_received.connect(self._show_frame)   # GUI-thread pixmap update
         self.disconnected.connect(self._disconnect)     # GUI-thread teardown
 
@@ -365,13 +522,32 @@ class AIViewer(QMainWindow):
         video_row.addStretch(1)
         root.addLayout(video_row)
 
+        # World-anchored trajectory map (accumulating; dead-reckoned pose).
+        self._world_map = WorldMapWidget()
+        self._world_map.setFixedHeight(315)
+        world_row = QHBoxLayout()
+        world_row.addStretch(1)
+        world_row.addWidget(self._world_map, 1)
+        world_row.addStretch(1)
+        root.addLayout(world_row)
+
         map_row = QHBoxLayout()
-        self._chk_map = QCheckBox("Show 2D navigation map")
+        self._chk_map = QCheckBox("Show local map")
         self._chk_map.setChecked(True)
         self._chk_map.setToolTip("Top-down egocentric map (robot-centred; no odometry, so it's a live local view).")
         self._chk_map.toggled.connect(self._map.setVisible)
+        self._chk_world = QCheckBox("Show world map")
+        self._chk_world.setChecked(True)
+        self._chk_world.setToolTip("World-anchored accumulating trajectory + obstacle map "
+                                   "(dead-reckoning, no odometry → drifts).")
+        self._chk_world.toggled.connect(self._world_map.setVisible)
+        self._btn_reset_map = QPushButton("Reset trail")
+        self._btn_reset_map.setToolTip("Clear the accumulated world map and start a fresh trajectory.")
+        self._btn_reset_map.clicked.connect(self._world_map.reset)
         map_row.addStretch(1)
         map_row.addWidget(self._chk_map)
+        map_row.addWidget(self._chk_world)
+        map_row.addWidget(self._btn_reset_map)
         map_row.addStretch(1)
         root.addLayout(map_row)
 
@@ -867,6 +1043,8 @@ class AIViewer(QMainWindow):
                     line = line.strip()
                     if line.startswith("CMD_AISTATUS"):
                         self.status_received.emit(line)
+                    elif line.startswith("CMD_MAPOBJ"):
+                        self.mapobj_received.emit(line)
             except Exception:
                 break
         if sock is self._cmd_sock:            # only tear down the CURRENT connection
@@ -993,6 +1171,8 @@ class AIViewer(QMainWindow):
         #   (trailing fields optional — old servers omit them)
         # Feed the 2D navigation map (parsing is shared with nav_map, unit-tested).
         self._map.set_model(nav_map.parse_status(line))
+        # Feed the world-anchored trajectory map (pose + sonar + goal accumulate).
+        self._world_map.update_status(line)
         parts = line.split("#")
         if len(parts) < 6:
             return
@@ -1046,6 +1226,11 @@ class AIViewer(QMainWindow):
         except ValueError:
             self._depth_val.setText("---")
         self._ssv2_val.setText(ssv2 or "---")
+
+    def _process_mapobj(self, line: str) -> None:
+        # CMD_MAPOBJ#<label>,<bearing>,<dist>;… — YOLO objects for the world map
+        # (parsing + world projection shared with world_map, unit-tested).
+        self._world_map.update_objects(line)
 
     def _update_status_bar(self) -> None:
         if self._connected:
