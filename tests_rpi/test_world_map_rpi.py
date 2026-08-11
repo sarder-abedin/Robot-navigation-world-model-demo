@@ -18,9 +18,9 @@ import world_map as wm
 
 # A full CMD_AISTATUS line incl. the trailing pose fields (x, y, heading).
 def _status(sonic_cm=-1.0, goal_status="none", goal_bearing=0.0, goal_dist=-1.0,
-            px=0.0, py=0.0, pth=0.0):
-    return (f"CMD_AISTATUS#FORWARD#10#CLEAR#STATIC_CLEAR#{sonic_cm:.1f}#"
-            f"#-1.00#CENTER#{goal_status}#-1.00#-1.00#{goal_bearing:.1f}#{goal_dist:.2f}"
+            px=0.0, py=0.0, pth=0.0, wm_label="CLEAR", clear_dist=-1.0):
+    return (f"CMD_AISTATUS#FORWARD#10#{wm_label}#STATIC_CLEAR#{sonic_cm:.1f}#"
+            f"#{clear_dist:.2f}#CENTER#{goal_status}#-1.00#-1.00#{goal_bearing:.1f}#{goal_dist:.2f}"
             f"#{px:.3f}#{py:.3f}#{pth:.1f}")
 
 
@@ -210,9 +210,94 @@ def test_reset_clears_everything():
     m = wm.WorldModel()
     m.update_status(_status(sonic_cm=100.0, px=1.0, py=1.0))
     m.update_objects("CMD_MAPOBJ#chair,0.0,2.0")
+    m.update_status(_status(wm_label="BLOCKED", clear_dist=1.0, px=1.0, py=1.0))
     m.reset()
     assert m.trajectory == [] and m.obstacle_points == [] and m.objects == []
-    assert m.pose is None and m.goal is None
+    assert m.foresight_points == [] and m.pose is None and m.goal is None
+
+
+# ── V-JEPA 2 foresight layer ─────────────────────────────────────────────────
+
+def test_blocked_records_foresight_ahead():
+    """A BLOCKED prediction drops a hazard marker at the look-ahead point ahead
+    of the robot (bearing 0 → along +Y at heading 0)."""
+    m = wm.WorldModel(hazard_lookahead_max_m=2.0)
+    m.update_status(_status(wm_label="BLOCKED", clear_dist=1.5, px=0.0, py=0.0, pth=0.0))
+    assert len(m.foresight_points) == 1
+    hz = m.foresight_points[0]
+    assert hz.label == "BLOCKED"
+    assert math.isclose(hz.x_m, 0.0, abs_tol=1e-6)
+    assert math.isclose(hz.y_m, 1.5, abs_tol=1e-6)   # placed at the depth free-space dist
+
+
+def test_mixed_records_foresight():
+    m = wm.WorldModel()
+    m.update_status(_status(wm_label="MIXED", clear_dist=1.0, px=0.0, py=0.0))
+    assert len(m.foresight_points) == 1 and m.foresight_points[0].label == "MIXED"
+
+
+def test_clear_and_unknown_record_no_foresight():
+    m = wm.WorldModel()
+    m.update_status(_status(wm_label="CLEAR", clear_dist=1.0))
+    m.update_status(_status(wm_label="UNKNOWN", clear_dist=1.0))
+    assert m.foresight_points == []
+
+
+def test_foresight_uses_nominal_when_depth_unknown():
+    m = wm.WorldModel(hazard_lookahead_m=1.0)
+    m.update_status(_status(wm_label="BLOCKED", clear_dist=-1.0, px=0.0, py=0.0, pth=0.0))
+    assert math.isclose(m.foresight_points[0].y_m, 1.0, abs_tol=1e-6)
+
+
+def test_foresight_clamps_large_depth():
+    m = wm.WorldModel(hazard_lookahead_max_m=2.0)
+    m.update_status(_status(wm_label="BLOCKED", clear_dist=9.0, px=0.0, py=0.0, pth=0.0))
+    assert math.isclose(m.foresight_points[0].y_m, 2.0, abs_tol=1e-6)
+
+
+def test_foresight_projects_with_heading():
+    """Facing +X (heading 90°): the look-ahead hazard lands along world +X."""
+    m = wm.WorldModel()
+    m.update_status(_status(wm_label="BLOCKED", clear_dist=1.0, px=0.0, py=0.0, pth=90.0))
+    hz = m.foresight_points[0]
+    assert math.isclose(hz.x_m, 1.0, abs_tol=1e-6)
+    assert math.isclose(hz.y_m, 0.0, abs_tol=1e-6)
+
+
+def test_foresight_merges_same_label_nearby():
+    """A stationary spot the model keeps flagging must not pile up duplicates."""
+    m = wm.WorldModel(foresight_merge_m=0.2)
+    for _ in range(5):
+        m.update_status(_status(wm_label="BLOCKED", clear_dist=1.0, px=0.0, py=0.0))
+    assert len(m.foresight_points) == 1
+
+
+def test_foresight_keeps_distinct_labels_at_same_spot():
+    m = wm.WorldModel(foresight_merge_m=0.2)
+    m.update_status(_status(wm_label="MIXED", clear_dist=1.0, px=0.0, py=0.0))
+    m.update_status(_status(wm_label="BLOCKED", clear_dist=1.0, px=0.0, py=0.0))
+    assert len(m.foresight_points) == 2      # escalation MIXED→BLOCKED both kept
+
+
+def test_foresight_cap_drops_oldest():
+    m = wm.WorldModel(max_foresight=3, foresight_merge_m=0.0)
+    for i in range(6):
+        m.update_status(_status(wm_label="BLOCKED", clear_dist=1.0,
+                                px=float(i), py=0.0))
+    assert len(m.foresight_points) == 3
+
+
+def test_foresight_included_in_bounds():
+    m = wm.WorldModel()
+    m.update_status(_status(wm_label="BLOCKED", clear_dist=1.0, px=0.0, py=0.0))
+    min_x, min_y, max_x, max_y = m.bounds(pad_m=0.5)
+    assert max_y >= 1.0                       # the hazard 1 m ahead is enclosed
+
+
+def test_status_fields_parse_wm_and_clear_dist():
+    fields = wm._parse_status_fields(_status(wm_label="blocked", clear_dist=1.25))
+    assert fields["wm_label"] == "BLOCKED"    # upper-cased
+    assert math.isclose(fields["clear_dist_m"], 1.25)
 
 
 # ── bounds + colour ─────────────────────────────────────────────────────────

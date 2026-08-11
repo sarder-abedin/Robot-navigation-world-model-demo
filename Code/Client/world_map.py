@@ -49,19 +49,37 @@ class WorldObject:
 
 
 @dataclass
+class WorldHazard:
+    """A V-JEPA 2 PREDICTED hazard, projected to the look-ahead point ahead of the
+    robot. Distinct from the reactive ultrasonic hits and the YOLO objects: this is
+    the world model's *foresight* — 'the way ahead is about to be blocked'."""
+    x_m: float
+    y_m: float
+    label: str                 # "MIXED" | "BLOCKED" (CLEAR/UNKNOWN never recorded)
+
+
+@dataclass
 class WorldModel:
     """Accumulated world state the widget paints. Mutated in place by update_*()."""
     trajectory: list = field(default_factory=list)       # [WorldPose, …] robot path
     obstacle_points: list = field(default_factory=list)  # [(x,y), …] ultrasonic hits
     objects: list = field(default_factory=list)          # [WorldObject, …] latest frame
+    foresight_points: list = field(default_factory=list) # [WorldHazard, …] V-JEPA 2 predictions
     pose: WorldPose | None = None
     goal: tuple | None = None                            # (x, y) | None
     # Caps + thresholds (keep memory bounded; decimate near-duplicate points).
     max_trail: int = 4000
     max_obstacles: int = 4000
+    max_foresight: int = 4000
     trail_step_m: float = 0.02        # don't record a path point until moved this far
     obstacle_merge_m: float = 0.08    # merge an ultrasonic hit into a nearby existing one
+    foresight_merge_m: float = 0.15   # merge a predicted hazard into a nearby same-label one
     move_thresh_m: float = 0.18       # world shift over one frame to call an object "moving"
+    # Where to place a V-JEPA 2 foresight marker ahead of the robot (bearing 0):
+    # use the depth free-space distance when known (clamped), else this nominal —
+    # V-JEPA 2's sub-second horizon × the slow robot speed would be invisibly close.
+    hazard_lookahead_m: float = 1.0       # nominal look-ahead when depth is unknown
+    hazard_lookahead_max_m: float = 2.0   # clamp when depth free-space is known but large
     _prev_objects: list = field(default_factory=list)    # last frame's known-dist objects
 
     # ── mutation ──────────────────────────────────────────────────────────────
@@ -69,6 +87,7 @@ class WorldModel:
         self.trajectory.clear()
         self.obstacle_points.clear()
         self.objects.clear()
+        self.foresight_points.clear()
         self._prev_objects.clear()
         self.pose = None
         self.goal = None
@@ -93,6 +112,16 @@ class WorldModel:
             self.goal = robot_to_world(xr, yr, pose)
         elif not st["goal_has"]:
             self.goal = None
+        # V-JEPA 2 foresight: when the world model PREDICTS the way ahead is
+        # blocked/mixed, drop a hazard marker at the look-ahead point straight
+        # ahead (bearing 0). It accumulates into a "predicted-blockage" layer,
+        # distinct from the reactive ultrasonic hits and the detected objects.
+        if st["wm_label"] in ("MIXED", "BLOCKED"):
+            cd = st["clear_dist_m"]
+            look = (min(cd, self.hazard_lookahead_max_m)
+                    if cd is not None else self.hazard_lookahead_m)
+            xr, yr = polar_to_robot(look, 0.0)
+            self._add_foresight(*robot_to_world(xr, yr, pose), st["wm_label"])
 
     def update_objects(self, line: str, fallback_dist_m: float = 1.5) -> None:
         """Consume a CMD_MAPOBJ line: project each YOLO object to the world frame
@@ -135,6 +164,17 @@ class WorldModel:
         if len(self.obstacle_points) > self.max_obstacles:
             del self.obstacle_points[0:len(self.obstacle_points) - self.max_obstacles]
 
+    def _add_foresight(self, x: float, y: float, label: str) -> None:
+        # Merge into a nearby SAME-LABEL hazard so a spot the world model keeps
+        # flagging doesn't pile up (a MIXED and a BLOCKED at one place coexist,
+        # showing escalation). Only the recent tail is scanned (cheap).
+        for hz in self.foresight_points[-64:]:
+            if hz.label == label and math.hypot(x - hz.x_m, y - hz.y_m) < self.foresight_merge_m:
+                return
+        self.foresight_points.append(WorldHazard(x, y, label))
+        if len(self.foresight_points) > self.max_foresight:
+            del self.foresight_points[0:len(self.foresight_points) - self.max_foresight]
+
     def bounds(self, pad_m: float = 0.5) -> tuple:
         """(min_x, min_y, max_x, max_y) enclosing everything, for auto-fit."""
         xs, ys = [], []
@@ -144,6 +184,8 @@ class WorldModel:
             xs.append(x); ys.append(y)
         for o in self.objects:
             xs.append(o.x_m); ys.append(o.y_m)
+        for hz in self.foresight_points:
+            xs.append(hz.x_m); ys.append(hz.y_m)
         if self.pose is not None:
             xs.append(self.pose.x_m); ys.append(self.pose.y_m)
         if self.goal is not None:
@@ -180,14 +222,19 @@ def parse_pose(line: str) -> WorldPose | None:
 
 
 def _parse_status_fields(line: str) -> dict:
-    """Pull the sonar + goal fields the world map needs from a CMD_AISTATUS line."""
+    """Pull the sonar + V-JEPA 2 + goal fields the world map needs from a
+    CMD_AISTATUS line (field layout in ai_pipeline._broadcast_status)."""
     parts = line.strip().split("#")
-    out = {"sonic_m": None, "goal_has": False,
-           "goal_bearing_deg": 0.0, "goal_dist_m": None}
+    out = {"sonic_m": None, "wm_label": "", "clear_dist_m": None,
+           "goal_has": False, "goal_bearing_deg": 0.0, "goal_dist_m": None}
     if len(parts) < 6 or parts[0] != "CMD_AISTATUS":
         return out
+    if len(parts) > 3:
+        out["wm_label"] = (parts[3] or "").strip().upper()   # V-JEPA 2 CLEAR/MIXED/BLOCKED
     son = _pos_float(parts[5])                    # cm on the wire
     out["sonic_m"] = (son / 100.0) if son is not None else None
+    if len(parts) > 7:
+        out["clear_dist_m"] = _pos_float(parts[7])           # depth free-space ahead (m)
     if len(parts) > 9:
         status = (parts[9] or "none").strip().lower()
         out["goal_has"] = status in ("tracking", "lost", "reached")
