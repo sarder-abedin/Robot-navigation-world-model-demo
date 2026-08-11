@@ -130,3 +130,41 @@ def test_loopback_feeds_world_map_over_a_real_socket():
         app.processEvents()
         viewer.deleteLater()
         app.processEvents()
+
+
+def test_map_widgets_survive_non_finite_and_huge_wire_data():
+    """A malformed/hostile status line (nan/inf pose, inf depth) or a huge drifted
+    extent must not crash the map paintEvent — regression for math.floor(nan) →
+    ValueError and int(round(inf)) → OverflowError."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    import ai_viewer
+
+    world = ai_viewer.WorldMapWidget()
+    local = ai_viewer.NavMapWidget()
+    world.setFixedSize(400, 320)
+    local.setFixedSize(400, 320)
+
+    import nav_map
+    bad_lines = [
+        "CMD_AISTATUS#F#40#CLEAR#P#-1##-1#C#none#-1#-1#0#-1#nan#nan#nan",
+        "CMD_AISTATUS#F#40#BLOCKED#P#50##inf#C#none#-1#-1#0#-1#inf#inf#inf",
+        "CMD_AISTATUS#F#40#CLEAR#P#nan##nan#CENTER#tracking#nan#nan#nan#nan#0#0#0",
+        # huge but finite extent (a long drifted run) — must not spin the grid loop
+        "CMD_AISTATUS#F#10#CLEAR#P#-1##-1#C#none#-1#-1#0#-1#0#0#0",
+        "CMD_AISTATUS#F#10#CLEAR#P#-1##-1#C#none#-1#-1#0#-1#1000000#1000000#0",
+    ]
+    for line in bad_lines:
+        world.update_status(line)
+        world.update_objects("CMD_MAPOBJ#ghost,nan,inf;real,5.0,1.0")
+        local.set_model(nav_map.parse_status(line))
+        world.grab()      # force paintEvent — must not raise
+        local.grab()
+
+    # The widget stayed usable: a subsequent VALID frame still renders + accumulates.
+    world.update_status("CMD_AISTATUS#F#10#BLOCKED#P#80##1.0#C#none#-1#-1#0#-1#0#1#0")
+    world.grab()
+    assert world._m.pose is not None and abs(world._m.pose.y_m - 1.0) < 1e-6
+
+    world.deleteLater()
+    local.deleteLater()
+    app.processEvents()

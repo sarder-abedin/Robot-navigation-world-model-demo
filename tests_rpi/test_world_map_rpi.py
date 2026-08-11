@@ -11,6 +11,8 @@ import math
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "Code", "Client"))
 
 import world_map as wm
@@ -298,6 +300,41 @@ def test_status_fields_parse_wm_and_clear_dist():
     fields = wm._parse_status_fields(_status(wm_label="blocked", clear_dist=1.25))
     assert fields["wm_label"] == "BLOCKED"    # upper-cased
     assert math.isclose(fields["clear_dist_m"], 1.25)
+
+
+# ── Robustness: non-finite / hostile wire data must never poison the map ──────
+# A nan/inf pose or bearing would flow into bounds() and crash the QPainter
+# paintEvent (math.floor(nan) → ValueError). Reject it at the parse boundary.
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+def test_parse_pose_rejects_non_finite(bad):
+    line = ("CMD_AISTATUS#F#10#CLEAR#P#-1##-1#C#none#-1#-1#0#-1"
+            f"#{bad}#{bad}#{bad}")
+    assert wm.parse_pose(line) is None
+
+
+def test_non_finite_pose_not_accumulated():
+    m = wm.WorldModel()
+    m.update_status("CMD_AISTATUS#F#10#BLOCKED#P#50##1#C#none#-1#-1#0#-1#nan#nan#nan")
+    assert m.trajectory == [] and m.pose is None
+    assert m.foresight_points == []          # no pose → no foresight either
+
+
+def test_parse_mapobj_skips_non_finite_bearing():
+    objs = wm.parse_mapobj("CMD_MAPOBJ#a,nan,1.0;b,inf,1.0;c,10.0,1.0")
+    assert objs == [("c", 10.0, 1.0)]
+
+
+def test_parse_mapobj_infinite_dist_is_unknown():
+    objs = wm.parse_mapobj("CMD_MAPOBJ#chair,0.0,inf")
+    assert objs == [("chair", 0.0, None)]    # inf dist → treated as unknown, not kept
+
+
+def test_pos_float_rejects_infinite_sonic():
+    # An 'inf' sonar reading must not become an obstacle at infinity.
+    fields = wm._parse_status_fields(
+        "CMD_AISTATUS#F#10#CLEAR#P#inf##-1#C#none#-1#-1#0#-1#0#0#0")
+    assert fields["sonic_m"] is None
 
 
 # ── bounds + colour ─────────────────────────────────────────────────────────
