@@ -287,8 +287,9 @@ class WorldMapWidget(QWidget):
         self.setMinimumSize(300, 315)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.setToolTip("World-anchored trajectory map (dead-reckoning, no odometry "
-                        "→ drifts). Trail = path; dots = ultrasonic; squares = YOLO "
-                        "objects (hollow = moving).")
+                        "→ drifts). Trail = path; red dots = ultrasonic; squares = YOLO "
+                        "objects (hollow = moving); diamonds = V-JEPA 2 predicted hazards "
+                        "(red BLOCKED / amber MIXED).")
 
     def update_status(self, line: str) -> None:
         self._m.update_status(line)
@@ -317,6 +318,7 @@ class WorldMapWidget(QWidget):
 
         self._draw_grid(p, view, w, h, to_screen)
         self._draw_trajectory(p, m, to_screen)
+        self._draw_foresight(p, m, to_screen)    # V-JEPA 2 predictions (under the live layers)
         self._draw_obstacles(p, m, to_screen)
         self._draw_objects(p, m, to_screen)
         self._draw_goal(p, m, to_screen)
@@ -328,7 +330,8 @@ class WorldMapWidget(QWidget):
         p.drawText(6, 12, "WORLD MAP · dead-reckoned (drifts, no odometry)")
         p.setPen(QColor(110, 110, 120))
         p.drawText(6, h - 6, f"path {len(m.trajectory)} · obstacles "
-                             f"{len(m.obstacle_points)} · objects {len(m.objects)}")
+                             f"{len(m.obstacle_points)} · objects {len(m.objects)} · "
+                             f"V-JEPA2 {len(m.foresight_points)}")
         p.end()
 
     def _draw_grid(self, p, view, w, h, to_screen):
@@ -363,6 +366,23 @@ class WorldMapWidget(QWidget):
         p.setBrush(Qt.NoBrush)
         ox, oy = to_screen(m.trajectory[0].x_m, m.trajectory[0].y_m)
         p.drawEllipse(QtCore.QPointF(ox, oy), 4, 4)
+
+    def _draw_foresight(self, p, m, to_screen):
+        # V-JEPA 2 predicted-hazard markers: translucent diamonds ahead of the
+        # path, coloured by the world-model label (matches the WM_CSS panel:
+        # BLOCKED red, MIXED amber). This is the PREDICTIVE layer — where the
+        # world model foresaw trouble — distinct from the reactive ones.
+        colors = {"BLOCKED": QColor(255, 68, 68, 150), "MIXED": QColor(255, 170, 68, 130)}
+        edges = {"BLOCKED": QColor(255, 68, 68), "MIXED": QColor(255, 170, 68)}
+        for hz in m.foresight_points:
+            sx, sy = to_screen(hz.x_m, hz.y_m)
+            p.setBrush(colors.get(hz.label, QColor(180, 180, 180, 110)))
+            p.setPen(QtGui.QPen(edges.get(hz.label, QColor(180, 180, 180)), 1))
+            d = 5.0
+            p.drawPolygon(QtGui.QPolygonF([
+                QtCore.QPointF(sx, sy - d), QtCore.QPointF(sx + d, sy),
+                QtCore.QPointF(sx, sy + d), QtCore.QPointF(sx - d, sy),
+            ]))
 
     def _draw_obstacles(self, p, m, to_screen):
         p.setPen(Qt.NoPen)
