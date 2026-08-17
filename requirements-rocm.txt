@@ -1,0 +1,34 @@
+# ── AMD GPU (ROCm) server deps — native install ───────────────────────────────
+# Easiest: just run `./start.sh` (its first-run --setup installs everything,
+# picking the ROCm torch automatically). This file is for a manual install.
+#
+# IMPORTANT: install the ROCm build of torch FIRST, from the AMD wheel index, so
+# pip doesn't pull the CPU/CUDA torch from PyPI (PyPI's version is usually newer,
+# so a plain `pip install torch` here would win and you'd lose the GPU). Then this
+# file for the rest. Adjust rocm6.3 to your installed ROCm (see HOW_TO_RUN.md → AMD GPU):
+#
+#   pip install --index-url https://download.pytorch.org/whl/rocm6.3 torch torchvision
+#   pip install -r requirements-rocm.txt
+#
+# (torch/torchvision are intentionally NOT listed below — they come from the ROCm
+# index in the line above; listing them here would let PyPI override the ROCm build.)
+
+# ── Heavy AI (models auto-download from HuggingFace on first run; frameworks only here)
+transformers>=4.53.0         # V-JEPA 2 (AutoModel), Depth-Anything V2, SSv2 (VideoMAE)
+accelerate>=0.27.0           # fast model loading
+ultralytics>=8.1.0           # YOLO11n (runs on the PC in all modes)
+
+# ── Computer vision / arrays ──────────────────────────────────────────────────
+# HEADLESS on purpose: the server + the PyQt viewer only DECODE frames. The full
+# opencv-python bundles Qt plugins that clash with PyQt5 (the "xcb" abort).
+opencv-python-headless>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# ── Operator UI ───────────────────────────────────────────────────────────────
+PyQt5>=5.15.0                # ai_viewer.py — native desktop viewer (world map + foresight)
+streamlit>=1.37.0            # streamlit_viewer.py — browser UI (optional; start.sh can skip)
+matplotlib>=3.6.0            # offline run visualizer / report
+
+# ── Config / utilities ────────────────────────────────────────────────────────
+PyYAML>=6.0

@@ -94,19 +94,35 @@ The container starts the AI server **and** the browser UI (port 8501) together.
 
 ### 2.2 · Run natively (Python venv)
 
-Needed for a **Mac GPU (MPS)** — Docker on macOS has no Metal passthrough (see §2.3). Also handy for development.
+Recommended when you're **iterating** (config/code changes take effect on restart — no image rebuild) and **required for a Mac GPU (MPS)** — Docker on macOS has no Metal passthrough (see §2.3).
+
+**One command — `./start.sh`** sets up a venv on first run (auto-picking **ROCm** torch if a Radeon is present, else CPU/CUDA), then launches the AI server **and** the PyQt viewer together, with a clean joint shutdown:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate                 # Windows: .venv\Scripts\activate
+./start.sh                 # first run: setup + live server + PyQt viewer (world map)
+./start.sh --demo          # demo mode (needs assets/demo_clips/corridor.mp4)
+./start.sh --nav baseline  # reactive-only baseline · --no-ui server only · --setup reinstall deps
+```
+
+The AI **models** aren't pip-installed — `transformers`/`ultralytics` download the weights from HuggingFace on the first live run and cache them (`~/.cache/huggingface`, `./yolo11n.pt`). Nothing extra to do.
+
+<details><summary>Manual (if you'd rather not use start.sh)</summary>
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install --upgrade pip
-pip install -r requirements_server.txt
+# AMD (ROCm): install the ROCm torch FIRST, then the ROCm deps (see §2.3):
+pip install --index-url https://download.pytorch.org/whl/rocm6.3 torch torchvision
+pip install -r requirements-rocm.txt
+#   …or non-AMD (CPU/CUDA/Mac):  pip install -r requirements_server.txt
 
 cd Code/Server
 python main_server.py --mode live --nav predictive          # live (real robot)
 python main_server.py --mode demo --nav predictive           # demo (video file)
-#   flags: --nav baseline (reactive only) · --video <path> · --no-display (headless)
+#   flags: --nav baseline · --video <path> · --no-display (headless) · --ai-start
 ```
+Then run the viewer in a second terminal (`python Code/Client/ai_viewer.py`, §4.2) or open the browser UI.
+</details>
 
 ### 2.3 · GPU & device notes
 
