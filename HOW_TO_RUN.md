@@ -71,12 +71,16 @@ docker run --rm --privileged \
   --device /dev/media0:/dev/media0 --device /dev/media1:/dev/media1 \
   --device /dev/gpiochip0:/dev/gpiochip0 --device /dev/gpiochip0:/dev/gpiochip4 \
   -v /run/udev:/run/udev:ro \
+  -v /dev/dma_heap:/dev/dma_heap \
   -e SERVER_IP=<PC_IP> \
   nav-robot
 ```
 
 `-v /run/udev` **and** the `/dev/media*` devices are what let libcamera find the CSI
-camera; both gpiochip maps are required (RP1 is gpiochip0, lgpio also probes 4).
+camera; both gpiochip maps are required (RP1 is gpiochip0, lgpio also probes 4). The
+`-v /dev/dma_heap` mount gives picamera2 the proper cached buffers — without it the
+stream can **stall/freeze** after a while (limited buffer pool). `compose` mounts all
+of these for you.
 </details>
 
 - **Success:** no `Device or resource busy` / `GPIO busy`, and the **server** log
@@ -475,8 +479,9 @@ SERVER_IP=192.168.1.42 docker compose -f docker-compose.robot.yml up --build
 
 # Equivalent single docker run (Pi 5) — replace 192.168.1.42 with your PC's IP.
 # BOTH gpiochip mappings are required (RP1 is gpiochip0 but lgpio also probes 4),
-# and -v /run/udev is required for libcamera to find the CSI camera.
-docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpiochip0:/dev/gpiochip0 --device /dev/gpiochip0:/dev/gpiochip4 -v /run/udev:/run/udev:ro -e SERVER_IP=192.168.1.42 nav-robot
+# -v /run/udev is required for libcamera to find the CSI camera, and
+# -v /dev/dma_heap gives picamera2 the cached buffers (else the stream can stall).
+docker run --rm --privileged --device /dev/video0:/dev/video0 --device /dev/gpiochip0:/dev/gpiochip0 --device /dev/gpiochip0:/dev/gpiochip4 -v /run/udev:/run/udev:ro -v /dev/dma_heap:/dev/dma_heap -e SERVER_IP=192.168.1.42 nav-robot
 ```
 
 **Operator UI viewer — Streamlit (browser-based, recommended):**

@@ -94,6 +94,24 @@ falls back to OpenCV V4L2 on `/dev/video0`, but the CSI camera generally does
 **not** produce frames through that path — so if the PC log says *"waiting for
 camera frames"*, confirm the udev mount is present.
 
+### Camera stream freezes after a while (`camera frame is stale`)
+
+The PC logs `camera frame is stale – no NEW frame for 3.0s (stream connected but
+not updating)` and the robot appears hung, after streaming fine for a bit. The
+robot's `picamera2` hardware encoder **stalled** on a limited buffer pool — the
+tell is `picamera2: Failed to open /dev/dma_heap/vidbuf_cached` at startup. Fix:
+mount the DMA heap so it uses the proper cached buffers:
+
+```bash
+-v /dev/dma_heap:/dev/dma_heap        # add to docker run (compose mounts it already)
+```
+
+As a safety net, `camera.py` also runs a watchdog that **auto-restarts** the
+backend if no new frame arrives for `camera.stall_timeout_seconds` (default 2.5 s),
+and `get_frame()` reports *no frame* during a stall so the robot never drives on a
+frozen image (the PC watchdog-STOPs until frames resume). If stalls persist even
+with the mount, lower the stream resolution (`camera.stream_width/height`).
+
 ### Camera orientation
 
 The feed is streamed upright by default (no flip), so the UI, V-JEPA 2 and YOLO

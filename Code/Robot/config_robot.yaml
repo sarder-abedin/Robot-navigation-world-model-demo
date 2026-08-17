@@ -29,6 +29,13 @@ camera:
   stream_height: 300
   hflip: false
   vflip: false
+  # Auto-recovery: if the hardware JPEG encoder stops delivering frames for this
+  # long (a picamera2 buffer-pool stall — mount -v /dev/dma_heap:/dev/dma_heap to
+  # avoid it), the camera backend is restarted automatically instead of the stream
+  # silently freezing. get_frame() reports "no frame" during the stall so the PC
+  # watchdog-STOPs the robot rather than driving on a frozen image.
+  stall_timeout_seconds: 2.5      # no new frame for this long → restart the backend
+  watchdog_interval_seconds: 1.0  # how often the watchdog checks for a stall
 
 # ── GPIO chip ─────────────────────────────────────────────────────────────────
 # Pi 5 kernel ≥ 6.6 (pinctrl-rp1): /dev/gpiochip0   ← current default

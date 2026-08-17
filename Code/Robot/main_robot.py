@@ -178,6 +178,9 @@ def main() -> None:
             ),
             hflip=hflip,
             vflip=vflip,
+            # Auto-restart the camera backend if the encoder stalls (frozen stream).
+            stall_timeout_s=cam_cfg.get("stall_timeout_seconds", 2.5),
+            watchdog_interval_s=cam_cfg.get("watchdog_interval_seconds", 1.0),
         )
         try:
             camera.start_stream()
