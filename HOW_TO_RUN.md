@@ -8,6 +8,130 @@ logging. Hit a camera/GPIO/compose snag? See [TROUBLESHOOTING.md](TROUBLESHOOTIN
 
 ---
 
+## Quick start — full system (AMD GPU PC + Pi robot + viewer)
+
+The copy-paste happy path for a real robot with an **AMD/ROCm** server. Three
+devices on the **same network**: the **PC** (AMD GPU) runs *all* the AI, the
+**Raspberry Pi** is a thin client that connects *out* to the PC, and the **viewer**
+is the operator UI. Do the steps **in this order**. (Demo mode, NVIDIA, and the
+Python-venv path are further down.)
+
+### 0 · Find the PC's LAN IP (on the PC)
+
+```bash
+hostname -I | awk '{print $1}'      # e.g. 192.168.68.114 — call this <PC_IP>
+```
+
+### 1 · Start the server (PC, AMD GPU / ROCm)
+
+Build once, then run in **live** mode. ⚠️ The image defaults to *demo* mode, which
+needs a bundled video and dies with `Cannot open demo video` — for a real robot you
+**must** pass `-e NAV_MODE=live`:
+
+```bash
+docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/rocm6.3 \
+             -f Dockerfile.server -t nav-server-rocm .
+
+docker run --rm --device=/dev/kfd --device=/dev/dri --group-add video \
+  --security-opt seccomp=unconfined \
+  -e NAV_MODE=live \
+  -v hf-cache:/root/.cache/huggingface \
+  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
+  nav-server-rocm
+```
+
+- `-e NAV_MODE=live` — wait for the robot instead of opening a demo video.
+- `-v hf-cache:…` — the model weights (V-JEPA 2 / Depth / SSv2, a few hundred MB)
+  download **once** and persist, instead of re-downloading every `--rm` run.
+- **Confirm the GPU:** the logs show `V-JEPA 2 loaded: … on cuda (bfloat16)`. `cuda`
+  is your Radeon (ROCm reports as CUDA); `bfloat16` means the memory-safe path is on.
+  In another terminal, `rocm-smi` shows VRAM/utilisation rising during inference.
+- First run downloads the models (a few minutes); then the server **waits for the Pi**.
+
+### 2 · Start the robot (Raspberry Pi)
+
+Only **one** process may hold the camera + GPIO at a time. Sanity-check the camera on
+the Pi host first:
+
+```bash
+rpicam-hello --list-cameras     # should list your camera (e.g. ov5647)
+```
+
+Then start the client — compose mounts the camera, media nodes, GPIO **and** udev:
+
+```bash
+SERVER_IP=<PC_IP> docker compose -f docker-compose.robot.yml up
+```
+
+<details><summary>Equivalent single <code>docker run</code></summary>
+
+```bash
+docker run --rm --privileged \
+  --device /dev/video0:/dev/video0 \
+  --device /dev/media0:/dev/media0 --device /dev/media1:/dev/media1 \
+  --device /dev/gpiochip0:/dev/gpiochip0 --device /dev/gpiochip0:/dev/gpiochip4 \
+  -v /run/udev:/run/udev:ro \
+  -e SERVER_IP=<PC_IP> \
+  nav-robot
+```
+
+`-v /run/udev` **and** the `/dev/media*` devices are what let libcamera find the CSI
+camera; both gpiochip maps are required (RP1 is gpiochip0, lgpio also probes 4).
+</details>
+
+- **Success:** no `Device or resource busy` / `GPIO busy`, and the **server** log
+  starts printing detections/scene lines.
+- **`busy`?** Another robot container is still running. Stop it and retry:
+  ```bash
+  docker rm -f $(docker ps -q --filter ancestor=nav-robot)   # then re-run step 2
+  ```
+
+### 3 · Start the viewer
+
+Pick **one**. The **PyQt viewer** is the one with the live **world map + V-JEPA 2
+foresight**; the browser UI is display-only.
+
+**A · Browser (no install):** open `http://<PC_IP>:8501`.
+
+**B · PyQt viewer (`ai_viewer.py`) — full maps:**
+
+```bash
+cd Code/Client
+pip install -r ../../requirements_client.txt      # opencv-python-headless, PyQt5, …
+python3 ai_viewer.py
+```
+
+- **Linux/Wayland:** if it aborts with `Could not load the Qt platform plugin "xcb"`,
+  run it on Wayland instead (fastest fix):
+  ```bash
+  QT_QPA_PLATFORM=wayland python3 ai_viewer.py
+  # make it permanent:  echo 'export QT_QPA_PLATFORM=wayland' >> ~/.bashrc
+  ```
+  (To use xcb instead, install the X libs — see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).)
+- In the window, set **PC Server IP** — `127.0.0.1` if the viewer runs **on** the
+  server PC, otherwise `<PC_IP>` — and click **Connect**.
+
+### 4 · Drive (in the viewer)
+
+The **PREDICTIVE / BASELINE** buttons stay greyed until you pick a Navigation Mode —
+that's the safety gate, not a bug.
+
+| To do this | Click, in order |
+|---|---|
+| **Obstacle Avoidance** (wander, avoid obstacles) | *Obstacle Avoidance* radio → **PREDICTIVE** |
+| **Goal Following** (drive to a point) | *Goal Following* radio → **Set Goal** → click a point on the video → **PREDICTIVE** |
+| **Manual** (you drive) | **MANUAL** → arrow keys / on-screen D-pad (Full/Slow speed) |
+| **Emergency stop** (anytime) | **Space** or **Esc** |
+
+Watch the two maps below the video: the **local** map (instant depth/sonar/goal) and
+the **world** map (accumulating trajectory + ultrasonic + YOLO objects + V-JEPA 2
+foresight diamonds; **Reset trail** clears it).
+
+> The video is black until the robot streams frames (step 2). With no frames the AI
+> has nothing to act on and won't drive — so if it "does nothing", check the robot.
+
+---
+
 ## Setup
 
 ### PC / Laptop (TCP server – binds ports 5003/5004/8003/8004)
@@ -93,8 +217,12 @@ macOS/Windows):
    ```bash
    docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/rocm6.3 \
                 -f Dockerfile.server -t nav-server-rocm .
+   # Add -e NAV_MODE=live for a real robot (default is demo, which needs a video),
+   # and -v hf-cache:… so the weights download only once. See the Quick start above.
    docker run --rm --device=/dev/kfd --device=/dev/dri --group-add video \
-              --security-opt seccomp=unconfined -p 5003:5003 -p 8003:8003 \
+              --security-opt seccomp=unconfined -e NAV_MODE=live \
+              -v hf-cache:/root/.cache/huggingface \
+              -p 5003:5003 -p 8003:8003 \
               -p 5004:5004 -p 8004:8004 -p 8501:8501 nav-server-rocm
    ```
    (If the base image lacks ROCm userspace, base it on `rocm/pytorch` instead.)

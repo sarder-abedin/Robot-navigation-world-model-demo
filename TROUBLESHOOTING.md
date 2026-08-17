@@ -57,6 +57,33 @@ Note that a Docker container **on a Mac** has no Metal passthrough, so it stays 
 (`python main_server.py …`). Force a device by setting `world_model.device` /
 `ssv2.device` to `cuda`/`mps`/`cpu`.
 
+### PyQt viewer won't start — "Could not load the Qt platform plugin"
+
+Running `ai_viewer.py` on Linux can abort two ways:
+
+1. **`… plugin "xcb" in ".../cv2/qt/plugins"`** — the *full* `opencv-python` bundles
+   its own Qt plugins, which clash with PyQt5. Fix: use the headless build (already
+   pinned in `requirements_client.txt`):
+   ```bash
+   pip uninstall -y opencv-python && pip install opencv-python-headless
+   ```
+2. **`… plugin "xcb" in ""` even though it was found** — cv2 is out of the way, but
+   PyQt5's xcb plugin is missing a system X library. On a **Wayland** desktop the
+   quickest fix is to skip xcb entirely:
+   ```bash
+   QT_QPA_PLATFORM=wayland python3 ai_viewer.py
+   # permanent:  echo 'export QT_QPA_PLATFORM=wayland' >> ~/.bashrc
+   ```
+   To use xcb (via XWayland) instead, install the X libs:
+   ```bash
+   sudo apt install -y libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+     libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 \
+     libxcb-util1 libxkbcommon-x11-0
+   ```
+   Pinpoint the exact missing lib with `QT_DEBUG_PLUGINS=1 python3 ai_viewer.py`.
+
+Don't need the desktop window? The browser UI (`http://<PC_IP>:8501`) needs none of this.
+
 ### Camera (CSI) — udev mount
 
 The container uses **picamera2/libcamera** to drive the Pi CSI camera (same stack
