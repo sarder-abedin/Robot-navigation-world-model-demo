@@ -47,8 +47,31 @@ docker run --rm -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501
 # Then open http://localhost:8501 → enter "localhost" as server IP → Connect
 ```
 
-For live mode, the native venv path, GPU builds and the full Docker flags, see
-**[HOW_TO_RUN.md](HOW_TO_RUN.md)**.
+Live mode on an **AMD GPU (ROCm)** — the full server command with a real robot:
+
+```bash
+# Build the ROCm image (use the wheel index matching your ROCm; see HOW_TO_RUN.md):
+docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/rocm6.3 \
+             -f Dockerfile.server -t nav-server-rocm .
+
+docker run --rm \
+  --device=/dev/kfd --device=/dev/dri --group-add video \
+  --security-opt seccomp=unconfined \
+  -e NAV_MODE=live \
+  -e TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 \
+  -v hf-cache:/root/.cache/huggingface \
+  -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
+  nav-server-rocm
+```
+
+- `-e NAV_MODE=live` — wait for the robot (the default *demo* mode needs a bundled video).
+- `-e TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1` — enables the memory-efficient SDPA
+  kernels so V-JEPA 2 doesn't OOM on the Radeon (baked into the image; explicit here for
+  older images). If AOTriton isn't available for your card it falls back to CPU, not a crash.
+- `-v hf-cache:…` — weights download once instead of every `--rm` run.
+
+For the Raspberry Pi robot command, the native venv path, NVIDIA/CUDA, and every
+flag explained, see **[HOW_TO_RUN.md](HOW_TO_RUN.md)**.
 
 ## First-run checklist
 
