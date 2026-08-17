@@ -151,6 +151,41 @@ and the motor gets a hard `0 → drive` step. (An earlier default of `0.35` was
 lower `speed_full`, and check the Pi's 5 V power path and the motor-wire routing
 (motor EMI near the Wi-Fi antenna / camera ribbon can also drop the link).
 
+### Undervoltage / power warning (Pi) — a real cause of camera stalls
+
+A Pi **undervoltage warning is not cosmetic** — when the Pi browns out it throttles
+the CPU, caps peripheral current, and can **glitch the CSI camera pipeline**, so
+frames stop, the PC logs `camera frame is stale`, and the camera watchdog restarts
+(and keeps restarting while the power sags). The classic trigger on a robot is the
+motors: **motor current spike → the shared battery rail sags → the Pi browns out**,
+so the stalls cluster around driving/`REROUTE` bursts, not when it sits still.
+
+A "full" battery can still cause this — voltage-full ≠ able to deliver the current;
+the motor inrush drops the rail regardless of charge.
+
+**Confirm it** (on the Pi, ideally while it's driving):
+
+```bash
+vcgencmd get_throttled                    # 0x0 = fine; non-zero = a power/thermal event
+dmesg | grep -i -E 'voltage|throttl'      # look for "Undervoltage detected!"
+watch -n0.5 vcgencmd get_throttled        # watch it flip while the motors move
+```
+
+Decode the hex bits: `0x1` under-voltage **now** · `0x4` throttled now ·
+`0x10000` under-voltage **has occurred** · `0x40000` throttling has occurred
+(e.g. `0x50000` = under-voltage + throttling since boot → power problem confirmed).
+
+**Fix (hardware):** give the **Pi its own regulated 5 V / 5 A** rail, separate from
+the motor pack (a dedicated 5 A UBEC/buck off the battery, not shared with the
+motors). Pi 5 wants a 5 V/5 A (27 W) source. If you must share the rail, add a large
+capacitor (≈1000–4700 µF) across the Pi's 5 V to ride out the inrush, and/or lower
+`robot.speed_full`.
+
+This is **separate** from the picamera2 buffer-pool stall (see "Camera stream
+freezes" above): the software watchdog restarts the camera either way, but if
+`get_throttled` shows undervoltage, **fixing the power supply is the real fix** — the
+camera can't stay stable on a sagging rail.
+
 ### Compose forwards env vars only if they're declared
 
 With `docker compose`, an inline var like `SPEED_FULL=1500` reaches the container
