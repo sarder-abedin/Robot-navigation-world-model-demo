@@ -23,6 +23,15 @@ import os
 
 logger = logging.getLogger(__name__)
 
+# Reduce allocator fragmentation for the big transient activations (V-JEPA 2's
+# masked attention). `expandable_segments` lets the caching allocator grow an
+# existing segment instead of failing when free memory is fragmented — exactly the
+# hint printed in the HIP/CUDA OOM message ("try setting expandable_segments:True").
+# Set for both HIP (ROCm) and CUDA; harmless on CPU. Must be set before the first
+# CUDA/HIP allocation, and via setdefault so an explicit user value still wins.
+os.environ.setdefault("PYTORCH_HIP_ALLOC_CONF", "expandable_segments:True")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 
 def _is_available(name: str) -> bool:
     import torch  # type: ignore
@@ -78,3 +87,50 @@ def resolve_device(preference: str = "auto"):
 
 def is_gpu(name: str) -> bool:
     return name in ("cuda", "mps")
+
+
+def resolve_dtype(precision: str, device_name: str):
+    """Pick the autocast compute dtype for the heavy models.
+
+    precision: "bf16" | "fp16" | "fp32" (case-insensitive; default bf16).
+    Half precision is only applied on CUDA/ROCm — that's where it both halves the
+    activation memory (fixing the V-JEPA 2 attention OOM) and speeds inference up.
+    CPU and MPS keep float32: bf16/fp16 are unsupported or slow there, and CPU is
+    only ever the OOM-fallback path where correctness matters more than speed.
+    Returns a torch.dtype.
+    """
+    import torch  # type: ignore
+    p = (precision or "bf16").strip().lower()
+    if device_name != "cuda":
+        return torch.float32
+    if p in ("fp16", "float16", "half", "16"):
+        return torch.float16
+    if p in ("fp32", "float32", "full", "32", "none"):
+        return torch.float32
+    return torch.bfloat16      # default / "bf16"
+
+
+def autocast_ctx(device_name: str, dtype):
+    """Return a torch.autocast context for CUDA half precision, else a no-op.
+
+    Wrapping a forward in this runs its ops in bf16/fp16 on the GPU (half the
+    activation memory, ~2× faster) while leaving the stored weights in fp32, so
+    the CPU OOM-fallback path needs no dtype juggling."""
+    import contextlib
+    import torch  # type: ignore
+    if device_name == "cuda" and dtype in (torch.float16, torch.bfloat16):
+        return torch.autocast(device_type="cuda", dtype=dtype)
+    return contextlib.nullcontext()
+
+
+def is_oom_error(exc: BaseException) -> bool:
+    """True if exc is a CUDA/ROCm out-of-memory error (version-robust).
+
+    torch.cuda.OutOfMemoryError exists on newer torch and is raised for HIP OOM
+    too; on older builds an OOM surfaces as a plain RuntimeError whose message
+    contains 'out of memory', so fall back to a string check."""
+    import torch  # type: ignore
+    oom_cls = getattr(torch.cuda, "OutOfMemoryError", ())
+    if isinstance(exc, oom_cls):
+        return True
+    return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()

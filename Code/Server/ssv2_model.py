@@ -82,6 +82,7 @@ class SSv2Recognizer:
         self._model_id = ssv2_cfg.get("model_id", "MCG-NJU/videomae-base-finetuned-ssv2")
         self._num_frames = int(ssv2_cfg.get("num_frames", 16))
         self._device_str = ssv2_cfg.get("device", "cpu")
+        self._precision = ssv2_cfg.get("precision", "bf16")   # GPU compute dtype
         self._run_every = max(1, int(ssv2_cfg.get("run_every_n_frames", 16)))
         # Noun used to fill the "something" slot when YOLO has no named object
         # (a wall, or nothing detected this frame), so the caption never leaks the
@@ -93,6 +94,8 @@ class SSv2Recognizer:
         self._processor = None
         self._id2label: dict[int, str] = {}
         self._device = None
+        self._device_name = "cpu"
+        self._amp_dtype = None        # autocast compute dtype (GPU only)
         self._call_count = 0
         self._last = SSv2Result()
 
@@ -109,13 +112,19 @@ class SSv2Recognizer:
                 VideoMAEForVideoClassification,
                 VideoMAEImageProcessor,
             )
-            from device_utils import is_gpu, resolve_device
+            from device_utils import is_gpu, resolve_device, resolve_dtype
             self._device, dev_name = resolve_device(self._device_str)
+            self._device_name = dev_name
+            self._amp_dtype = resolve_dtype(self._precision, dev_name)
             # Classify more often when a GPU is available (cheap), less on CPU.
             if is_gpu(dev_name):
                 self._run_every = max(1, self._run_every // 2)
             self._processor = VideoMAEImageProcessor.from_pretrained(self._model_id)
-            self._model = VideoMAEForVideoClassification.from_pretrained(self._model_id)
+            kwargs = {"attn_implementation": "sdpa"} if is_gpu(dev_name) else {}
+            try:
+                self._model = VideoMAEForVideoClassification.from_pretrained(self._model_id, **kwargs)
+            except (TypeError, ValueError, KeyError, ImportError):
+                self._model = VideoMAEForVideoClassification.from_pretrained(self._model_id)
             self._model.to(self._device)
             self._model.eval()
             self._id2label = dict(self._model.config.id2label)
@@ -188,13 +197,14 @@ class SSv2Recognizer:
 
     def _classify(self, clip: list[np.ndarray], object_label: str) -> SSv2Result:
         import torch  # type: ignore
+        from device_utils import autocast_ctx
 
         frames = self._sample_frames(clip, self._num_frames)
         inputs = self._processor(frames, return_tensors="pt")
         inputs = {k: v.to(self._device) for k, v in inputs.items()}
-        with torch.no_grad():
+        with torch.no_grad(), autocast_ctx(self._device_name, self._amp_dtype):
             logits = self._model(**inputs).logits
-        probs = torch.softmax(logits, dim=-1)
+        probs = torch.softmax(logits.float(), dim=-1)
         conf, idx = torch.max(probs, dim=-1)
         template = self._id2label.get(int(idx.item()), "UNKNOWN")
         return SSv2Result(
