@@ -135,7 +135,7 @@ class NavMapWidget(QWidget):
         self._model = nav_map.MapModel(max_range_m=max_range_m, fov_deg=fov_deg)
         self._max_range_m = max_range_m
         self._fov_deg = fov_deg
-        self.setMinimumSize(300, 315)
+        self.setMinimumSize(260, 240)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.setToolTip("Local (egocentric) navigation map — robot at bottom, facing up. "
                         "Not a world map (no odometry).")
@@ -284,7 +284,7 @@ class WorldMapWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._m = world_map.WorldModel()
-        self.setMinimumSize(300, 315)
+        self.setMinimumSize(260, 240)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.setToolTip("World-anchored trajectory map (dead-reckoning, no odometry "
                         "→ drifts). Trail = path; red dots = ultrasonic; squares = YOLO "
@@ -458,7 +458,7 @@ class AIViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Freenove Predictive Navigation – AI Viewer")
-        self.resize(720, 800)
+        self.resize(1180, 940)   # wide two-column layout (visuals left, controls right)
 
         self._cmd_sock: socket.socket | None = None
         self._video_sock: socket.socket | None = None
@@ -490,10 +490,12 @@ class AIViewer(QMainWindow):
     # ── UI ─────────────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
-        # Everything lives inside a scroll area, so shrinking the window never
-        # clips or misplaces controls — it just scrolls. A minimum size keeps the
-        # layout from collapsing into an unusable state.
-        self.setMinimumSize(460, 560)
+        # Compact TWO-COLUMN layout — visuals (video + maps) on the left, all the
+        # controls on the right — so the whole UI fits at the default window size
+        # without scrolling (the old single tall column forced a scrollbar). The
+        # scroll area is kept only as a fallback for very small windows; a minimum
+        # size keeps the layout from collapsing into an unusable state.
+        self.setMinimumSize(900, 560)
         central = QWidget()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -501,8 +503,8 @@ class AIViewer(QMainWindow):
         scroll.setFrameShape(QScrollArea.NoFrame)
         self.setCentralWidget(scroll)
         root = QVBoxLayout(central)
-        root.setSpacing(6)
-        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(4)
+        root.setContentsMargins(6, 6, 6, 6)
 
         # ── Quick-start strip: the three steps to drive, so it's obvious what to do
         steps = QLabel("① Connect   →   ② pick a Navigation Mode   →   "
@@ -526,9 +528,21 @@ class AIViewer(QMainWindow):
         conn_row.addStretch()
         root.addLayout(conn_row)
 
+        # ── Two-column body: visuals (video + maps) on the LEFT, all controls on
+        # the RIGHT, so the whole UI fits on a normal screen without scrolling. ──
+        body = QHBoxLayout()
+        body.setSpacing(10)
+        left_col = QVBoxLayout()
+        left_col.setSpacing(6)
+        right_col = QVBoxLayout()
+        right_col.setSpacing(6)
+        body.addLayout(left_col, 1)     # visuals take the extra width (maps grow)
+        body.addLayout(right_col, 0)    # controls stay compact
+        root.addLayout(body, 1)
+
         # ── Video display ─────────────────────────────────────────────────────
         self._video_label = QLabel("[ No video – connect to server ]")
-        self._video_label.setFixedSize(420, 315)
+        self._video_label.setFixedSize(400, 300)
         self._video_label.setAlignment(Qt.AlignCenter)
         self._video_label.setStyleSheet(
             "background:#1a1a1a; border:1px solid #555; color:#666;"
@@ -539,24 +553,24 @@ class AIViewer(QMainWindow):
         self._pix_w = 0   # size of the last displayed pixmap (for click→image mapping)
         self._pix_h = 0
 
-        # Video + live 2D navigation map, side by side.
+        # Left column: video on top, then the local + world maps SIDE BY SIDE
+        # below it (was a tall stacked layout that forced scrolling).
         self._map = NavMapWidget()
-        self._map.setFixedHeight(315)
-        video_row = QHBoxLayout()
-        video_row.addStretch(1)
-        video_row.addWidget(self._video_label)
-        video_row.addWidget(self._map, 1)
-        video_row.addStretch(1)
-        root.addLayout(video_row)
-
-        # World-anchored trajectory map (accumulating; dead-reckoned pose).
+        self._map.setMinimumHeight(250)
         self._world_map = WorldMapWidget()
-        self._world_map.setFixedHeight(315)
-        world_row = QHBoxLayout()
-        world_row.addStretch(1)
-        world_row.addWidget(self._world_map, 1)
-        world_row.addStretch(1)
-        root.addLayout(world_row)
+        self._world_map.setMinimumHeight(250)
+
+        vid_row = QHBoxLayout()
+        vid_row.addStretch(1)
+        vid_row.addWidget(self._video_label)
+        vid_row.addStretch(1)
+        left_col.addLayout(vid_row)
+
+        maps_row = QHBoxLayout()
+        maps_row.setSpacing(6)
+        maps_row.addWidget(self._map, 1)          # local (egocentric)
+        maps_row.addWidget(self._world_map, 1)    # world-anchored trajectory
+        left_col.addLayout(maps_row, 1)
 
         map_row = QHBoxLayout()
         self._chk_map = QCheckBox("Show local map")
@@ -576,10 +590,10 @@ class AIViewer(QMainWindow):
         map_row.addWidget(self._chk_world)
         map_row.addWidget(self._btn_reset_map)
         map_row.addStretch(1)
-        root.addLayout(map_row)
+        left_col.addLayout(map_row)
 
         # ── Navigation Mode: pick one on connect (nothing pre-selected) ───────
-        navmode_box = QGroupBox("Navigation Mode  ·  what the AI should do (pick one to begin)")
+        navmode_box = QGroupBox("Navigation Mode")
         navmode_col = QVBoxLayout(navmode_box)
         navmode_row = QHBoxLayout()
         self._radio_avoid = QRadioButton("Obstacle Avoidance")
@@ -592,14 +606,14 @@ class AIViewer(QMainWindow):
         navmode_row.addWidget(self._radio_avoid)
         navmode_row.addWidget(self._radio_goal)
         navmode_col.addLayout(navmode_row)
-        self._navmode_hint = QLabel("Pick a mode to enable AI.  (Manual driving is available now.)")
+        self._navmode_hint = QLabel("Pick a mode to enable AI (MANUAL works now).")
         self._navmode_hint.setAlignment(Qt.AlignCenter)
         self._navmode_hint.setStyleSheet("color:#e0a000;")
         navmode_col.addWidget(self._navmode_hint)
-        root.addWidget(navmode_box)
+        right_col.addWidget(navmode_box)
 
         # ── Goal point (Goal-Following mode only) ─────────────────────────────
-        self._goal_box = QGroupBox("Navigation Goal  (click the video, then activate AI)")
+        self._goal_box = QGroupBox("Navigation Goal")
         goal_col = QVBoxLayout(self._goal_box)
         goal_row = QHBoxLayout()
         self._btn_set_goal = QPushButton("🎯  Set Goal (click video)")
@@ -616,25 +630,21 @@ class AIViewer(QMainWindow):
         self._goal_status_lbl = QLabel("")
         self._goal_status_lbl.setAlignment(Qt.AlignCenter)
         goal_col.addWidget(self._goal_status_lbl)
-        root.addWidget(self._goal_box)
+        right_col.addWidget(self._goal_box)
         self._goal_box.setVisible(False)   # shown only in Goal-Following mode
 
         # ── AI state panel ────────────────────────────────────────────────────
         state_box = QGroupBox("AI State")
         grid = QtWidgets.QGridLayout(state_box)
+        grid.setVerticalSpacing(3)
         grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
 
         self._action_label = self._make_action_label("---")
-        grid.addWidget(QLabel("Action:"),     0, 0)
-        grid.addWidget(self._action_label,    0, 1)
-
         self._risk_bar = QProgressBar()
         self._risk_bar.setRange(0, 100)
         self._risk_bar.setTextVisible(True)
         self._risk_bar.setFormat("Risk: %p%")
-        grid.addWidget(QLabel("Risk:"),       1, 0)
-        grid.addWidget(self._risk_bar,        1, 1)
-
         self._wm_val    = self._make_info_val("UNKNOWN")
         self._pat_val   = self._make_info_val("UNKNOWN")
         self._sonic_val = self._make_info_val("---")
@@ -642,24 +652,22 @@ class AIViewer(QMainWindow):
         self._fps_val   = self._make_info_val("---")
         self._ssv2_val  = self._make_info_val("---")
         self._ssv2_val.setWordWrap(True)
-        grid.addWidget(QLabel("V-JEPA 2:"),   2, 0)
-        grid.addWidget(self._wm_val,           2, 1)
-        grid.addWidget(QLabel("Motion:"),      3, 0)
-        grid.addWidget(self._pat_val,          3, 1)
-        grid.addWidget(QLabel("Sonic:"),       4, 0)
-        grid.addWidget(self._sonic_val,        4, 1)
-        # Moved off the video HUD into this panel (declutter):
-        grid.addWidget(QLabel("Depth:"),       5, 0)
-        grid.addWidget(self._depth_val,        5, 1)
-        grid.addWidget(QLabel("FPS:"),         6, 0)
-        grid.addWidget(self._fps_val,          6, 1)
-        grid.addWidget(QLabel("SSv2:"),        7, 0)
-        grid.addWidget(self._ssv2_val,         7, 1)
 
-        root.addWidget(state_box)
+        # Two label/value pairs per row so the panel is short (was 8 stacked rows).
+        grid.addWidget(QLabel("Action:"),   0, 0); grid.addWidget(self._action_label, 0, 1)
+        grid.addWidget(QLabel("Risk:"),     0, 2); grid.addWidget(self._risk_bar,     0, 3)
+        grid.addWidget(QLabel("V-JEPA 2:"), 1, 0); grid.addWidget(self._wm_val,       1, 1)
+        grid.addWidget(QLabel("Motion:"),   1, 2); grid.addWidget(self._pat_val,      1, 3)
+        grid.addWidget(QLabel("Sonic:"),    2, 0); grid.addWidget(self._sonic_val,    2, 1)
+        grid.addWidget(QLabel("Depth:"),    2, 2); grid.addWidget(self._depth_val,    2, 3)
+        grid.addWidget(QLabel("FPS:"),      3, 0); grid.addWidget(self._fps_val,      3, 1)
+        # SSv2 caption is long → span the full width on its own row.
+        grid.addWidget(QLabel("SSv2:"),     4, 0); grid.addWidget(self._ssv2_val,     4, 1, 1, 3)
+
+        right_col.addWidget(state_box)
 
         # ── AI Model (predictive vs baseline) ─────────────────────────────────
-        mode_box = QGroupBox("AI Model  ·  used while AUTO (predictive = V-JEPA 2, baseline = reactive)")
+        mode_box = QGroupBox("AI Model  (AUTO)")
         mode_row = QHBoxLayout(mode_box)
 
         self._btn_predictive = QPushButton("PREDICTIVE")
@@ -678,14 +686,14 @@ class AIViewer(QMainWindow):
         self._btn_baseline.clicked.connect(lambda: self._send_ai_mode(1))
         mode_row.addWidget(self._btn_baseline)
 
-        root.addWidget(mode_box)
+        right_col.addWidget(mode_box)
 
         # ── Run logging (server-side) ─────────────────────────────────────────
         # Toggles CSV + annotated-frame logging on the PC (CMD_LOGGING#1|0). The
         # data is written on the server (logs_rpi/), not on this UI machine.
-        log_box = QGroupBox("Run Logging  (stored on the server PC)")
+        log_box = QGroupBox("Run Logging")
         log_row = QHBoxLayout(log_box)
-        self._chk_logging = QCheckBox("Record run log (CSV + frames) — on by default")
+        self._chk_logging = QCheckBox("Record run log (on by default)")
         self._chk_logging.setToolTip(
             "Server-side run logging (logs_rpi/ on the PC running main_server.py). "
             "ON by default; untick to stop recording this run."
@@ -695,10 +703,10 @@ class AIViewer(QMainWindow):
         self._chk_logging.setChecked(True)
         self._chk_logging.toggled.connect(self._send_logging)
         log_row.addWidget(self._chk_logging)
-        root.addWidget(log_box)
+        right_col.addWidget(log_box)
 
         # ── Drive Control ─────────────────────────────────────────────────────
-        drive_box = QGroupBox("Drive  ·  AUTO = AI drives, MANUAL = you drive")
+        drive_box = QGroupBox("Drive")
         drive_layout = QVBoxLayout(drive_box)
         drive_layout.setSpacing(4)
 
@@ -739,7 +747,7 @@ class AIViewer(QMainWindow):
         self._btn_right = self._make_drive_btn("►", lambda: self._drive_press("RIGHT"))
         self._btn_drive_stop = QPushButton("■")
         self._btn_drive_stop.setStyleSheet(_DRIVE_STOP_BTN)
-        self._btn_drive_stop.setFixedSize(64, 52)
+        self._btn_drive_stop.setFixedSize(50, 42)
         self._btn_drive_stop.setToolTip("Stop motors")
         self._btn_drive_stop.clicked.connect(self._drive_stop)
         dg.addWidget(self._btn_fwd,        0, 1)
@@ -766,15 +774,10 @@ class AIViewer(QMainWindow):
         speed_row.addStretch(1)
         manual_col.addLayout(speed_row)
 
-        hint = QLabel("Hold ▲▼◄► or the arrow keys to drive · release to stop")
-        hint.setStyleSheet("color:#888; font-size:10px;")
-        hint.setAlignment(Qt.AlignCenter)
-        manual_col.addWidget(hint)
-
         drive_layout.addWidget(self._drive_widget)
         self._drive_widget.setVisible(False)  # hidden in AUTO mode
 
-        root.addWidget(drive_box)
+        right_col.addWidget(drive_box)
 
         # ── Kill switch panel ─────────────────────────────────────────────────
         kill_box = QGroupBox("Kill Switch")
@@ -805,15 +808,11 @@ class AIViewer(QMainWindow):
         )
         self._btn_shutdown.clicked.connect(self._shutdown_server)
         kill_layout.addWidget(self._btn_shutdown)
+        # (The shortcuts are already on the button labels + the status bar, so the
+        # extra hint line is dropped to keep the panel short.)
 
-        hint2 = QLabel(
-            "Space / Esc = emergency stop motors   |   Ctrl+Q = shutdown server"
-        )
-        hint2.setStyleSheet("color:#884444; font-size:10px;")
-        hint2.setAlignment(Qt.AlignCenter)
-        kill_layout.addWidget(hint2)
-
-        root.addWidget(kill_box)
+        right_col.addWidget(kill_box)
+        right_col.addStretch(1)      # keep the controls top-aligned
 
         # ── Status bar ────────────────────────────────────────────────────────
         self._status_bar = QLabel("Not connected – enter the PC server IP and click Connect")
@@ -837,7 +836,7 @@ class AIViewer(QMainWindow):
     def _make_drive_btn(self, symbol: str, slot) -> QPushButton:
         btn = QPushButton(symbol)
         btn.setStyleSheet(_DRIVE_BTN)
-        btn.setFixedSize(64, 52)   # fixed so the D-pad never shrinks/reflows on resize
+        btn.setFixedSize(50, 42)   # fixed so the D-pad never shrinks/reflows on resize
         btn.pressed.connect(slot)
         btn.released.connect(self._drive_stop)
         return btn
