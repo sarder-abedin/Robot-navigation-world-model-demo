@@ -35,7 +35,7 @@ All three devices must be able to reach each other; if the Pi/viewer can't conne
 
 ## 2. Server (PC)
 
-The server runs **either in Docker** (reproducible, recommended) **or in a native venv** (needed for a Mac GPU). Pick one, then run in **demo** (video file) or **live** (real robot) mode.
+The server runs **either natively** (§2.2 — one command via `./start.sh`; recommended while iterating, and required for a Mac GPU) **or in Docker** (§2.1 — reproducible, good for deployment). Pick one, then run in **demo** (video file) or **live** (real robot) mode. GPU/device details (AMD ROCm, NVIDIA, Mac MPS) are in §2.3.
 
 ### 2.1 · Run with Docker
 
@@ -129,7 +129,7 @@ Then run the viewer in a second terminal (`python Code/Client/ai_viewer.py`, §4
 The heavy models (V-JEPA 2, SSv2, depth) read `device:` from `Code/Server/config.yaml`, default **`auto`** = **CUDA/ROCm → MPS → CPU**. Force one with `cuda`/`mps`/`cpu`. The startup line `V-JEPA 2 loaded: … on <device>` confirms the pick.
 
 - **Apple Silicon (MPS):** run **natively** (§2.2), not in Docker. `auto` picks `mps`; the server sets `PYTORCH_ENABLE_MPS_FALLBACK=1` so ops Metal lacks run on CPU. Confirm: `… on mps`.
-- **AMD (ROCm):** ROCm registers as CUDA, so `auto`/`cuda` uses the Radeon with no code change. Install ROCm for your card (RX 9060 XT / RDNA 4 needs **ROCm 7.2+**), add yourself to the GPU groups (`sudo usermod -aG render,video $USER`; reboot). For a native venv, install the ROCm torch first: `pip install --index-url https://download.pytorch.org/whl/rocm6.3 torch torchvision`, then the rest.
+- **AMD (ROCm):** ROCm registers as CUDA, so `auto`/`cuda` uses the Radeon with no code change. Install ROCm for your card (RX 9060 XT / RDNA 4 needs **ROCm 7.2+**), add yourself to the GPU groups (`sudo usermod -aG render,video $USER`; reboot). Then **`./start.sh`** installs everything for you (it detects the Radeon and picks the ROCm torch); to install by hand, do the ROCm torch **first** so PyPI can't override it: `pip install --index-url https://download.pytorch.org/whl/rocm6.3 torch torchvision` then `pip install -r requirements-rocm.txt`.
   - **`TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1` is important.** PyTorch ships the memory-efficient SDPA kernels **disabled** on AMD, so V-JEPA 2's attention falls back to the math backend that materialises the full N×N matrix and **OOMs a 16 GB card**. The repo sets this env for you (Dockerfile `ENV` + `device_utils`); pass `-e TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1` explicitly on an older image. **If AOTriton isn't available for your card, the forward falls back to CPU (slower) — never a crash.** Confirm: `… on cuda (bfloat16)` and **no** `ran out of GPU memory`.
   - If `torch.cuda.is_available()` is `False`, set `HSA_OVERRIDE_GFX_VERSION=12.0.0` (RDNA 4 = gfx12); usually unnecessary on native ROCm 7.2.
 - **NVIDIA (CUDA):** `auto` selects CUDA. In Docker, build the CUDA variant (§2.1) and run with `--gpus all` (needs the nvidia-container-toolkit).
