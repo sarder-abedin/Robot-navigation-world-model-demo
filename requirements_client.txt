@@ -10,15 +10,27 @@ streamlit>=1.37.0                # streamlit_viewer.py — opens http://localhos
 # ── Native desktop window option ─────────────────────────────────────────────
 # desktop_viewer.py wraps the Streamlit UI in an OS-native window via pywebview.
 #   macOS / Windows: works out of the box (Cocoa / EdgeChromium).
-#   Linux: also install a system webview backend, e.g.
-#     sudo apt-get install -y python3-gi gir1.2-webkit2-4.1     (GTK backend)
+#   Linux: pywebview needs a webview backend that a plain pip install does NOT
+#   provide, so `python desktop_viewer.py` fails with "You must have either QT or
+#   GTK …". Add ONE backend:
+#     • Qt (works inside a venv):  pip install qtpy PyQtWebEngine
+#     • GTK (system, needs --system-site-packages venv):
+#         sudo apt-get install -y python3-gi gir1.2-webkit2-4.1
+#   Or just skip desktop_viewer and use the browser (http://<PC_IP>:8501) or the
+#   PyQt ai_viewer.py — neither needs a pywebview backend.
 pywebview>=5.0
 
 # ── PyQt5 desktop viewer (alternative native UI: ai_viewer.py) ────────────────
 PyQt5>=5.15.0
 
 # ── Video decode / arrays / config ────────────────────────────────────────────
-opencv-python>=4.8.0             # cv2 — decode the annotated JPEG stream
+# HEADLESS on purpose: the client only uses cv2 to DECODE frames (imdecode /
+# cvtColor), never to open a window. The full `opencv-python` bundles its own Qt
+# plugins, which clash with PyQt5's Qt — Qt then tries to load its xcb platform
+# plugin from cv2/qt/plugins and aborts ("Could not load the Qt platform plugin
+# 'xcb'"), so ai_viewer.py won't start. The headless build ships no Qt plugins and
+# avoids the conflict entirely. Do NOT switch this back to opencv-python.
+opencv-python-headless>=4.8.0    # cv2 — decode the annotated JPEG stream (no Qt plugins)
 numpy>=1.24.0
 Pillow>=10.0.0
 pyyaml>=6.0.0
