@@ -110,6 +110,13 @@ RUN pip install --upgrade pip && \
 
 WORKDIR /app/Code/Server
 
+# AMD/ROCm: enable the memory-efficient (AOTriton) SDPA kernels, which PyTorch
+# ships DISABLED by default on Radeon. Without this, V-JEPA 2's attention falls
+# back to the math backend that materialises the full N×N matrix and OOMs a 16 GB
+# card; with it the fused kernels keep the masked forward on the GPU. No-op on
+# CUDA/CPU. (device_utils also sets this at import as a fallback.)
+ENV TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+
 # UI viewer ports, robot connection ports, and Streamlit browser UI port
 EXPOSE 5003 8003 5004 8004 8501
 

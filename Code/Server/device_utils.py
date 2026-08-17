@@ -29,8 +29,19 @@ logger = logging.getLogger(__name__)
 # hint printed in the HIP/CUDA OOM message ("try setting expandable_segments:True").
 # Set for both HIP (ROCm) and CUDA; harmless on CPU. Must be set before the first
 # CUDA/HIP allocation, and via setdefault so an explicit user value still wins.
+# (On some ROCm builds expandable_segments is unsupported and simply ignored with a
+# one-line warning — that's fine.)
 os.environ.setdefault("PYTORCH_HIP_ALLOC_CONF", "expandable_segments:True")
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+# THE ROCm fix for V-JEPA 2's OOM: on AMD GPUs PyTorch's scaled_dot_product_attention
+# ships the memory-efficient / flash kernels (AOTriton) DISABLED by default, so even
+# with attn_implementation="sdpa" it falls back to the *math* backend, which
+# materialises the full N×N attention matrix — the multi-GiB spike that OOMs V-JEPA 2
+# (ViT-L over a 64-frame clip). Enabling AOTriton makes SDPA use the real fused
+# kernels (no N×N materialisation), so the masked forward fits on the GPU. Ignored on
+# CUDA/CPU. setdefault so an explicit user value wins. Must precede the first HIP use.
+os.environ.setdefault("TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL", "1")
 
 
 def _is_available(name: str) -> bool:
