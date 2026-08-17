@@ -458,7 +458,7 @@ class AIViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Freenove Predictive Navigation – AI Viewer")
-        self.resize(1180, 940)   # wide two-column layout (visuals left, controls right)
+        self.resize(1180, 800)   # wide two-column layout (visuals left, controls right)
 
         self._cmd_sock: socket.socket | None = None
         self._video_sock: socket.socket | None = None
@@ -554,11 +554,13 @@ class AIViewer(QMainWindow):
         self._pix_h = 0
 
         # Left column: video on top, then the local + world maps SIDE BY SIDE
-        # below it (was a tall stacked layout that forced scrolling).
+        # below it (was a tall stacked layout that forced scrolling). The maps get
+        # a COMPACT fixed height so they don't balloon into big (mostly-black)
+        # boxes when the window is tall.
         self._map = NavMapWidget()
-        self._map.setMinimumHeight(250)
+        self._map.setFixedHeight(250)
         self._world_map = WorldMapWidget()
-        self._world_map.setMinimumHeight(250)
+        self._world_map.setFixedHeight(250)
 
         vid_row = QHBoxLayout()
         vid_row.addStretch(1)
@@ -570,7 +572,7 @@ class AIViewer(QMainWindow):
         maps_row.setSpacing(6)
         maps_row.addWidget(self._map, 1)          # local (egocentric)
         maps_row.addWidget(self._world_map, 1)    # world-anchored trajectory
-        left_col.addLayout(maps_row, 1)
+        left_col.addLayout(maps_row)
 
         map_row = QHBoxLayout()
         self._chk_map = QCheckBox("Show local map")
@@ -591,6 +593,7 @@ class AIViewer(QMainWindow):
         map_row.addWidget(self._btn_reset_map)
         map_row.addStretch(1)
         left_col.addLayout(map_row)
+        left_col.addStretch(1)     # keep the visuals top-aligned (gray gap, not big maps)
 
         # ── Navigation Mode: pick one on connect (nothing pre-selected) ───────
         navmode_box = QGroupBox("Navigation Mode")
