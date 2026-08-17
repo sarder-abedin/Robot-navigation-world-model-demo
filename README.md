@@ -47,7 +47,16 @@ docker run --rm -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501
 # Then open http://localhost:8501 → enter "localhost" as server IP → Connect
 ```
 
-Live mode on an **AMD GPU (ROCm)** — the full server command with a real robot:
+Native, one command (recommended when **iterating**, and required for a **Mac GPU**) —
+`./start.sh` sets up a venv on first run (auto-picking **ROCm** torch if a Radeon is
+present, else CPU/CUDA), then launches the AI server **and** the PyQt viewer together:
+
+```bash
+./start.sh                 # first run: setup + live server + PyQt viewer (world map)
+./start.sh --demo          # demo mode  ·  --nav baseline  ·  --no-ui  ·  --setup
+```
+
+Live mode on an **AMD GPU (ROCm)** in Docker — the full server command with a real robot:
 
 ```bash
 # Build the ROCm image (use the wheel index matching your ROCm; see HOW_TO_RUN.md):
@@ -78,7 +87,7 @@ flag explained, see **[HOW_TO_RUN.md](HOW_TO_RUN.md)**.
 
 ## First-run checklist
 
-1. **Install/build** — server deps in a venv on the PC (`pip install -r requirements_server.txt`); build the robot image on the Pi. → [HOW_TO_RUN.md](HOW_TO_RUN.md)
+1. **Install/build** — on the PC, run the server natively with `./start.sh` (sets up the venv + deps, auto-picking ROCm/CPU torch) or in Docker; build the robot image on the Pi. → [HOW_TO_RUN.md](HOW_TO_RUN.md)
 2. **Smoke-test in demo mode** (no robot): run the server `--mode demo`, open the UI, confirm annotated video + risk/action HUD. → [HOW_TO_RUN.md](HOW_TO_RUN.md)
 3. **Go live**: start the server (natively on a Mac for MPS), start the Pi client (`docker compose -f docker-compose.robot.yml up --build`), confirm the UI shows live video and a *changing* ultrasonic value. → [HOW_TO_RUN.md](HOW_TO_RUN.md)
 4. **Calibrate** (in order: V-JEPA 2 anchors → depth scale → speed governor). Anchors are the biggest quality win; depth scale + governor make the absolute distances/speeds real. Full step-by-step in **[CALIBRATION.md](CALIBRATION.md)**.
