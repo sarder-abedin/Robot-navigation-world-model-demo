@@ -88,6 +88,7 @@ class DepthEstimator:
         self._enabled = bool(d.get("enabled", True))
         self._model_id = d.get("model_id", "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf")
         self._device_str = d.get("device", "auto")
+        self._precision = d.get("precision", "bf16")   # GPU compute dtype (bf16/fp16/fp32)
         self._run_every = max(1, int(d.get("run_every_n_frames", 6)))
         self._max_range_m = float(d.get("max_range_m", 5.0))
         self._near_pct = float(d.get("near_percentile", 15.0))
@@ -101,6 +102,8 @@ class DepthEstimator:
         self._model = None
         self._processor = None
         self._device = None
+        self._device_name = "cpu"
+        self._amp_dtype = None        # autocast compute dtype (GPU only)
         self._call_count = 0
         self._last = DepthResult()
         self._last_depth_map = None   # cached metric HxW map for per-pixel sampling
@@ -116,17 +119,26 @@ class DepthEstimator:
                 AutoImageProcessor,
                 AutoModelForDepthEstimation,
             )
-            from device_utils import is_gpu, resolve_device
+            from device_utils import is_gpu, resolve_device, resolve_dtype
             self._device, dev_name = resolve_device(self._device_str)
+            self._device_name = dev_name
+            self._amp_dtype = resolve_dtype(self._precision, dev_name)
             if not is_gpu(dev_name):
                 # Depth on CPU is slow; run it less often.
                 self._run_every = max(self._run_every, 12)
             self._processor = AutoImageProcessor.from_pretrained(self._model_id)
-            self._model = AutoModelForDepthEstimation.from_pretrained(self._model_id)
+            # Memory-efficient attention on GPU (best-effort; older builds ignore it).
+            kwargs = {"attn_implementation": "sdpa"} if is_gpu(dev_name) else {}
+            try:
+                self._model = AutoModelForDepthEstimation.from_pretrained(self._model_id, **kwargs)
+            except (TypeError, ValueError, KeyError, ImportError):
+                self._model = AutoModelForDepthEstimation.from_pretrained(self._model_id)
             self._model.to(self._device)
             self._model.eval()
-            logger.info("Depth model loaded: %s on %s (every %d frames)",
-                        self._model_id, dev_name, self._run_every)
+            logger.info("Depth model loaded: %s on %s (%s, every %d frames)",
+                        self._model_id, dev_name,
+                        str(self._amp_dtype).replace("torch.", "") if is_gpu(dev_name) else "fp32",
+                        self._run_every)
         except Exception as exc:
             logger.warning("Depth model unavailable (%s) – depth channel off "
                            "(ultrasonic + V-JEPA 2 still active)", exc)
@@ -174,10 +186,12 @@ class DepthEstimator:
 
     def _infer_depth_m(self, frame_rgb: np.ndarray) -> np.ndarray:
         import torch
+        from device_utils import autocast_ctx
         inputs = self._processor(images=frame_rgb, return_tensors="pt")
         inputs = {k: v.to(self._device) for k, v in inputs.items()}
-        with torch.no_grad():
+        with torch.no_grad(), autocast_ctx(self._device_name, self._amp_dtype):
             pred = self._model(**inputs).predicted_depth  # (1, H, W), metres for metric models
-        depth = pred.squeeze(0).cpu().numpy().astype(np.float32)
+        # bf16/fp16 autocast output → float32 before leaving the GPU path.
+        depth = pred.squeeze(0).float().cpu().numpy().astype(np.float32)
         # Apply the linear scale correction from calibration (default 1.0 = raw).
         return depth * self._scale if self._scale != 1.0 else depth

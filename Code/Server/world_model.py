@@ -64,6 +64,10 @@ class WorldModel:
         # (below it → MIXED). Relative test, robust to uncalibrated anchors.
         self._label_margin = float(wm_cfg.get("label_margin", 0.02))
         self._device_str = wm_cfg.get("device", "cpu")
+        # Compute precision for the GPU forward: bf16 (default) halves the attention
+        # activation memory — the fix for the 12 GiB masked-forward OOM — and ~2× the
+        # speed. Ignored on CPU/MPS (kept fp32). See device_utils.resolve_dtype.
+        self._precision = wm_cfg.get("precision", "bf16")
         self._run_every = wm_cfg.get("run_every_n_frames", 8)
         # Path to calibrated corridor anchors (built by calibrate_anchors.py from
         # real "blocked"/"clear" frames). When set + present they replace the
@@ -72,21 +76,29 @@ class WorldModel:
 
         self._model = None
         self._device = None
+        self._device_name = "cpu"    # resolved name ("cuda"/"mps"/"cpu") for autocast
+        self._is_gpu = False
+        self._amp_dtype = None       # autocast compute dtype (bf16/fp16/fp32)
         self._obstacle_anchor: np.ndarray | None = None
         self._clear_anchor: np.ndarray | None = None
         self._call_count = 0
         self._last_result = WorldModelResult()
         self._mask_warned = False   # log the masked-forward fallback only once
+        self._oom_warned = False    # log the GPU→CPU OOM offload only once
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def load(self) -> None:
         import torch  # type: ignore
-        from device_utils import resolve_device
+        from device_utils import resolve_device, is_gpu, resolve_dtype
         self._device, dev_name = resolve_device(self._device_str)
+        self._device_name = dev_name
+        self._is_gpu = is_gpu(dev_name)
+        self._amp_dtype = resolve_dtype(self._precision, dev_name)
         try:
             self._load_vjepa2()
-            logger.info("V-JEPA 2 loaded: %s on %s", self._model_id, dev_name)
+            logger.info("V-JEPA 2 loaded: %s on %s (%s)", self._model_id, dev_name,
+                        str(self._amp_dtype).replace("torch.", "") if self._is_gpu else "fp32")
         except Exception as exc:
             hint = ""
             if "recognize" in str(exc).lower() or "vjepa" in str(exc).lower():
@@ -202,7 +214,21 @@ class WorldModel:
         except Exception as exc:
             logger.info("V-JEPA 2 processor unavailable (%s) – using built-in "
                         "preprocessing (processor is not needed for inference)", exc)
-        self._model = AutoModel.from_pretrained(self._model_id)
+        # On a GPU, request memory-efficient (SDPA / flash) attention: it computes
+        # attention without ever materialising the full N×N score matrix, which is
+        # the tensor that blew up to 12 GiB in the masked forward. Best-effort — an
+        # older transformers or this arch may not accept the kwarg, so fall back.
+        kwargs = {}
+        if self._is_gpu:
+            kwargs["attn_implementation"] = "sdpa"
+        try:
+            self._model = AutoModel.from_pretrained(self._model_id, **kwargs)
+        except (TypeError, ValueError, KeyError, ImportError) as exc:
+            if kwargs:
+                logger.info("V-JEPA 2: SDPA attention unsupported (%s) – default attention", exc)
+                self._model = AutoModel.from_pretrained(self._model_id)
+            else:
+                raise
         self._model.to(self._device)
         self._model.eval()
 
@@ -264,6 +290,7 @@ class WorldModel:
         like T→T+horizon steps ahead, which is the core of the world-model idea.
         """
         import torch
+        from device_utils import autocast_ctx, is_oom_error
 
         with torch.no_grad():
             if isinstance(self._model, _StubEncoder):
@@ -272,27 +299,56 @@ class WorldModel:
             # (1, T, C, H, W)
             pixel_values = clip.unsqueeze(0)
             T = pixel_values.shape[1]
-            mask = torch.zeros(1, T, dtype=torch.bool, device=self._device)
-            mask_start = max(0, T - self._horizon)
-            mask[0, mask_start:] = True
+            mask = torch.zeros(1, T, dtype=torch.bool, device=pixel_values.device)
+            mask[0, max(0, T - self._horizon):] = True
 
-            # The exact encoder signature varies across transformers versions
-            # (some VJEPA2Model encoders don't accept bool_masked_pos, or expect a
-            # token-count mask, not a frame-count one). Try the masked call, but
-            # fall back to a plain encode on any signature/shape error so a version
-            # mismatch degrades to "no future masking" instead of silently killing
-            # the whole predictive path (the error would be swallowed upstream).
+            # Normal path: run on the GPU in bf16/fp16 (autocast) — half the
+            # activation memory and ~2× faster. If it STILL runs out of GPU memory
+            # (a spike bigger than the free budget), don't degrade the algorithm —
+            # offload just this forward to the CPU (full precision, correct, slow).
+            # This runs in the V-JEPA 2 subprocess, so the slow CPU forward can't
+            # stall the camera loop.
             try:
-                outputs = self._model(pixel_values_videos=pixel_values,
-                                      bool_masked_pos=mask)
-            except (TypeError, RuntimeError, ValueError) as exc:
-                if not self._mask_warned:
-                    logger.warning("V-JEPA 2 masked forward failed (%s) – encoding "
-                                   "without bool_masked_pos", exc)
-                    self._mask_warned = True
-                outputs = self._model(pixel_values_videos=pixel_values)
-            # Mean-pool sequence dim → (D,)
-            return outputs.last_hidden_state.mean(dim=1).squeeze(0).cpu().numpy()
+                with autocast_ctx(self._device_name, self._amp_dtype):
+                    return self._forward_embed(self._model, pixel_values, mask)
+            except RuntimeError as exc:
+                if not (self._is_gpu and is_oom_error(exc)):
+                    raise
+                if not self._oom_warned:
+                    logger.warning("V-JEPA 2 forward ran out of GPU memory (%s) – "
+                                   "offloading THIS forward to CPU (slower). If this "
+                                   "is frequent, set world_model.precision: fp16 or a "
+                                   "smaller clip_length/model.", str(exc).split(".")[0])
+                    self._oom_warned = True
+                torch.cuda.empty_cache()
+                return self._forward_on_cpu(pixel_values, mask)
+
+    def _forward_embed(self, model, pixel_values, mask) -> np.ndarray:
+        """One masked forward → mean-pooled (D,) embedding. Falls back to a plain
+        (unmasked) encode on a signature/shape mismatch, but lets an OOM propagate
+        so the caller can retry on CPU."""
+        import torch
+        from device_utils import is_oom_error
+        try:
+            outputs = model(pixel_values_videos=pixel_values, bool_masked_pos=mask)
+        except (TypeError, ValueError, RuntimeError) as exc:
+            if is_oom_error(exc):
+                raise                       # handled by the caller's CPU offload
+            if not self._mask_warned:
+                logger.warning("V-JEPA 2 masked forward failed (%s) – encoding "
+                               "without bool_masked_pos", exc)
+                self._mask_warned = True
+            outputs = model(pixel_values_videos=pixel_values)
+        return outputs.last_hidden_state.mean(dim=1).squeeze(0).float().cpu().numpy()
+
+    def _forward_on_cpu(self, pixel_values, mask) -> np.ndarray:
+        """OOM backstop: move the model + inputs to CPU (fp32) for one forward,
+        then restore the model to the GPU for subsequent calls."""
+        self._model.to("cpu")
+        try:
+            return self._forward_embed(self._model, pixel_values.to("cpu"), mask.to("cpu"))
+        finally:
+            self._model.to(self._device)
 
     def _embed_single(self, rgb: np.ndarray) -> np.ndarray:
         import torch
