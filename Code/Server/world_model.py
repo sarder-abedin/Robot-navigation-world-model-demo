@@ -43,6 +43,14 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def _should_retry_gpu(cpu_calls: int, retry_every: int) -> bool:
+    """After falling back to CPU, whether to re-probe the GPU on this call.
+
+    retry_every <= 0 means never retry (stay on CPU until the process restarts);
+    otherwise retry once every `retry_every` CPU forwards."""
+    return retry_every > 0 and cpu_calls >= retry_every
+
+
 @dataclass
 class WorldModelResult:
     predicted_risk: float = 0.0
@@ -68,6 +76,9 @@ class WorldModel:
         # activation memory — the fix for the 12 GiB masked-forward OOM — and ~2× the
         # speed. Ignored on CPU/MPS (kept fp32). See device_utils.resolve_dtype.
         self._precision = wm_cfg.get("precision", "bf16")
+        # After a GPU OOM the forward runs on CPU; re-probe the GPU every N such
+        # calls in case VRAM has since freed up (0 = never retry, stay on CPU).
+        self._gpu_retry_every = int(wm_cfg.get("gpu_retry_every_calls", 30))
         self._run_every = wm_cfg.get("run_every_n_frames", 8)
         # Path to calibrated corridor anchors (built by calibrate_anchors.py from
         # real "blocked"/"clear" frames). When set + present they replace the
@@ -85,6 +96,8 @@ class WorldModel:
         self._last_result = WorldModelResult()
         self._mask_warned = False   # log the masked-forward fallback only once
         self._oom_warned = False    # log the GPU→CPU OOM offload only once
+        self._on_cpu = False        # sticky: degraded to CPU after an OOM
+        self._cpu_calls = 0         # forwards done on CPU since the last GPU probe
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -302,12 +315,28 @@ class WorldModel:
             mask = torch.zeros(1, T, dtype=torch.bool, device=pixel_values.device)
             mask[0, max(0, T - self._horizon):] = True
 
+            # Degraded (CPU) mode after a prior OOM: the model already lives on the
+            # CPU — keep it there and run on CPU. Moving the ~1.6 GB model GPU↔CPU
+            # every compute tick would cost far more than the forward itself, so we
+            # DON'T bounce it back each call; instead re-probe the GPU periodically
+            # in case VRAM has since freed up.
+            if self._on_cpu and self._is_gpu:
+                self._cpu_calls += 1
+                if _should_retry_gpu(self._cpu_calls, self._gpu_retry_every):
+                    self._cpu_calls = 0
+                    self._model.to(self._device)
+                    self._on_cpu = False
+                    logger.info("V-JEPA 2: re-probing the GPU after CPU fallback")
+                else:
+                    return self._forward_embed(
+                        self._model, pixel_values.to("cpu"), mask.to("cpu"))
+
             # Normal path: run on the GPU in bf16/fp16 (autocast) — half the
             # activation memory and ~2× faster. If it STILL runs out of GPU memory
             # (a spike bigger than the free budget), don't degrade the algorithm —
-            # offload just this forward to the CPU (full precision, correct, slow).
-            # This runs in the V-JEPA 2 subprocess, so the slow CPU forward can't
-            # stall the camera loop.
+            # move the model to the CPU and run there (correct, slower). This runs
+            # in the V-JEPA 2 subprocess, so the slow CPU forward can't stall the
+            # camera loop.
             try:
                 with autocast_ctx(self._device_name, self._amp_dtype):
                     return self._forward_embed(self._model, pixel_values, mask)
@@ -315,13 +344,19 @@ class WorldModel:
                 if not (self._is_gpu and is_oom_error(exc)):
                     raise
                 if not self._oom_warned:
-                    logger.warning("V-JEPA 2 forward ran out of GPU memory (%s) – "
-                                   "offloading THIS forward to CPU (slower). If this "
-                                   "is frequent, set world_model.precision: fp16 or a "
-                                   "smaller clip_length/model.", str(exc).split(".")[0])
+                    logger.warning(
+                        "V-JEPA 2 forward ran out of GPU memory (%s) – running it on "
+                        "CPU (slower). To keep it on the GPU, free VRAM (rocm-smi / "
+                        "nvidia-smi shows what's using it) or set a smaller "
+                        "world_model.model_id / camera.clip_length.",
+                        str(exc).split(".")[0])
                     self._oom_warned = True
                 torch.cuda.empty_cache()
-                return self._forward_on_cpu(pixel_values, mask)
+                self._model.to("cpu")        # sticky: stay on CPU until the next re-probe
+                self._on_cpu = True
+                self._cpu_calls = 0
+                return self._forward_embed(
+                    self._model, pixel_values.to("cpu"), mask.to("cpu"))
 
     def _forward_embed(self, model, pixel_values, mask) -> np.ndarray:
         """One masked forward → mean-pooled (D,) embedding. Falls back to a plain
@@ -340,15 +375,6 @@ class WorldModel:
                 self._mask_warned = True
             outputs = model(pixel_values_videos=pixel_values)
         return outputs.last_hidden_state.mean(dim=1).squeeze(0).float().cpu().numpy()
-
-    def _forward_on_cpu(self, pixel_values, mask) -> np.ndarray:
-        """OOM backstop: move the model + inputs to CPU (fp32) for one forward,
-        then restore the model to the GPU for subsequent calls."""
-        self._model.to("cpu")
-        try:
-            return self._forward_embed(self._model, pixel_values.to("cpu"), mask.to("cpu"))
-        finally:
-            self._model.to(self._device)
 
     def _embed_single(self, rgb: np.ndarray) -> np.ndarray:
         import torch

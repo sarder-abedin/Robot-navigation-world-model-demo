@@ -152,7 +152,13 @@ world_model:
   #   bf16 = bfloat16 (best on RDNA4 / Ampere+; wide range, no NaNs)
   #   fp16 = float16   (use if bf16 misbehaves)
   #   fp32 = full precision (highest memory — only if you need it)
+  # NOTE: fp16 and bf16 use the SAME memory (both 16-bit) — if bf16 still OOMs,
+  # switching to fp16 won't help; free VRAM or use a smaller model_id/clip_length.
   precision: "bf16"
+  # If a forward OOMs even at bf16, it runs on CPU and STAYS there (no per-tick
+  # GPU↔CPU thrash); re-probe the GPU every N CPU forwards in case VRAM frees up
+  # (0 = never re-probe, stay on CPU until restart).
+  gpu_retry_every_calls: 30
   # Run world-model inference every N frames (expensive on CPU)
   run_every_n_frames: 8
   # Run V-JEPA 2 (+ SSv2) in a SEPARATE process. V-JEPA 2 (ViT-L over a 64-frame
