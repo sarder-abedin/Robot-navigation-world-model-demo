@@ -39,6 +39,12 @@ services:
 
     volumes:
       - /run/udev:/run/udev:ro
+      # DMA-heap: without it picamera2 can't open /dev/dma_heap/vidbuf_cached and
+      # runs on a limited buffer pool that eventually STALLS the stream (the PC
+      # then sees a frozen frame and watchdog-STOPs). Mounting it uses the proper
+      # cached buffers and avoids the stall. (camera.py also auto-restarts on a
+      # stall as a safety net.)
+      - /dev/dma_heap:/dev/dma_heap
 
     network_mode: host
 
