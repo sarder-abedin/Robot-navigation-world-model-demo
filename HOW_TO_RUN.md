@@ -63,6 +63,7 @@ docker run --rm \
   -e NAV_MODE=live \
   -e TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 \
   -v hf-cache:/root/.cache/huggingface \
+  -v "$(pwd)/logs_rpi:/app/logs_rpi" \
   -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
   nav-server-rocm
 ```
@@ -71,6 +72,7 @@ docker run --rm \
 - `-e NAV_MODE=live` — **required for a real robot**; without it the image defaults to *demo* and dies with `Cannot open demo video`.
 - `-e TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1` — AMD only; keeps V-JEPA 2's attention on the GPU instead of OOMing (see §2.3). Harmless on CPU/NVIDIA.
 - `-v hf-cache:…` — model weights (a few hundred MB) download **once** and persist across `--rm` runs.
+- **`-v "$(pwd)/logs_rpi:/app/logs_rpi"` — REQUIRED to keep your run logs.** Logging is on by default, but it writes to `logs_rpi/` *inside* the container; without this mount a `--rm` container throws the CSV + annotated frames away on exit. Run from the repo root so `$(pwd)/logs_rpi` resolves (or use an absolute path). `docker compose` already mounts it.
 
 **Run — demo mode** (no robot; needs a corridor video):
 
@@ -351,7 +353,9 @@ logs_rpi/run_YYYYMMDD_HHMMSS_predictive/
 └── viz/                 # PNG plots — from the run visualizer's "Save"
 ```
 
-Logging is server-side; toggle it live from the UI (on by default) or with `--logging on|off` / `NAV_LOGGING=1`.
+Logging is server-side and **on by default** (`logging.enabled: true`); toggle it live from the UI, or override at startup with `--logging on|off` / `NAV_LOGGING=1|0`.
+
+> **In Docker, mount `logs_rpi` or the logs are lost.** The server writes to `logs_rpi/` *inside* the container, so a `--rm` run discards them unless you mount the host dir: add `-v "$(pwd)/logs_rpi:/app/logs_rpi"` to `docker run` (compose already does this). After a run, the timestamped folder appears on the host under `logs_rpi/`.
 
 **Visualise a run (offline):**
 
