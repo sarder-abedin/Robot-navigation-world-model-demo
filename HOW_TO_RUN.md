@@ -231,6 +231,19 @@ macOS/Windows):
    ```
    (If the base image lacks ROCm userspace, base it on `rocm/pytorch` instead.)
 
+**Memory-efficient attention (important on Radeon):** PyTorch ships the AOTriton
+flash / memory-efficient SDPA kernels **disabled** on AMD GPUs, so V-JEPA 2's
+attention falls back to the math backend that materialises the full N×N matrix and
+**OOMs a 16 GB card** (`HIP out of memory … Tried to allocate 12.00 GiB`, then
+`Mem Efficient attention … is still experimental. Enable it with
+TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1`). The repo sets
+**`TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1`** for you (Dockerfile `ENV` +
+`device_utils`), which keeps the masked forward on the GPU. If you run an old image
+or a custom launcher, export it yourself (or `-e TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1`).
+Confirm success: startup shows `V-JEPA 2 loaded: … on cuda (bfloat16)` and **no**
+`ran out of GPU memory` line; `watch -n0.5 rocm-smi --showmeminfo vram` stays well
+under the card's total.
+
 **Gotchas:** if `torch.cuda.is_available()` is `False`, the card's gfx target may not
 be auto-detected — set `HSA_OVERRIDE_GFX_VERSION=12.0.0` (RDNA 4 = gfx12); with native
 ROCm 7.2 support this is usually unnecessary. The world-model subprocess uses `spawn`,
