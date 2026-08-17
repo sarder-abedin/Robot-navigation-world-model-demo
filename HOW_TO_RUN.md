@@ -35,12 +35,18 @@ docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/rocm6.3 \
 docker run --rm --device=/dev/kfd --device=/dev/dri --group-add video \
   --security-opt seccomp=unconfined \
   -e NAV_MODE=live \
+  -e TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 \
   -v hf-cache:/root/.cache/huggingface \
   -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
   nav-server-rocm
 ```
 
 - `-e NAV_MODE=live` — wait for the robot instead of opening a demo video.
+- `-e TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1` — enables the memory-efficient SDPA
+  kernels on the Radeon so V-JEPA 2's attention doesn't OOM (see the AMD ROCm section
+  below). The rebuilt image already bakes this in via `ENV`, but passing it explicitly
+  makes it work on an older image too. If AOTriton isn't available for your card the
+  forward transparently falls back to CPU (slower, but it never crashes).
 - `-v hf-cache:…` — the model weights (V-JEPA 2 / Depth / SSv2, a few hundred MB)
   download **once** and persist, instead of re-downloading every `--rm` run.
 - **Confirm the GPU:** the logs show `V-JEPA 2 loaded: … on cuda (bfloat16)`. `cuda`
