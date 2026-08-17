@@ -357,39 +357,55 @@ def main() -> None:
     # client permanently. Each successful connection spins up fresh streaming
     # threads and runs the command loop until the link drops or we shut down.
     while not _shutdown:
-        logger.info("Connecting to PC server at %s (cmd=%d, video=%d)…",
-                    server_ip, cmd_port, video_port)
-        connected = False
-        while not _shutdown:
-            if client.connect(timeout=5.0):
-                connected = True
-                break
-            logger.warning("Connection failed – retrying in 2 s…")
+        # Last-resort guard around one connect→run cycle: ANY unexpected error
+        # (connect, thread start, cleanup) must fail safe (motors stopped) and
+        # retry, never crash the client. The command path is separately guarded
+        # by _safe_dispatch; this covers everything else.
+        try:
+            logger.info("Connecting to PC server at %s (cmd=%d, video=%d)…",
+                        server_ip, cmd_port, video_port)
+            connected = False
+            while not _shutdown:
+                if client.connect(timeout=5.0):
+                    connected = True
+                    break
+                logger.warning("Connection failed – retrying in 2 s…")
+                time.sleep(2.0)
+            if not connected:
+                break   # _shutdown requested while (re)connecting
+
+            logger.info("Connected to PC server – robot client running")
+            cam_thread = threading.Thread(target=camera_loop, daemon=True, name="CameraStream")
+            cam_thread.start()
+            det_thread = threading.Thread(target=sonic_loop, daemon=True, name="SonicBroadcast")
+            det_thread.start()
+
+            _command_loop(client, motor, speed_full, speed_slow, reroute_secs, watchdog_timeout)
+
+            # Command loop returned: link dropped or shutdown requested. Fail safe —
+            # stop the motors and any maneuver — before winding threads down.
+            _cancel_reroute()
+            if motor:
+                motor.setMotorModel(0, 0)
+            cam_thread.join(timeout=2.0)
+            det_thread.join(timeout=2.0)
+            if not _shutdown:
+                logger.warning("Lost connection to PC (network/Wi-Fi drop) – motors "
+                               "STOPPED, auto-recovering: reconnecting as soon as the "
+                               "server is reachable again…")
+                client.disconnect()   # reset socket state before the next connect()
+                time.sleep(1.0)
+        except Exception as exc:
+            logger.error("Unexpected robot-client error – stopping motors and "
+                         "recovering: %s", exc, exc_info=True)
+            _cancel_reroute()
+            for _safe in (lambda: motor.setMotorModel(0, 0) if motor else None,
+                          client.disconnect):
+                try:
+                    _safe()
+                except Exception:
+                    pass
             time.sleep(2.0)
-        if not connected:
-            break   # _shutdown requested while (re)connecting
-
-        logger.info("Connected to PC server – robot client running")
-        cam_thread = threading.Thread(target=camera_loop, daemon=True, name="CameraStream")
-        cam_thread.start()
-        det_thread = threading.Thread(target=sonic_loop, daemon=True, name="SonicBroadcast")
-        det_thread.start()
-
-        _command_loop(client, motor, speed_full, speed_slow, reroute_secs, watchdog_timeout)
-
-        # Command loop returned: link dropped or shutdown requested. Fail safe —
-        # stop the motors and any maneuver — before winding threads down.
-        _cancel_reroute()
-        if motor:
-            motor.setMotorModel(0, 0)
-        cam_thread.join(timeout=2.0)
-        det_thread.join(timeout=2.0)
-        if not _shutdown:
-            logger.warning("Lost connection to PC (network/Wi-Fi drop) – motors "
-                           "STOPPED, auto-recovering: reconnecting as soon as the "
-                           "server is reachable again…")
-            client.disconnect()   # reset socket state before the next connect()
-            time.sleep(1.0)
 
     # ── Shutdown ─────────────────────────────────────────────────────────────
     _cleanup(motor, camera, ultrasonic, client)
@@ -429,46 +445,74 @@ def _command_loop(client, motor, speed_full: int, speed_slow: int,
         last_cmd_time = time.monotonic()
         watchdog_tripped = False
 
-        parts = cmd.split("#")
-        command = parts[0].strip()
-
-        if command == "CMD_AIMOVE" and len(parts) >= 2:
-            # AI-computed navigation action from the PC decision fuser.
-            # REROUTE may carry a turn direction: CMD_AIMOVE#REROUTE#LEFT|RIGHT
-            action = parts[1].strip()
-            direction = parts[2].strip().lower() if len(parts) >= 3 else ""
-            _execute_aimove(action, motor, speed_full, speed_slow, reroute_secs, direction)
-
-        elif command == "CMD_MOTOR" and len(parts) >= 3:
-            # Manual motor command from the operator UI (relayed by PC)
-            _cancel_reroute()
-            try:
-                left = int(parts[1])
-                right = int(parts[2])
-                if motor:
-                    motor.setMotorModel(left, right)
-                else:
-                    logger.info("[MockMotor] CMD_MOTOR L=%d R=%d", left, right)
-            except (ValueError, IndexError) as exc:
-                logger.warning("Bad CMD_MOTOR: %s (%s)", cmd, exc)
-
-        elif command == "CMD_STOP":
-            _cancel_reroute()
-            if motor:
-                motor.setMotorModel(0, 0)
-            logger.info("Motors stopped (CMD_STOP)")
-
-        elif command == "CMD_AIMODE":
-            # AI mode change – stop motors for safety on mode transition
-            _cancel_reroute()
-            if motor:
-                motor.setMotorModel(0, 0)
-            logger.info("AI mode change: %s", cmd)
-
-        elif command == "CMD_KILL":
-            logger.warning("CMD_KILL received – robot shutting down")
-            _cancel_reroute()
+        # Handle the command behind a crash guard: a malformed command or a
+        # transient motor/GPIO error must NEVER propagate out and kill the client
+        # (or drop the PC link) — it's logged and we keep serving commands.
+        if _safe_dispatch(cmd, motor, speed_full, speed_slow, reroute_secs):
             _shutdown = True
+
+
+def _dispatch_command(cmd: str, motor, speed_full: int, speed_slow: int,
+                      reroute_secs: float) -> bool:
+    """Handle one PC→Pi command line. Returns True iff it was a shutdown (CMD_KILL).
+
+    May raise on a motor/GPIO/parse error — always call it via _safe_dispatch(),
+    which guards so a single bad command can't crash the robot client.
+    """
+    parts = cmd.split("#")
+    command = parts[0].strip()
+
+    if command == "CMD_AIMOVE" and len(parts) >= 2:
+        # AI-computed navigation action from the PC decision fuser.
+        # REROUTE may carry a turn direction: CMD_AIMOVE#REROUTE#LEFT|RIGHT
+        action = parts[1].strip()
+        direction = parts[2].strip().lower() if len(parts) >= 3 else ""
+        _execute_aimove(action, motor, speed_full, speed_slow, reroute_secs, direction)
+
+    elif command == "CMD_MOTOR" and len(parts) >= 3:
+        # Manual motor command from the operator UI (relayed by PC)
+        _cancel_reroute()
+        try:
+            left = int(parts[1])
+            right = int(parts[2])
+            if motor:
+                motor.setMotorModel(left, right)
+            else:
+                logger.info("[MockMotor] CMD_MOTOR L=%d R=%d", left, right)
+        except (ValueError, IndexError) as exc:
+            logger.warning("Bad CMD_MOTOR: %s (%s)", cmd, exc)
+
+    elif command == "CMD_STOP":
+        _cancel_reroute()
+        if motor:
+            motor.setMotorModel(0, 0)
+        logger.info("Motors stopped (CMD_STOP)")
+
+    elif command == "CMD_AIMODE":
+        # AI mode change – stop motors for safety on mode transition
+        _cancel_reroute()
+        if motor:
+            motor.setMotorModel(0, 0)
+        logger.info("AI mode change: %s", cmd)
+
+    elif command == "CMD_KILL":
+        logger.warning("CMD_KILL received – robot shutting down")
+        _cancel_reroute()
+        return True
+
+    return False
+
+
+def _safe_dispatch(cmd: str, motor, speed_full: int, speed_slow: int,
+                   reroute_secs: float) -> bool:
+    """Crash-proof wrapper around _dispatch_command: a bad command or a transient
+    motor/GPIO error is logged and swallowed so the client keeps running and the
+    PC link stays up. Returns True only on a clean CMD_KILL."""
+    try:
+        return _dispatch_command(cmd, motor, speed_full, speed_slow, reroute_secs)
+    except Exception as exc:
+        logger.warning("Command handling error (%s) on %r – continuing", exc, cmd)
+        return False
 
 
 def _execute_aimove(action: str, motor, speed_full: int, speed_slow: int,

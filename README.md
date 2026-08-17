@@ -60,6 +60,7 @@ docker run --rm \
   -e NAV_MODE=live \
   -e TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 \
   -v hf-cache:/root/.cache/huggingface \
+  -v "$(pwd)/logs_rpi:/app/logs_rpi" \
   -p 5003:5003 -p 8003:8003 -p 5004:5004 -p 8004:8004 -p 8501:8501 \
   nav-server-rocm
 ```
@@ -69,6 +70,8 @@ docker run --rm \
   kernels so V-JEPA 2 doesn't OOM on the Radeon (baked into the image; explicit here for
   older images). If AOTriton isn't available for your card it falls back to CPU, not a crash.
 - `-v hf-cache:…` — weights download once instead of every `--rm` run.
+- `-v "$(pwd)/logs_rpi:/app/logs_rpi"` — **keeps your run logs** (CSV + annotated frames);
+  without it a `--rm` container discards them on exit. Run from the repo root.
 
 For the Raspberry Pi robot command, the native venv path, NVIDIA/CUDA, and every
 flag explained, see **[HOW_TO_RUN.md](HOW_TO_RUN.md)**.

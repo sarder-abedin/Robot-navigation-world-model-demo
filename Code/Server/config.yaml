@@ -353,10 +353,14 @@ logging:
   save_raw_frames: false
   raw_frame_interval: 5
   csv_log: true
-  # Initial state of run logging (CSV + annotated frames). The operator can flip
-  # this at runtime from the UI toggle, or at startup with --logging on/off or
-  # the NAV_LOGGING=1/0 env var.
-  enabled: false
+  # Initial state of run logging (CSV + annotated frames). ON by default so a run
+  # is captured to logs_rpi/ without any extra step (matches the UI toggle, which
+  # also defaults on). The operator can flip it at runtime from the UI toggle, or
+  # override at startup with --logging on/off or the NAV_LOGGING=1/0 env var.
+  # NOTE (Docker): logs are written INSIDE the container — mount the host dir
+  # (`-v "$(pwd)/logs_rpi:/app/logs_rpi"`, or use docker-compose) or they vanish
+  # when a `--rm` container exits.
+  enabled: true
 
 # ── TCP / Server ───────────────────────────────────────────────────────────────
 server:
