@@ -159,10 +159,21 @@ world_model:
   # GPU↔CPU thrash); re-probe the GPU every N CPU forwards in case VRAM frees up
   # (0 = never re-probe, stay on CPU until restart).
   gpu_retry_every_calls: 30
-  # "What V-JEPA 2 sees": PCA of the dense patch features → an RGB map shown beside
-  # the camera in the HUD (like the V-JEPA 2 paper's Fig. 1). Small extra cost per
-  # forward; on by default, toggle live from the UI (CMD_FEATUREVIZ) or set false.
+  # "What V-JEPA 2 sees": PCA of the dense patch features → a colour map of the
+  # scene (like the V-JEPA 2 paper's Fig. 1). Small extra cost per forward; on by
+  # default, toggle live from the UI (CMD_FEATUREVIZ) or set false.
   feature_viz: true
+  # How to show it. "overlay" (default) blends the feature colours SEMI-
+  # TRANSPARENTLY onto the camera so the real scene shows through and the colours
+  # line up with what they describe — the most legible for an audience. "side"
+  # draws it as a separate panel beside the camera (doubles the frame width).
+  feature_viz_mode: overlay
+  # Overlay opacity (0..1): higher = stronger feature colours, lower = more of the
+  # camera shows through. Only used in "overlay" mode.
+  feature_viz_alpha: 0.5
+  # Colour saturation of the feature map (0..1): the raw top-3-PCA→RGB is a garish
+  # rainbow; pulling toward luminance makes it read as coherent regions. 1 = raw.
+  feature_viz_saturation: 0.65
   # How often to run V-JEPA 2 — smaller = fresher predictions (more decisions per
   # second), at the cost of GPU compute (NOT extra VRAM; the same clip is scored,
   # just more often). This value governs the IN-PROCESS fallback path

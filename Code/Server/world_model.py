@@ -104,6 +104,7 @@ class WorldModel:
         # Dense-feature PCA visualisation ("what V-JEPA 2 sees"): compute a small
         # RGB map of the patch features each forward, shipped to the HUD.
         self._feature_viz = bool(wm_cfg.get("feature_viz", True))
+        self._feature_viz_saturation = float(wm_cfg.get("feature_viz_saturation", 0.65))
         self._pca_basis = None      # previous frame's PCA basis (temporal sign-align)
         self._last_feature_rgb = None
 
@@ -407,7 +408,8 @@ class WorldModel:
             temporal = max(1, hs.shape[0] // plane)
             # tokens are temporal×spatial → average over time for one spatial map
             feats = hs[: temporal * plane].reshape(temporal, plane, hs.shape[1]).mean(axis=0)
-            rgb, self._pca_basis = patch_features_to_rgb(feats, grid, self._pca_basis)
+            rgb, self._pca_basis = patch_features_to_rgb(
+                feats, grid, self._pca_basis, saturation=self._feature_viz_saturation)
             self._last_feature_rgb = rgb
         except Exception as exc:
             if not getattr(self, "_featviz_warned", False):

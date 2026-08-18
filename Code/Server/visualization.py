@@ -76,6 +76,13 @@ class Visualizer:
         self._stream_annotated = vis.get("stream_annotated", True)
         self._mode = navigation_mode
 
+        # "What V-JEPA 2 sees" feature panel. mode: "overlay" = blend the feature
+        # colours semi-transparently ONTO the camera (aligned, most legible),
+        # "side" = draw it beside the camera. alpha = overlay opacity (0..1).
+        wm_cfg = cfg.get("world_model", {}) or {}
+        self._featviz_mode = str(wm_cfg.get("feature_viz_mode", "overlay")).lower()
+        self._featviz_alpha = float(wm_cfg.get("feature_viz_alpha", 0.5))
+
         self._fps_buf: deque[float] = deque(maxlen=30)
         self._last_ts = time.monotonic()
         self._frame_count = 0
@@ -99,6 +106,12 @@ class Visualizer:
         """
         vis = frame_bgr.copy()
         h, w = vis.shape[:2]
+
+        # "What V-JEPA 2 sees" (overlay mode): blend the feature colours onto the
+        # camera FIRST, so the HUD (boxes, risk bar, action) draws crisply on top
+        # instead of being washed out by the blend.
+        if feature_rgb is not None and self._featviz_mode != "side":
+            vis = self._overlay_feature_on(vis, feature_rgb)
 
         now = time.monotonic()
         self._fps_buf.append(1.0 / max(now - self._last_ts, 1e-6))
@@ -137,27 +150,53 @@ class Visualizer:
         if goal is not None and getattr(goal, "active", False):
             self._draw_goal(vis, goal, w, h)
 
-        # "What V-JEPA 2 sees": the PCA dense-feature map beside the camera, so the
-        # audience can see the model's representation next to the input.
-        if feature_rgb is not None:
-            vis = self._compose_feature_view(vis, feature_rgb)
+        # "What V-JEPA 2 sees" (side mode): the PCA dense-feature map beside the
+        # camera, so the audience sees the model's representation next to the input.
+        if feature_rgb is not None and self._featviz_mode == "side":
+            vis = self._append_feature_panel(vis, feature_rgb)
 
         return vis
 
-    def _compose_feature_view(self, vis, feature_rgb):
-        """hstack the camera frame with an upscaled V-JEPA 2 dense-feature map.
-        feature_rgb is a small (grid×grid×3) uint8 RGB array from feature_viz."""
+    def _feature_panel_bgr(self, feature_rgb, w, h):
+        """Upscale the small (grid×grid×3) RGB feature map to (h, w) BGR, smoothed
+        into coherent blobs (cubic upscale + a light blur) rather than hard patches."""
+        fr = np.asarray(feature_rgb)
+        if fr.ndim != 3 or fr.shape[2] != 3:
+            return None
+        bgr = cv2.cvtColor(fr.astype(np.uint8), cv2.COLOR_RGB2BGR)      # RGB→BGR
+        view = cv2.resize(bgr, (w, h), interpolation=cv2.INTER_CUBIC)
+        # Blur kernel scaled to the upscale factor so the 16×16 grid reads as
+        # smooth regions, not blocks (kept odd, bounded).
+        k = max(3, (min(w, h) // 24) | 1)
+        return cv2.GaussianBlur(view, (k, k), 0)
+
+    def _overlay_feature_on(self, vis, feature_rgb):
+        """Blend the feature colours semi-transparently over the camera so the real
+        scene shows through and the colours line up with what they describe."""
         try:
-            fr = np.asarray(feature_rgb)
-            if fr.ndim != 3 or fr.shape[2] != 3:
-                return vis
             h, w = vis.shape[:2]
-            bgr = cv2.cvtColor(fr.astype(np.uint8), cv2.COLOR_RGB2BGR)   # RGB→BGR
-            view = cv2.resize(bgr, (w, h), interpolation=cv2.INTER_LINEAR)
-            cv2.putText(view, "V-JEPA 2 sees", (8, 24), cv2.FONT_HERSHEY_SIMPLEX,
+            panel = self._feature_panel_bgr(feature_rgb, w, h)
+            if panel is None:
+                return vis
+            a = min(max(self._featviz_alpha, 0.0), 1.0)
+            out = cv2.addWeighted(vis, 1.0 - a, panel, a, 0.0)
+            cv2.putText(out, "V-JEPA 2 sees", (8, 24), cv2.FONT_HERSHEY_SIMPLEX,
                         0.6, (255, 255, 255), 2, cv2.LINE_AA)
-            sep = np.full((h, 2, 3), 60, dtype=np.uint8)                 # thin divider
-            return np.hstack([vis, sep, view])
+            return out
+        except Exception:
+            return vis
+
+    def _append_feature_panel(self, vis, feature_rgb):
+        """hstack the camera frame with the upscaled feature map (side-by-side)."""
+        try:
+            h, w = vis.shape[:2]
+            panel = self._feature_panel_bgr(feature_rgb, w, h)
+            if panel is None:
+                return vis
+            cv2.putText(panel, "V-JEPA 2 sees", (8, 24), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, (255, 255, 255), 2, cv2.LINE_AA)
+            sep = np.full((h, 2, 3), 60, dtype=np.uint8)               # thin divider
+            return np.hstack([vis, sep, panel])
         except Exception:
             return vis
 
