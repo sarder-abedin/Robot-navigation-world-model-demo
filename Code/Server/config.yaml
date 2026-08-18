@@ -159,12 +159,28 @@ world_model:
   # GPU↔CPU thrash); re-probe the GPU every N CPU forwards in case VRAM frees up
   # (0 = never re-probe, stay on CPU until restart).
   gpu_retry_every_calls: 30
-  # "What V-JEPA 2 sees": PCA of the dense patch features → an RGB map shown beside
-  # the camera in the HUD (like the V-JEPA 2 paper's Fig. 1). Small extra cost per
-  # forward; on by default, toggle live from the UI (CMD_FEATUREVIZ) or set false.
+  # "What V-JEPA 2 sees": PCA of the dense patch features → a colour map of the
+  # scene (like the V-JEPA 2 paper's Fig. 1). Small extra cost per forward; on by
+  # default, toggle live from the UI (CMD_FEATUREVIZ) or set false.
   feature_viz: true
-  # Run world-model inference every N frames (expensive on CPU)
-  run_every_n_frames: 8
+  # How to show it. "overlay" (default) blends the feature colours SEMI-
+  # TRANSPARENTLY onto the camera so the real scene shows through and the colours
+  # line up with what they describe — the most legible for an audience. "side"
+  # draws it as a separate panel beside the camera (doubles the frame width).
+  feature_viz_mode: overlay
+  # Overlay opacity (0..1): higher = stronger feature colours, lower = more of the
+  # camera shows through. Only used in "overlay" mode.
+  feature_viz_alpha: 0.5
+  # Colour saturation of the feature map (0..1): the raw top-3-PCA→RGB is a garish
+  # rainbow; pulling toward luminance makes it read as coherent regions. 1 = raw.
+  feature_viz_saturation: 0.65
+  # How often to run V-JEPA 2 — smaller = fresher predictions (more decisions per
+  # second), at the cost of GPU compute (NOT extra VRAM; the same clip is scored,
+  # just more often). This value governs the IN-PROCESS fallback path
+  # (run_in_subprocess: false). In the default SUBPROCESS path the dedicated worker
+  # is forward-bound and runs V-JEPA 2 on EVERY clip, so this gate doesn't throttle
+  # it there. On a GPU with headroom, keep this low for the freshest risk signal.
+  run_every_n_frames: 4
   # Run V-JEPA 2 (+ SSv2) in a SEPARATE process. V-JEPA 2 (ViT-L over a 64-frame
   # clip) holds the GIL for seconds per call; on a thread that freezes the camera
   # I/O and the robot stream stalls out. A separate process has its own GIL, so the
@@ -197,9 +213,17 @@ ssv2:
   # ANNOTATION/LOG ONLY — it does not drive navigation. Profiling on a live run
   # showed its ticks caused ~31% of camera frames to be dropped (pipeline 20 fps
   # vs 30 fps received) and pushed p95 latency to ~130 ms, making the UI feel
-  # laggy and slowing the STOP reaction. Run it less often (was 16); lower it if
-  # you want a snappier SSv2 caption at the cost of throughput, or disable it.
-  run_every_n_frames: 32       # CPU cadence; auto-halved on a GPU
+  # laggy and slowing the STOP reaction. This value is the CPU/in-process cadence
+  # (auto-halved on a GPU). In the default subprocess path SSv2 runs off the main
+  # process on its own job-based cadence, so a snappier caption there no longer
+  # steals from the drive loop; lower it for a fresher caption at more GPU cost.
+  run_every_n_frames: 16       # CPU cadence; auto-halved on a GPU
+  # Subprocess cadence: in the default run_in_subprocess path SSv2 runs off the
+  # main process, so this counts CLIPS handled by the worker (not camera frames).
+  # 1 = every clip (freshest caption, but each clip then also pays the SSv2
+  # forward, slowing the V-JEPA 2 update rate); 2 = every other clip (default,
+  # keeps V-JEPA 2 fresh). Raise it to spend even less time on the caption.
+  subprocess_run_every: 2
   min_confidence: 0.15         # below this the sentence is shown as tentative
   # Fills the SSv2 "something" slot when YOLO has no named object (a wall, or
   # nothing detected this frame) so the caption reads e.g. "Moving obstacle

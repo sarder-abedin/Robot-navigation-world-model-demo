@@ -73,7 +73,22 @@ def _worker_main(cfg: dict, in_q, out_q) -> None:
             fn()
         except Exception as exc:
             log.debug("%s warmup skipped: %s", name, exc)
-    log.info("World-model subprocess ready (V-JEPA 2 + SSv2 warmed)")
+    # The whole point of this dedicated process is to run the heavy models
+    # flat-out WITHOUT stalling the main loop's camera I/O — the feeder is
+    # lock-step (one clip in → one result out), so the worker only ever holds
+    # the newest clip and never queues up. The per-frame skip-gate
+    # (run_every_n_frames) exists for the IN-PROCESS fallback, where a skipped
+    # tick spares the drive loop a multi-second stall; here it would just waste
+    # cycles returning stale results. So run V-JEPA 2 on EVERY clip for the
+    # freshest navigation-driving risk. SSv2 is annotation-only and heavier, so
+    # keep it on a small job cadence (every 2nd clip) — fresh enough for the
+    # caption without halving the V-JEPA 2 update rate.
+    if wm is not None:
+        wm._run_every = 1
+    if ssv2 is not None:
+        ssv2._run_every = max(1, int(cfg.get("ssv2", {}).get("subprocess_run_every", 2)))
+    log.info("World-model subprocess ready (V-JEPA 2 every clip, SSv2 every %d; warmed)",
+             getattr(ssv2, "_run_every", 0) if ssv2 is not None else 0)
 
     while True:
         try:

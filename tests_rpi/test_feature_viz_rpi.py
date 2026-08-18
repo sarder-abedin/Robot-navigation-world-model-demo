@@ -67,6 +67,22 @@ def test_sign_alignment_flips_negated_components():
         assert float(np.dot(basis2[:, i], flipped[:, i])) > 0
 
 
+def test_saturation_reduces_colourfulness():
+    """Lower saturation pulls colours toward luminance → smaller channel spread
+    (less garish) while keeping the same shape/range and staying deterministic."""
+    x = _feats(256, 32, seed=7)
+    full, _ = fv.patch_features_to_rgb(x, (16, 16), saturation=1.0)
+    calm, _ = fv.patch_features_to_rgb(x, (16, 16), saturation=0.3)
+    assert calm.shape == full.shape and calm.dtype == np.uint8
+    # per-pixel spread across R/G/B channels shrinks when desaturated
+    spread_full = np.ptp(full.astype(np.int16), axis=2).mean()
+    spread_calm = np.ptp(calm.astype(np.int16), axis=2).mean()
+    assert spread_calm < spread_full
+    # saturation=0 → (near-)grey: channels nearly equal per pixel
+    grey, _ = fv.patch_features_to_rgb(x, (16, 16), saturation=0.0)
+    assert np.ptp(grey.astype(np.int16), axis=2).max() <= 2
+
+
 def test_infer_patch_grid():
     # vitl-fpc64-256: 256/16 = 16 → 256 spatial patches; 8192 tokens = 32 temporal.
     assert fv.infer_patch_grid(8192, 256, 16) == (16, 16)

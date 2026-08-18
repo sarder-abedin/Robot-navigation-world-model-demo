@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 
 
-def patch_features_to_rgb(feats, grid_hw, prev_basis=None):
+def patch_features_to_rgb(feats, grid_hw, prev_basis=None, saturation=0.65):
     """(N, D) patch features → ((H, W, 3) uint8 RGB, basis).
 
     N must equal H*W (the spatial patch grid). PCA's top-3 components become the
@@ -24,6 +24,10 @@ def patch_features_to_rgb(feats, grid_hw, prev_basis=None):
     time; the returned basis should be fed back in on the next call. On a bad
     shape or a numerical failure returns (None, prev_basis) so the caller can
     just skip the overlay for that frame.
+
+    `saturation` (0..1) pulls the colours toward their luminance so the result
+    reads as coherent regions instead of a fully-saturated rainbow — 1.0 keeps
+    the raw PCA colours, lower is calmer/more legible (0.65 default).
     """
     h, w = int(grid_hw[0]), int(grid_hw[1])
     x = np.asarray(feats, dtype=np.float32)
@@ -53,11 +57,20 @@ def patch_features_to_rgb(feats, grid_hw, prev_basis=None):
                 basis[:, i] = -basis[:, i]
 
     proj = xc @ basis                                # (N, 3)
-    # Robust per-channel normalisation to [0,255] (2–98 pct clips outliers).
+    # Robust per-channel normalisation to [0,1] (2–98 pct clips outliers).
     lo = np.percentile(proj, 2, axis=0)
     hi = np.percentile(proj, 98, axis=0)
     rng = np.where((hi - lo) < 1e-6, 1.0, hi - lo)
-    rgb = np.clip((proj - lo) / rng, 0.0, 1.0)
+    rgb = np.clip((proj - lo) / rng, 0.0, 1.0)       # (N, 3) float
+
+    # Desaturate toward luminance so the map reads as coherent regions rather
+    # than a fully-saturated rainbow (the raw top-3-PCA→RGB is very garish).
+    s = float(np.clip(saturation, 0.0, 1.0))
+    if s < 1.0:
+        lum = rgb @ np.array([0.299, 0.587, 0.114], dtype=np.float32)   # (N,)
+        rgb = lum[:, None] + s * (rgb - lum[:, None])
+        rgb = np.clip(rgb, 0.0, 1.0)
+
     rgb = (rgb * 255.0).astype(np.uint8).reshape(h, w, 3)
     return rgb, basis
 
