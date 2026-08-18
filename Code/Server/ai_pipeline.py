@@ -259,12 +259,8 @@ class AIPipeline:
             self._state.running = False
         if self._robot:
             self._robot.safe_stop()
-        if self._cam_buf and self._ext_cam_buf is None:
-            self._cam_buf.stop()
-        if self._nav_logger:
-            self._nav_logger.close()
-        if self._visualizer:
-            self._visualizer.close()
+        # Join the drive loop FIRST so it can't call nav_logger.log_frame() after
+        # the logger is closed (that raced into "I/O operation on closed file").
         if self._thread:
             self._thread.join(timeout=3.0)
         if self._wm_proc is not None:
@@ -272,6 +268,14 @@ class AIPipeline:
         if self._wm_thread:
             # A V-JEPA 2 forward can be mid-flight; don't block shutdown on it.
             self._wm_thread.join(timeout=3.0)
+        if self._cam_buf and self._ext_cam_buf is None:
+            self._cam_buf.stop()
+        # Close the logger/visualizer only after the loop that feeds them has
+        # stopped.
+        if self._nav_logger:
+            self._nav_logger.close()
+        if self._visualizer:
+            self._visualizer.close()
         logger.info("AI pipeline stopped")
 
     # ── Runtime controls ──────────────────────────────────────────────────────

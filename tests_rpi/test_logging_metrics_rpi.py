@@ -102,6 +102,42 @@ def test_log_frame_without_metrics_defaults_to_zero(tmp_path):
     assert row["lat_total_ms"] == "0.00" and row["net_frames_recv"] == "0"
 
 
+def test_log_frame_after_close_is_safe_noop(tmp_path):
+    # The drive loop can call log_frame() while stop() is closing the logger.
+    # After close() a late write must NOT raise "I/O operation on closed file".
+    nav = NavigationLogger(_cfg(tmp_path), "predictive")
+    nav.log_frame(np.zeros((4, 4, 3), np.uint8), _Decision(), _Det())
+    nav.close()
+    # Late write after close → silently dropped, no exception.
+    nav.log_frame(np.zeros((4, 4, 3), np.uint8), _Decision(), _Det())
+    csv_path = next(tmp_path.rglob("navigation_log.csv"))
+    with open(csv_path) as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1                      # only the pre-close row landed
+
+
+def test_concurrent_log_and_close_never_raises(tmp_path):
+    # Race a writer thread against close() the way stop() does; the writer must
+    # never hit a closed file (the lock + writer=None guard prevents it).
+    import threading
+    nav = NavigationLogger(_cfg(tmp_path), "predictive")
+    errors = []
+
+    def writer():
+        for _ in range(500):
+            try:
+                nav.log_frame(np.zeros((4, 4, 3), np.uint8), _Decision(), _Det())
+            except Exception as exc:            # ValueError on a closed file, etc.
+                errors.append(exc)
+                return
+
+    t = threading.Thread(target=writer)
+    t.start()
+    nav.close()
+    t.join()
+    assert not errors, f"log_frame raced with close(): {errors[:1]}"
+
+
 def test_camera_buffer_net_stats():
     import cv2
     from camera_buffer import CameraBuffer

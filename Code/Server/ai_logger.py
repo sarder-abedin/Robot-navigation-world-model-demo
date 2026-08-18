@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -97,6 +98,11 @@ class NavigationLogger:
         self._csv_file = None
         self._csv_writer = None
         self._frame_idx = 0
+        # Serialises CSV writes against close(): the drive loop may still call
+        # log_frame() while stop() closes the file. Under this lock a racing write
+        # either completes before close or sees _csv_writer=None and no-ops —
+        # never "I/O operation on closed file".
+        self._csv_lock = threading.Lock()
 
         self._setup_logging(log_cfg["log_level"])
         self._open_csv()
@@ -125,35 +131,36 @@ class NavigationLogger:
         self._frame_idx += 1
         depth = depth or {}
 
-        if self._csv_writer:
-            row = {
-                "timestamp":       f"{ts:.4f}",
-                "frame_idx":       self._frame_idx,
-                "nav_mode":        self._nav_mode,
-                "action":          getattr(decision_result.action, "value", decision_result.action),
-                "risk_score":      f"{decision_result.risk_score:.4f}",
-                "detector_risk":   f"{decision_result.detector_risk:.4f}",
-                "world_model_risk":f"{decision_result.world_model_risk:.4f}",
-                "temporal_risk":   f"{decision_result.temporal_risk:.4f}",
-                "wm_label":        decision_result.world_model_label,
-                "temporal_pattern":decision_result.temporal_pattern,
-                "obstacles":       len(detector_result.boxes),
-                "in_center":       int(detector_result.obstacle_in_center),
-                "closest_area":    f"{detector_result.closest_area:.4f}",
-                "ultrasonic_cm":   f"{ultrasonic_cm:.1f}",
-                "ssv2":            ssv2_sentence,
-                "explanation":     decision_result.explanation,
-                "depth_center_m":  _fmt_depth(depth.get("center")),
-                "depth_left_m":    _fmt_depth(depth.get("left")),
-                "depth_right_m":   _fmt_depth(depth.get("right")),
-            }
-            row.update(_metric_row(metrics))
-            self._csv_writer.writerow(row)
-            # Flush every row so a short or hard-killed run (e.g. the robot drops
-            # off after a few frames) still leaves its data on disk — buffering ~20
-            # rows meant an interrupted run wrote an empty CSV. flush() only pushes
-            # to the OS buffer, so it's cheap even at full frame rate.
-            self._csv_file.flush()
+        with self._csv_lock:
+            if self._csv_writer:
+                row = {
+                    "timestamp":       f"{ts:.4f}",
+                    "frame_idx":       self._frame_idx,
+                    "nav_mode":        self._nav_mode,
+                    "action":          getattr(decision_result.action, "value", decision_result.action),
+                    "risk_score":      f"{decision_result.risk_score:.4f}",
+                    "detector_risk":   f"{decision_result.detector_risk:.4f}",
+                    "world_model_risk":f"{decision_result.world_model_risk:.4f}",
+                    "temporal_risk":   f"{decision_result.temporal_risk:.4f}",
+                    "wm_label":        decision_result.world_model_label,
+                    "temporal_pattern":decision_result.temporal_pattern,
+                    "obstacles":       len(detector_result.boxes),
+                    "in_center":       int(detector_result.obstacle_in_center),
+                    "closest_area":    f"{detector_result.closest_area:.4f}",
+                    "ultrasonic_cm":   f"{ultrasonic_cm:.1f}",
+                    "ssv2":            ssv2_sentence,
+                    "explanation":     decision_result.explanation,
+                    "depth_center_m":  _fmt_depth(depth.get("center")),
+                    "depth_left_m":    _fmt_depth(depth.get("left")),
+                    "depth_right_m":   _fmt_depth(depth.get("right")),
+                }
+                row.update(_metric_row(metrics))
+                self._csv_writer.writerow(row)
+                # Flush every row so a short or hard-killed run (e.g. the robot drops
+                # off after a few frames) still leaves its data on disk — buffering ~20
+                # rows meant an interrupted run wrote an empty CSV. flush() only pushes
+                # to the OS buffer, so it's cheap even at full frame rate.
+                self._csv_file.flush()
 
         if self._save_frames and (self._frame_idx % self._frame_interval == 0):
             fname = self._frames_dir / f"frame_{self._frame_idx:06d}.jpg"
@@ -180,33 +187,39 @@ class NavigationLogger:
         ts = time.time()
         self._frame_idx += 1
 
-        if self._csv_writer:
-            self._csv_writer.writerow({
-                "timestamp":       f"{ts:.4f}",
-                "frame_idx":       self._frame_idx,
-                "nav_mode":        self._nav_mode,
-                "action":          client_action,
-                "risk_score":      f"{detector_result.raw_risk:.4f}",
-                "detector_risk":   f"{detector_result.raw_risk:.4f}",
-                "world_model_risk":"client",
-                "temporal_risk":   "client",
-                "wm_label":        "client",
-                "temporal_pattern":"client",
-                "obstacles":       len(detector_result.boxes),
-                "in_center":       int(detector_result.obstacle_in_center),
-                "closest_area":    f"{detector_result.closest_area:.4f}",
-                "ultrasonic_cm":   f"{ultrasonic_cm:.1f}",
-                "explanation":     "pi-side detection only",
-            })
-            self._csv_file.flush()   # persist every row (see log_frame)
+        with self._csv_lock:
+            if self._csv_writer:
+                self._csv_writer.writerow({
+                    "timestamp":       f"{ts:.4f}",
+                    "frame_idx":       self._frame_idx,
+                    "nav_mode":        self._nav_mode,
+                    "action":          client_action,
+                    "risk_score":      f"{detector_result.raw_risk:.4f}",
+                    "detector_risk":   f"{detector_result.raw_risk:.4f}",
+                    "world_model_risk":"client",
+                    "temporal_risk":   "client",
+                    "wm_label":        "client",
+                    "temporal_pattern":"client",
+                    "obstacles":       len(detector_result.boxes),
+                    "in_center":       int(detector_result.obstacle_in_center),
+                    "closest_area":    f"{detector_result.closest_area:.4f}",
+                    "ultrasonic_cm":   f"{ultrasonic_cm:.1f}",
+                    "explanation":     "pi-side detection only",
+                })
+                self._csv_file.flush()   # persist every row (see log_frame)
 
         if self._save_frames and (self._frame_idx % self._frame_interval == 0):
             fname = self._frames_dir / f"frame_{self._frame_idx:06d}.jpg"
             cv2.imwrite(str(fname), annotated_frame)
 
     def close(self) -> None:
-        if self._csv_file:
-            self._csv_file.close()
+        # Null the writer under the lock BEFORE closing the file so a log_frame()
+        # racing from the drive loop can't write into a closed file.
+        with self._csv_lock:
+            self._csv_writer = None
+            if self._csv_file:
+                self._csv_file.close()
+                self._csv_file = None
         # Detach the per-run FileHandler so repeated NavigationLogger instances
         # (tests, pipeline restarts) don't accumulate handlers / leak fds and
         # tee every record into every prior run's system.log.
