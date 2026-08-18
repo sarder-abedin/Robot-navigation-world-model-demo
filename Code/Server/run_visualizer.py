@@ -23,8 +23,8 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QAbstractItemView, QApplication, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QMainWindow, QPushButton, QSlider, QTabWidget,
-    QVBoxLayout, QWidget,
+    QLineEdit, QListWidget, QMainWindow, QPushButton, QScrollArea, QSlider,
+    QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavToolbar,
@@ -39,7 +39,8 @@ class RunVisualizer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Navigation Run Visualizer (offline)")
-        self.resize(1080, 900)
+        self.resize(1200, 900)
+        self.setMinimumSize(900, 600)
         self._data = None        # single loaded run (None in compare mode)
         self._datas = []         # all currently loaded runs (1 or many)
         self._cursors = []       # (canvas, axvline)
@@ -63,6 +64,9 @@ class RunVisualizer(QMainWindow):
         bs = QPushButton("Scan"); bs.clicked.connect(self._scan); row.addWidget(bs)
         left.addLayout(row)
         self._run_list = QListWidget()
+        # Keep the picker compact so the plots get the vertical space (scrolls for
+        # more runs); the charts, not the file list, are the point of this window.
+        self._run_list.setMaximumHeight(120)
         # Multi-select: one run → detailed view, several → comparison view.
         self._run_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._run_list.itemDoubleClicked.connect(lambda *_: self._load())
@@ -81,25 +85,50 @@ class RunVisualizer(QMainWindow):
         tl.addLayout(rbtn, 1)
         root.addWidget(top)
 
-        # Plots (tabs) + summary + analysis
+        # Main content in a drag-to-resize splitter: PLOTS on top (given the most
+        # room), a compact info + frame-scrubber row below. This stops the summary
+        # / analysis text from squeezing the graphs — the old stacked layout left
+        # the charts clipped.
+        split = QSplitter(Qt.Vertical)
+
+        self._tabs = QTabWidget()
+        self._tabs.setMinimumHeight(340)
+        split.addWidget(self._tabs)
+
+        bottom = QWidget()
+        brow = QHBoxLayout(bottom)
+        brow.setContentsMargins(0, 0, 0, 0)
+
+        # Summary + analysis, side-by-side with the scrubber and in a scroll area so
+        # long findings scroll instead of stealing height from the plots.
+        info = QWidget()
+        il = QVBoxLayout(info)
+        il.setContentsMargins(6, 6, 6, 6)
         self._summary = QLabel("Load a run to see its plots.")
         self._summary.setStyleSheet("font-family: monospace;")
-        root.addWidget(self._summary)
+        self._summary.setWordWrap(True)
+        self._summary.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self._analysis = QLabel("")
         self._analysis.setWordWrap(True)
         self._analysis.setStyleSheet("font-family: monospace; color:#0a4a0a;")
-        root.addWidget(self._analysis)
-        self._tabs = QTabWidget()
-        root.addWidget(self._tabs, 5)
+        self._analysis.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        il.addWidget(self._summary)
+        il.addWidget(self._analysis)
+        il.addStretch(1)
+        info_scroll = QScrollArea()
+        info_scroll.setWidgetResizable(True)
+        info_scroll.setWidget(info)
+        info_scroll.setMinimumWidth(300)
+        brow.addWidget(info_scroll, 2)
 
         # Frame scrubber
         scrub = QGroupBox("Frame scrubber (synced cursor on the plots)")
         sl = QVBoxLayout(scrub)
         self._frame_img = QLabel("(no annotated frames in this run)")
         self._frame_img.setAlignment(Qt.AlignCenter)
-        self._frame_img.setFixedHeight(240)
+        self._frame_img.setMinimumHeight(180)
         self._frame_img.setStyleSheet("background:#1a1a1a; color:#777;")
-        sl.addWidget(self._frame_img)
+        sl.addWidget(self._frame_img, 1)
         row2 = QHBoxLayout()
         self._slider = QSlider(Qt.Horizontal)
         self._slider.setEnabled(False)
@@ -107,7 +136,13 @@ class RunVisualizer(QMainWindow):
         self._time_lbl = QLabel("—")
         row2.addWidget(self._slider); row2.addWidget(self._time_lbl)
         sl.addLayout(row2)
-        root.addWidget(scrub, 3)
+        brow.addWidget(scrub, 3)
+
+        split.addWidget(bottom)
+        split.setStretchFactor(0, 3)     # plots get the lion's share
+        split.setStretchFactor(1, 2)
+        split.setSizes([660, 280])
+        root.addWidget(split, 1)
 
         self._scan()
 
@@ -172,27 +207,39 @@ class RunVisualizer(QMainWindow):
                 w.deleteLater()
         self._cursors = []
 
-    def _build_plots(self):
-        self._clear_plots()
-        for name, fig in rr.build_all_figures(self._data).items():
-            page = QWidget(); pl = QVBoxLayout(page)
-            canvas = FigureCanvas(fig)
-            pl.addWidget(NavToolbar(canvas, page))
-            pl.addWidget(canvas)
+    def _add_plot_tab(self, name, fig, cursor=False):
+        """One tab = toolbar + the figure in a scroll area, sized to the figure's
+        natural height so it's shown FULLY (scrolls if the pane is short) instead
+        of being squashed into a clipped strip."""
+        page = QWidget()
+        pl = QVBoxLayout(page)
+        pl.setContentsMargins(0, 0, 0, 0)
+        canvas = FigureCanvas(fig)
+        # Keep the figure at least its natural pixel height; width flexes with the
+        # viewport (no horizontal scroll), height scrolls only when space is tight.
+        _, h_in = fig.get_size_inches()
+        canvas.setMinimumHeight(int(h_in * fig.get_dpi()))
+        pl.addWidget(NavToolbar(canvas, page))
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setWidget(canvas)
+        pl.addWidget(area, 1)
+        if cursor and fig.axes:
             # a dotted vertical cursor on the primary axes, moved by the scrubber
             line = fig.axes[0].axvline(self._data["t"][0], color="k", lw=1.0, ls=":")
             self._cursors.append((canvas, line))
-            self._tabs.addTab(page, name.capitalize())
+        self._tabs.addTab(page, name.capitalize())
+
+    def _build_plots(self):
+        self._clear_plots()
+        for name, fig in rr.build_all_figures(self._data).items():
+            self._add_plot_tab(name, fig, cursor=True)
 
     def _build_compare_plots(self):
         """Overlaid comparison charts across the loaded runs (no time cursor)."""
         self._clear_plots()
         for name, fig in rr.build_compare_figures(self._datas).items():
-            page = QWidget(); pl = QVBoxLayout(page)
-            canvas = FigureCanvas(fig)
-            pl.addWidget(NavToolbar(canvas, page))
-            pl.addWidget(canvas)
-            self._tabs.addTab(page, name.capitalize())
+            self._add_plot_tab(name, fig, cursor=False)
 
     def _teardown_scrubber(self, msg="(no annotated frames in this run)"):
         self._frames = []; self._frame_times = []
@@ -234,7 +281,11 @@ class RunVisualizer(QMainWindow):
         i = max(0, min(i, len(self._frames) - 1))
         pix = QPixmap(self._frames[i])
         if not pix.isNull():
-            self._frame_img.setPixmap(pix.scaledToHeight(236, Qt.SmoothTransformation))
+            # Fit within the (resizable) frame area, preserving aspect ratio.
+            w = max(160, self._frame_img.width() - 6)
+            h = max(120, self._frame_img.height() - 6)
+            self._frame_img.setPixmap(
+                pix.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         t = self._frame_times[i]
         self._time_lbl.setText(f"t = {t:.2f} s   (frame {os.path.basename(self._frames[i])})")
         for canvas, line in self._cursors:
