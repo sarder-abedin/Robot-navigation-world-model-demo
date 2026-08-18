@@ -74,7 +74,8 @@ assets/         ← Demo video clips
 | `Code/Server/run_report.py` | Offline matplotlib plots + summary of one run's `navigation_log.csv` (risk/distance/action/latency/network); `save_pngs()` → `<run>/viz/`. Backend-agnostic + unit-tested |
 | `Code/Server/run_visualizer.py` | **Desk-only PyQt5 run visualizer** (`python run_visualizer.py`): pick a run → embedded plots + a synced annotated-frame scrubber → Save PNGs |
 | `Code/Robot/calibrate_governor.py` | On-robot: measures governor m/s constants (sonar+motors), safely patches `config.yaml` |
-| `Code/Server/visualization.py` | HUD overlay: keeps spatial cues on the video (boxes, risk bar, action, depth L/C/R bars, goal marker+arrow+readout); text overlays (V-JEPA2/motion, sonic, fps, ssv2, depth-distance) default OFF and are shown in the UI panel below the video instead |
+| `Code/Server/visualization.py` | HUD overlay: keeps spatial cues on the video (boxes, risk bar, action, depth L/C/R bars, goal marker+arrow+readout); text overlays (V-JEPA2/motion, sonic, fps, ssv2, depth-distance) default OFF and are shown in the UI panel below the video instead. `_compose_feature_view()` hstacks the **"what V-JEPA 2 sees" dense-feature panel** beside the camera when supplied |
+| `Code/Server/feature_viz.py` | Pure-numpy PCA of V-JEPA 2's dense patch features → an RGB image (paper Fig 1 technique): `patch_features_to_rgb()` (SVD top-3 → RGB, sign-aligned across frames to stop flicker) + `infer_patch_grid()`. No torch → **unit-tested** (`tests_rpi/test_feature_viz_rpi.py`); `world_model._compute_feature_rgb()` feeds it, the HUD shows it side-by-side, toggled live by `CMD_FEATUREVIZ` (`world_model.feature_viz` config, on by default) |
 | `Code/Server/robot_control.py` | `TCPRobotController` sends `CMD_AIMOVE` to Pi; direct `RobotController` reroute/backup run as preemptible worker threads (never block the pipeline); ultrasonic risk (fail-safe on no-echo) |
 | `Code/Robot/main_robot.py` | Pi entry point (thin client); camera stream + sonic + command loop; motor **watchdog** (stop on PC silence) + **reconnect** loop |
 | `Code/Robot/tcp_robot_client.py` | Pi-side TCP client; `send_sonic()` / `send_frame()`; TCP keepalive on both sockets |
@@ -95,6 +96,7 @@ PC → Pi:  CMD_MOTOR#<L>#<R>                         (manual from UI viewer)
 PC → Pi:  CMD_STOP / CMD_KILL / CMD_AIMODE#<0|1|2>
 UI → PC:  CMD_AIMODE#<0|1|2>  |  CMD_MOTOR#<L>#<R>  |  CMD_KILL#0
 UI → PC:  CMD_LOGGING#<0|1>                         (toggle server-side run logging)
+UI → PC:  CMD_FEATUREVIZ#<0|1>                      (toggle the "what V-JEPA 2 sees" dense-feature HUD panel; on by default)
 UI → PC:  CMD_GOAL#<x_permille>#<y_permille>        (set goal at normalized image coords ×1000)
 UI → PC:  CMD_GOAL_CLEAR                            (clear the goal)
 UI → PC:  CMD_GOALFOLLOW#<0|1>                      (nav mode: 1=Goal Following (steer to goal), 0=Obstacle Avoidance)

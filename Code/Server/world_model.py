@@ -58,6 +58,9 @@ class WorldModelResult:
     similarity_to_clear: float = 0.0
     label: str = "UNKNOWN"
     buffer_ready: bool = False
+    # Small (grid×grid×3) uint8 PCA visualisation of the dense patch features —
+    # the "what V-JEPA 2 sees" image. None when feature_viz is off or unavailable.
+    feature_rgb: object = None
 
 
 class WorldModel:
@@ -98,6 +101,11 @@ class WorldModel:
         self._oom_warned = False    # log the GPU→CPU OOM offload only once
         self._on_cpu = False        # sticky: degraded to CPU after an OOM
         self._cpu_calls = 0         # forwards done on CPU since the last GPU probe
+        # Dense-feature PCA visualisation ("what V-JEPA 2 sees"): compute a small
+        # RGB map of the patch features each forward, shipped to the HUD.
+        self._feature_viz = bool(wm_cfg.get("feature_viz", True))
+        self._pca_basis = None      # previous frame's PCA basis (temporal sign-align)
+        self._last_feature_rgb = None
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -193,6 +201,7 @@ class WorldModel:
             similarity_to_clear=sim_clr,
             label=label,
             buffer_ready=True,
+            feature_rgb=self._last_feature_rgb,
         )
         return self._last_result
 
@@ -374,7 +383,37 @@ class WorldModel:
                                "without bool_masked_pos", exc)
                 self._mask_warned = True
             outputs = model(pixel_values_videos=pixel_values)
-        return outputs.last_hidden_state.mean(dim=1).squeeze(0).float().cpu().numpy()
+        emb = outputs.last_hidden_state.mean(dim=1).squeeze(0).float().cpu().numpy()
+        self._compute_feature_rgb(outputs.last_hidden_state)
+        return emb
+
+    def _compute_feature_rgb(self, last_hidden_state) -> None:
+        """PCA of the encoder's patch tokens → a small RGB 'what V-JEPA 2 sees'
+        grid (stored on self._last_feature_rgb). Best-effort: any failure just
+        leaves it None so the HUD simply skips the overlay."""
+        if not self._feature_viz:
+            self._last_feature_rgb = None
+            return
+        try:
+            from feature_viz import patch_features_to_rgb, infer_patch_grid
+            hs = last_hidden_state[0].float().cpu().numpy()      # (N_tokens, D)
+            cfg = getattr(self._model, "config", None)
+            ps = int(getattr(cfg, "patch_size", 16) or 16)
+            grid = infer_patch_grid(hs.shape[0], self._input_size, ps)
+            if grid is None:
+                self._last_feature_rgb = None
+                return
+            plane = grid[0] * grid[1]
+            temporal = max(1, hs.shape[0] // plane)
+            # tokens are temporal×spatial → average over time for one spatial map
+            feats = hs[: temporal * plane].reshape(temporal, plane, hs.shape[1]).mean(axis=0)
+            rgb, self._pca_basis = patch_features_to_rgb(feats, grid, self._pca_basis)
+            self._last_feature_rgb = rgb
+        except Exception as exc:
+            if not getattr(self, "_featviz_warned", False):
+                logger.debug("Feature-viz unavailable (%s) – skipping overlay", exc)
+                self._featviz_warned = True
+            self._last_feature_rgb = None
 
     def _embed_single(self, rgb: np.ndarray) -> np.ndarray:
         import torch

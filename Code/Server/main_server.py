@@ -109,6 +109,7 @@ class PCNavigationServer:
     CMD_KILL    = "CMD_KILL"
     CMD_MOTOR   = "CMD_MOTOR"
     CMD_LOGGING = "CMD_LOGGING"
+    CMD_FEATUREVIZ = "CMD_FEATUREVIZ"  # UI→PC: 1 = show the V-JEPA 2 dense-feature view, 0 = hide
     CMD_GOAL       = "CMD_GOAL"        # UI→PC: set goal at normalized image coords (per-mille)
     CMD_GOAL_CLEAR = "CMD_GOAL_CLEAR"  # UI→PC: clear the goal
     CMD_GOALFOLLOW = "CMD_GOALFOLLOW"  # UI→PC: 1 = Goal-Following mode, 0 = Obstacle-Avoidance
@@ -270,6 +271,11 @@ class PCNavigationServer:
             # Operator toggled run logging (CSV + annotated frames) from the UI.
             val = self._parser.intParameter[0] if self._parser.intParameter else 0
             self._ai.set_logging_enabled(val == 1)
+
+        elif cmd == self.CMD_FEATUREVIZ:
+            # Operator toggled the "what V-JEPA 2 sees" dense-feature HUD overlay.
+            val = self._parser.intParameter[0] if self._parser.intParameter else 0
+            self._ai.set_feature_viz(val == 1)
 
         elif cmd == self.CMD_GOAL:
             # User clicked a goal point on the video. Coords arrive as per-mille

@@ -159,6 +159,10 @@ world_model:
   # GPU↔CPU thrash); re-probe the GPU every N CPU forwards in case VRAM frees up
   # (0 = never re-probe, stay on CPU until restart).
   gpu_retry_every_calls: 30
+  # "What V-JEPA 2 sees": PCA of the dense patch features → an RGB map shown beside
+  # the camera in the HUD (like the V-JEPA 2 paper's Fig. 1). Small extra cost per
+  # forward; on by default, toggle live from the UI (CMD_FEATUREVIZ) or set false.
+  feature_viz: true
   # Run world-model inference every N frames (expensive on CPU)
   run_every_n_frames: 8
   # Run V-JEPA 2 (+ SSv2) in a SEPARATE process. V-JEPA 2 (ViT-L over a 64-frame
