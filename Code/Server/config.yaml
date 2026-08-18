@@ -217,7 +217,7 @@ ssv2:
   # (auto-halved on a GPU). In the default subprocess path SSv2 runs off the main
   # process on its own job-based cadence, so a snappier caption there no longer
   # steals from the drive loop; lower it for a fresher caption at more GPU cost.
-  run_every_n_frames: 16       # CPU cadence; auto-halved on a GPU
+  run_every_n_frames: 8       # CPU cadence; auto-halved on a GPU, old 16
   # Subprocess cadence: in the default run_in_subprocess path SSv2 runs off the
   # main process, so this counts CLIPS handled by the worker (not camera frames).
   # 1 = every clip (freshest caption, but each clip then also pays the SSv2
@@ -284,7 +284,7 @@ decision:
   # the robot stutter FORWARD↔STOP — the elevated risk is held ~0.5s and its
   # avoidance runs to completion. Raise for snappier release; lower to hold longer.
   risk_decay_per_s: 0.6
-  stop_hold_seconds: 1.5
+  stop_hold_seconds: 2.5
 
   # ── Closed-loop, context-aware reroute ─────────────────────────────────────
   # When closed_loop is on, a high-risk obstacle no longer triggers a fixed
@@ -294,10 +294,10 @@ decision:
   # turning until the gap opens. Set closed_loop: false for the legacy one-shot.
   reroute:
     closed_loop: true
-    wait_timeout_seconds: 2.0   # WAIT at most this long for a crossing obstacle, then TURN
-    max_turn_seconds: 4.0       # keep turning at most this long, then STOP & reassess
-    backup_distance_m: 0.35     # closer than this + approaching → BACK UP (don't turn into it)
-    max_backup_seconds: 1.0     # cap reversing (no rear sensor) then STOP & reassess
+    wait_timeout_seconds: 2.5   # WAIT at most this long for a crossing obstacle, then TURN
+    max_turn_seconds: 5.0       # keep turning at most this long, then STOP & reassess
+    backup_distance_m: 0.45     # closer than this + approaching → BACK UP (don't turn into it)
+    max_backup_seconds: 2.0     # cap reversing (no rear sensor) then STOP & reassess
     # The ultrasonic hard-stop is a reflex STOP. If the obstacle it sees won't
     # clear within this many seconds, escalate from a permanent STOP to the
     # avoidance maneuver (turn/back-up/rotate-to-search) to go AROUND it — the
@@ -317,7 +317,7 @@ decision:
     # turned and just sat in STOP. Lower these to turn more readily, raise to turn
     # only for a clearly-open side.
     direction_margin_m: 0.05        # absolute: turn if a side is >5 cm more open than centre
-    direction_margin_frac: 0.10     # relative: OR >10% more open than centre (calibration-free)
+    direction_margin_frac: 0.20     # relative: OR >10% more open than centre (calibration-free)
     dynamic_classes: ["person", "cat", "dog"]   # obstacles likely to move out of the way
 
   # ── Kinematic safe-speed governor (proactive collision avoidance) ──────────
@@ -355,12 +355,12 @@ robot:
   speed_slow: 800
   speed_stop: 0
   # Reroute: turn for this many seconds then resume
-  reroute_turn_seconds: 1.2
+  reroute_turn_seconds: 4.2
   reroute_direction: "left"    # "left" | "right"
   # Ultrasonic hard-STOP distance (cm) — deterministic safety, separate from the
   # AI risk. Raised from 15→30 so the robot halts with margin instead of creeping
   # into the wall (a slow robot + a few-FPS pipeline needs the extra distance).
-  ultrasonic_stop_cm: 30.0
+  ultrasonic_stop_cm: 35.0
   # Reuse the last valid sonic reading for this long when a ping misses, so one
   # HC-SR04 drop-out (common off angled/soft walls) doesn't drop a close obstacle
   # back to "clear". Beyond this the hard-stop releases and vision drives.
@@ -378,8 +378,8 @@ logging:
   # V-JEPA 2 anchor calibration (calibrate_from_logs.py --anchors). OFF by default
   # (extra disk); turn on before a run you plan to calibrate from. Zero extra
   # driving — reuse any normal run.
-  save_raw_frames: false
-  raw_frame_interval: 5
+  save_raw_frames: true
+  raw_frame_interval: 2
   csv_log: true
   # Initial state of run logging (CSV + annotated frames). ON by default so a run
   # is captured to logs_rpi/ without any extra step (matches the UI toggle, which
