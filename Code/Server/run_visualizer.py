@@ -1,15 +1,17 @@
 """
 run_visualizer.py – offline PyQt5 UI to visualise (and save) one navigation run.
 
-Pick a run folder → see the risk / distance / action / latency / network plots
-(embedded matplotlib, zoom/pan) → scrub the annotated frames with a synced time
-cursor on the charts → "Save PNGs" writes one image per chart (+ summary.txt) to
-<run>/viz/. Desk-only; it never touches the robot.
+Select one OR more run folders. One run → its risk / distance / action / latency
+/ network plots (embedded matplotlib, zoom/pan) + auto-analysis notes + a synced
+annotated-frame scrubber. Several runs → overlaid comparison charts + a per-run
+table + each run's findings. "Save PNGs" writes the single-run charts to
+<run>/viz/; "Save report (HTML)" writes a self-contained, shareable report.
+Desk-only; it never touches the robot.
 
     python Code/Server/run_visualizer.py
 
-The plotting/summary logic lives in run_report.py (unit-tested); this file is the
-Qt front-end.
+The plotting/summary/analysis logic lives in run_report.py (unit-tested); this
+file is the Qt front-end.
 """
 
 import glob
@@ -20,8 +22,9 @@ import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
-    QApplication, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QMainWindow, QPushButton, QSlider, QTabWidget, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
+    QLineEdit, QListWidget, QMainWindow, QPushButton, QSlider, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavToolbar,
@@ -36,8 +39,9 @@ class RunVisualizer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Navigation Run Visualizer (offline)")
-        self.resize(1080, 860)
-        self._data = None
+        self.resize(1080, 900)
+        self._data = None        # single loaded run (None in compare mode)
+        self._datas = []         # all currently loaded runs (1 or many)
         self._cursors = []       # (canvas, axvline)
         self._frames = []        # (frame_idx, filepath)
         self._frame_times = []   # relative time (s) for each scrubber frame
@@ -59,21 +63,32 @@ class RunVisualizer(QMainWindow):
         bs = QPushButton("Scan"); bs.clicked.connect(self._scan); row.addWidget(bs)
         left.addLayout(row)
         self._run_list = QListWidget()
+        # Multi-select: one run → detailed view, several → comparison view.
+        self._run_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._run_list.itemDoubleClicked.connect(lambda *_: self._load())
+        left.addWidget(QLabel("Select one run, or several (Ctrl/Shift) to compare:"))
         left.addWidget(self._run_list)
         tl.addLayout(left, 3)
         rbtn = QVBoxLayout()
         self._btn_load = QPushButton("Load selected"); self._btn_load.clicked.connect(self._load)
         self._btn_save = QPushButton("Save PNGs"); self._btn_save.clicked.connect(self._save)
         self._btn_save.setEnabled(False)
-        rbtn.addWidget(self._btn_load); rbtn.addWidget(self._btn_save); rbtn.addStretch(1)
+        self._btn_report = QPushButton("Save report (HTML)")
+        self._btn_report.clicked.connect(self._save_report)
+        self._btn_report.setEnabled(False)
+        rbtn.addWidget(self._btn_load); rbtn.addWidget(self._btn_save)
+        rbtn.addWidget(self._btn_report); rbtn.addStretch(1)
         tl.addLayout(rbtn, 1)
         root.addWidget(top)
 
-        # Plots (tabs) + summary
+        # Plots (tabs) + summary + analysis
         self._summary = QLabel("Load a run to see its plots.")
         self._summary.setStyleSheet("font-family: monospace;")
         root.addWidget(self._summary)
+        self._analysis = QLabel("")
+        self._analysis.setWordWrap(True)
+        self._analysis.setStyleSheet("font-family: monospace; color:#0a4a0a;")
+        root.addWidget(self._analysis)
         self._tabs = QTabWidget()
         root.addWidget(self._tabs, 5)
 
@@ -111,31 +126,42 @@ class RunVisualizer(QMainWindow):
             if os.path.exists(os.path.join(r, "navigation_log.csv")):
                 self._run_list.addItem(r)
 
-    def _selected_run(self):
-        it = self._run_list.currentItem()
-        return it.text() if it else None
+    def _selected_runs(self):
+        return [it.text() for it in self._run_list.selectedItems()]
 
     def _load(self):
-        run = self._selected_run()
-        if not run:
-            self._summary.setText("Select a run in the list first.")
+        runs = self._selected_runs()
+        if not runs:
+            self._summary.setText("Select one or more runs in the list first.")
             return
-        # Build everything (load + plots + scrubber) atomically: on any failure,
-        # reset to a clean empty state rather than leaving a half-updated window.
+        # Build everything atomically: on any failure, reset to a clean empty
+        # state rather than leaving a half-updated window.
         try:
-            data = rr.load_run(run)
-            self._data = data
-            self._summary.setText(rr.summary_text(data))
-            self._build_plots()
-            self._setup_scrubber(run)
+            datas = [rr.load_run(r) for r in runs]
+            self._datas = datas
+            if len(datas) == 1:
+                self._data = datas[0]
+                self._summary.setText(rr.summary_text(self._data))
+                self._analysis.setText(rr.analysis_text(self._data))
+                self._build_plots()
+                self._setup_scrubber(runs[0])
+            else:
+                self._data = None                       # scrubber is single-run only
+                self._summary.setText(f"Comparing {len(datas)} runs.")
+                self._analysis.setText(
+                    "\n".join(f"[{rr._run_label(d)}]  " + rr.analyze(d)["notes"][0] for d in datas))
+                self._build_compare_plots()
+                self._teardown_scrubber("Select a single run to scrub its frames.")
         except Exception as exc:
-            self._data = None
+            self._data = None; self._datas = []
             self._clear_plots()
-            self._slider.setEnabled(False)
-            self._btn_save.setEnabled(False)
-            self._summary.setText(f"Failed to load {os.path.basename(run)}: {exc}")
+            self._teardown_scrubber()
+            self._btn_save.setEnabled(False); self._btn_report.setEnabled(False)
+            self._summary.setText(f"Failed to load: {exc}")
+            self._analysis.setText("")
             return
-        self._btn_save.setEnabled(True)
+        self._btn_save.setEnabled(len(datas) == 1)      # PNGs are per single run
+        self._btn_report.setEnabled(True)               # report handles 1 or many
 
     def _clear_plots(self):
         """Remove and delete the previous run's tabs/canvases/figures (no leak)."""
@@ -157,6 +183,22 @@ class RunVisualizer(QMainWindow):
             line = fig.axes[0].axvline(self._data["t"][0], color="k", lw=1.0, ls=":")
             self._cursors.append((canvas, line))
             self._tabs.addTab(page, name.capitalize())
+
+    def _build_compare_plots(self):
+        """Overlaid comparison charts across the loaded runs (no time cursor)."""
+        self._clear_plots()
+        for name, fig in rr.build_compare_figures(self._datas).items():
+            page = QWidget(); pl = QVBoxLayout(page)
+            canvas = FigureCanvas(fig)
+            pl.addWidget(NavToolbar(canvas, page))
+            pl.addWidget(canvas)
+            self._tabs.addTab(page, name.capitalize())
+
+    def _teardown_scrubber(self, msg="(no annotated frames in this run)"):
+        self._frames = []; self._frame_times = []
+        self._slider.setEnabled(False)
+        self._frame_img.setText(msg)
+        self._time_lbl.setText("—")
 
     def _setup_scrubber(self, run):
         frames = sorted(glob.glob(os.path.join(run, "frames", "frame_*.jpg")))
@@ -212,6 +254,24 @@ class RunVisualizer(QMainWindow):
                                   + f"\n\nSaved {len(paths)} files → {os.path.join(run, 'viz')}")
         except Exception as exc:
             self._summary.setText(f"Save failed: {exc}")
+
+    def _save_report(self):
+        """Write a self-contained, shareable HTML report of the loaded run(s)."""
+        if not self._datas:
+            self._summary.setText("Load run(s) before saving a report.")
+            return
+        runs = [d["run_dir"] for d in self._datas]
+        default = os.path.join(runs[0],
+                               "report.html" if len(runs) == 1 else "compare_report.html")
+        path, _ = QFileDialog.getSaveFileName(self, "Save report", default,
+                                              "HTML files (*.html)")
+        if not path:
+            return
+        try:
+            out = rr.save_report(runs, out_path=path)
+            self._summary.setText(f"Saved report ({len(runs)} run(s)) → {out}")
+        except Exception as exc:
+            self._summary.setText(f"Report failed: {exc}")
 
 
 def main():
