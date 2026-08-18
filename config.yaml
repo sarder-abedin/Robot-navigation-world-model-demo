@@ -82,14 +82,14 @@ robot:
   baud: 115200
   connection_timeout: 3.0
   # Speed values (0-4095 for the Freenove PWM range)
-  speed_full: 1800
+  speed_full: 1400
   speed_slow: 900
   speed_stop: 0
   # Reroute: turn for this many seconds then continue
   reroute_turn_seconds: 1.2
   reroute_direction: "left"   # "left" | "right"
   # Emergency stop: hold for this long
-  safe_stop_hold_seconds: 3.0
+  safe_stop_hold_seconds: 2.0
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging:
