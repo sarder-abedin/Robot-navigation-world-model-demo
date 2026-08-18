@@ -61,6 +61,7 @@ def load_run(run_dir: str) -> dict:
         "timestamp": ts,
         "frame_idx": _col(rows, "frame_idx"),
         "action": np.array([(r.get("action") or "").strip() for r in rows]),
+        "wm_label": np.array([(r.get("wm_label") or "").strip().upper() for r in rows]),
     }
     for k in ("risk_score", "detector_risk", "world_model_risk", "temporal_risk",
               "ultrasonic_cm", "depth_center_m", "depth_left_m", "depth_right_m",
@@ -226,6 +227,285 @@ def summary_text(data) -> str:
         f"frames dropped: {s['frames_dropped_pct']}%",
     ]
     return "\n".join(lines)
+
+
+# ── Analysis (insights + auto-notes) ─────────────────────────────────────────
+
+# Fusion weights — must match decision.py (risk = 0.35·det + 0.45·wm + 0.20·temporal).
+RISK_WEIGHTS = {"detector_risk": 0.35, "world_model_risk": 0.45, "temporal_risk": 0.20}
+_DRIVER_NAME = {"detector_risk": "detector", "world_model_risk": "world_model",
+                "temporal_risk": "temporal"}
+
+
+def _active_pct(arr) -> float:
+    """% of frames where a finite value is > 0 (i.e. the model actually fired)."""
+    a = arr[np.isfinite(arr)]
+    return round(100.0 * float(np.count_nonzero(a > 0)) / a.size, 1) if a.size else 0.0
+
+
+def analyze(data) -> dict:
+    """Derive higher-level insights + human-readable auto-notes from one run.
+
+    Returns a dict with the risk-driver split, action mix, V-JEPA 2 label
+    distribution, model-activity / stream-health numbers, and a `notes` list of
+    plain-language findings (uncalibrated anchors, ultrasonic-driven, YOLO quiet,
+    no-echo, dropped frames, latency) so a report reads like the manual analysis.
+    """
+    s = summary(data)
+    n = s["frames"]
+
+    # Risk driver split: weight × mean(component), normalized to 100%.
+    contrib = {}
+    for key, w in RISK_WEIGHTS.items():
+        vals = data[key][np.isfinite(data[key])]
+        contrib[key] = w * float(np.mean(vals)) if vals.size else 0.0
+    tot = sum(contrib.values()) or 1.0
+    drivers = {_DRIVER_NAME[k]: round(100.0 * v / tot, 1) for k, v in contrib.items()}
+    top_driver = max(drivers, key=drivers.get) if drivers else None
+
+    # V-JEPA 2 label distribution (BLOCKED / MIXED / CLEAR …).
+    labels = data.get("wm_label")
+    wm_label_pct = {}
+    if labels is not None and labels.size:
+        named = labels[labels != ""]
+        if named.size:
+            u, c = np.unique(named, return_counts=True)
+            wm_label_pct = {lab: round(100.0 * cc / named.size, 1) for lab, cc in zip(u, c)}
+
+    det_active = _active_pct(data["detector_risk"])
+    wm_active = _active_pct(data["world_model_risk"])
+    # Ultrasonic no-echo: cm ≤ 0 (the -1 sentinel) among rows that logged the field.
+    us = data["ultrasonic_cm"][np.isfinite(data["ultrasonic_cm"])]
+    noecho_pct = round(100.0 * float(np.count_nonzero(us <= 0)) / us.size, 1) if us.size else 0.0
+    stop_pct = s["action_pct"].get("STOP", 0.0)
+    reroute_pct = s["action_pct"].get("REROUTE", 0.0) + s["action_pct"].get("BACKUP", 0.0)
+
+    # The driver line is informational (always shown); `problems` are findings
+    # worth acting on. A run with no problems gets the "looks healthy" note.
+    notes = []
+    if top_driver:
+        notes.append(f"Risk is driven mostly by the {top_driver} ({drivers[top_driver]}% of the "
+                     f"fused signal).")
+    problems = []
+    if s["wm_risk_std"] is not None and wm_active > 20 and s["wm_risk_std"] < 0.03:
+        problems.append(f"V-JEPA 2 risk is flat (~{s['wm_risk_mean']}) → the anchors look "
+                        f"uncalibrated. Calibrating them (calibrate_anchors.py) is the biggest "
+                        f"accuracy win.")
+    if det_active < 10:
+        problems.append(f"YOLO rarely fires ({det_active}% of frames) → mostly plain "
+                        f"walls/surfaces it isn't trained on; depth + ultrasonic carry the "
+                        f"obstacle sensing.")
+    if stop_pct > 25:
+        problems.append(f"Heavily ultrasonic-driven (STOP {stop_pct}%) → likely an enclosed or "
+                        f"cluttered space with few clearly-open sides.")
+    if noecho_pct > 5:
+        problems.append(f"Ultrasonic returned no echo on {noecho_pct}% of frames (distance = -1) "
+                        f"→ the distance hard-stop was disabled there; check echo wiring/power.")
+    if s["frames_dropped_pct"] is not None and s["frames_dropped_pct"] > 40:
+        problems.append(f"High dropped-frame rate ({s['frames_dropped_pct']}%) → the network or "
+                        f"CPU can't keep up with the camera stream.")
+    if s["lat_total_p95_ms"] is not None and s["lat_total_p95_ms"] > 150:
+        problems.append(f"p95 latency is {s['lat_total_p95_ms']} ms → the world model or depth "
+                        f"stage is the bottleneck.")
+    if problems:
+        notes += problems
+    else:
+        notes.append("Run looks healthy: risk well-distributed, models active, stream stable.")
+
+    return {
+        "run": os.path.basename(data["run_dir"].rstrip("/")),
+        "frames": n,
+        "duration_s": s["duration_s"],
+        "risk_mean": round(float(np.mean(data["risk_score"][np.isfinite(data["risk_score"])])), 3)
+        if np.isfinite(data["risk_score"]).any() else None,
+        "risk_drivers_pct": drivers,
+        "top_driver": top_driver,
+        "action_pct": s["action_pct"],
+        "wm_label_pct": wm_label_pct,
+        "det_active_pct": det_active,
+        "wm_active_pct": wm_active,
+        "ultrasonic_noecho_pct": noecho_pct,
+        "stop_pct": stop_pct,
+        "reroute_pct": round(reroute_pct, 1),
+        "frames_dropped_pct": s["frames_dropped_pct"],
+        "lat_total_p95_ms": s["lat_total_p95_ms"],
+        "notes": notes,
+    }
+
+
+def analysis_text(data) -> str:
+    a = analyze(data)
+    drivers = ", ".join(f"{k} {v}%" for k, v in a["risk_drivers_pct"].items())
+    lines = [
+        f"risk drivers  : {drivers}",
+        f"models active : YOLO {a['det_active_pct']}%   V-JEPA2 {a['wm_active_pct']}%",
+    ]
+    if a["wm_label_pct"]:
+        lines.append("V-JEPA2 label : " + ", ".join(f"{k} {v}%" for k, v in a["wm_label_pct"].items()))
+    lines.append("")
+    lines += [f"• {note}" for note in a["notes"]]
+    return "\n".join(lines)
+
+
+# ── Multi-run comparison ─────────────────────────────────────────────────────
+
+_COMPARE_CYCLE = ["#1a7a1a", "#8a2be2", "#c8841a", "#0a84a8", "#c33", "#555",
+                  "#1a5a7a", "#a0521a"]
+
+
+def _run_label(data) -> str:
+    return os.path.basename(data["run_dir"].rstrip("/"))
+
+
+def figure_compare_metric(datas, key, title, ylabel, ylim=None) -> Figure:
+    """Overlay one metric (each run on its own relative-time axis) for N runs."""
+    fig = Figure(figsize=(9, 3.4)); ax = fig.add_subplot(111)
+    for i, d in enumerate(datas):
+        if key in d and np.isfinite(d[key]).any():
+            ax.plot(d["t"], d[key], lw=1.4, label=_run_label(d),
+                    color=_COMPARE_CYCLE[i % len(_COMPARE_CYCLE)])
+    if ylim:
+        ax.set_ylim(*ylim)
+    ax.set_xlabel("time (s)"); ax.set_ylabel(ylabel); ax.set_title(title)
+    _legend(ax, loc="upper right", fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def figure_action_mix_compare(datas) -> Figure:
+    """Grouped stacked bars: the action mix (%) for each run side by side."""
+    fig = Figure(figsize=(9, 3.4)); ax = fig.add_subplot(111)
+    order = ["FORWARD", "SLOW", "TURN", "REROUTE", "BACKUP", "STOP"]
+    labels = [_run_label(d) for d in datas]
+    x = np.arange(len(datas))
+    bottoms = np.zeros(len(datas))
+    for act in order:
+        vals = np.array([summary(d)["action_pct"].get(act, 0.0) for d in datas])
+        if vals.any():
+            ax.bar(x, vals, bottom=bottoms, label=act, color=ACTION_COLOURS.get(act, "#666"))
+            bottoms += vals
+    ax.set_xticks(x); ax.set_xticklabels(labels, rotation=20, ha="right", fontsize=8)
+    ax.set_ylabel("% of frames"); ax.set_title("Action mix by run")
+    ax.legend(loc="upper right", ncol=3, fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def build_compare_figures(datas) -> dict:
+    """Overlaid comparison charts for a list of loaded runs (>= 1)."""
+    return {
+        "risk": figure_compare_metric(datas, "risk_score", "Fused risk by run", "risk", (0, 1)),
+        "distance": figure_compare_metric(datas, "ultrasonic_m",
+                                          "Distance ahead (ultrasonic) by run", "distance (m)"),
+        "latency": figure_compare_metric(datas, "lat_total_ms",
+                                         "Total latency by run", "latency (ms)"),
+        "actions": figure_action_mix_compare(datas),
+    }
+
+
+def compare_table(datas) -> list[dict]:
+    """One summary+analysis row per run, for a side-by-side table."""
+    rows = []
+    for d in datas:
+        a = analyze(d)
+        rows.append({
+            "run": a["run"], "frames": a["frames"], "duration_s": a["duration_s"],
+            "risk_mean": a["risk_mean"], "top_driver": a["top_driver"],
+            "stop_pct": a["stop_pct"], "det_active_pct": a["det_active_pct"],
+            "wm_active_pct": a["wm_active_pct"], "noecho_pct": a["ultrasonic_noecho_pct"],
+            "dropped_pct": a["frames_dropped_pct"], "lat_p95_ms": a["lat_total_p95_ms"],
+        })
+    return rows
+
+
+# ── Shareable HTML report ────────────────────────────────────────────────────
+
+def _fig_to_data_uri(fig, dpi: int = 110) -> str:
+    import base64
+    import io
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    FigureCanvasAgg(fig)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi)
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _html_escape(s) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def save_report(run_dirs, out_path: str | None = None) -> str:
+    """Build a single self-contained HTML report for one or more runs.
+
+    One run → its five charts + summary + analysis notes. Multiple runs →
+    overlaid comparison charts + a per-run table + each run's notes. Images are
+    embedded (base64) so the file is shareable on its own. Returns the path.
+    """
+    if isinstance(run_dirs, str):
+        run_dirs = [run_dirs]
+    if not run_dirs:
+        raise ValueError("no runs given")
+    datas = [load_run(r) for r in run_dirs]
+    multi = len(datas) > 1
+
+    if multi:
+        figs = build_compare_figures(datas)
+    else:
+        figs = build_all_figures(datas[0])
+    imgs = "".join(
+        f'<figure><figcaption>{_html_escape(name.capitalize())}</figcaption>'
+        f'<img src="{_fig_to_data_uri(fig)}" alt="{_html_escape(name)}"></figure>'
+        for name, fig in figs.items()
+    )
+
+    if multi:
+        rows = compare_table(datas)
+        headers = ["run", "frames", "duration_s", "risk_mean", "top_driver", "stop_pct",
+                   "det_active_pct", "wm_active_pct", "noecho_pct", "dropped_pct", "lat_p95_ms"]
+        thead = "".join(f"<th>{_html_escape(h)}</th>" for h in headers)
+        tbody = "".join(
+            "<tr>" + "".join(f"<td>{_html_escape(r.get(h))}</td>" for h in headers) + "</tr>"
+            for r in rows
+        )
+        table = f"<table><thead><tr>{thead}</tr></thead><tbody>{tbody}</tbody></table>"
+        notes_html = "".join(
+            f"<h3>{_html_escape(_run_label(d))}</h3><ul>"
+            + "".join(f"<li>{_html_escape(nn)}</li>" for nn in analyze(d)["notes"]) + "</ul>"
+            for d in datas
+        )
+        body = table + "<h2>Findings</h2>" + notes_html
+        title = f"Navigation report — {len(datas)} runs"
+    else:
+        a = analyze(datas[0])
+        summ = _html_escape(summary_text(datas[0]))
+        notes_html = "<ul>" + "".join(f"<li>{_html_escape(nn)}</li>" for nn in a["notes"]) + "</ul>"
+        body = f"<pre>{summ}</pre><h2>Findings</h2>{notes_html}"
+        title = f"Navigation report — {a['run']}"
+
+    html = f"""<!doctype html><html><head><meta charset="utf-8">
+<title>{_html_escape(title)}</title><style>
+body{{font-family:system-ui,Arial,sans-serif;margin:24px;color:#111;background:#fff}}
+h1{{font-size:20px}} h2{{font-size:16px;margin-top:28px}} h3{{font-size:14px;margin:14px 0 4px}}
+figure{{margin:12px 0}} figcaption{{font-weight:600;font-size:13px;margin-bottom:4px}}
+img{{max-width:100%;border:1px solid #ddd}}
+table{{border-collapse:collapse;font-size:13px;margin:8px 0}}
+th,td{{border:1px solid #ccc;padding:4px 8px;text-align:right}} th{{background:#f2f2f2}}
+td:first-child,th:first-child{{text-align:left}}
+pre{{background:#f7f7f7;padding:10px;border-radius:6px;font-size:13px;white-space:pre-wrap}}
+ul{{font-size:13px}}</style></head><body>
+<h1>{_html_escape(title)}</h1>
+<p style="color:#666;font-size:12px">Runs: {_html_escape(", ".join(_run_label(d) for d in datas))}</p>
+<h2>Charts</h2>{imgs}
+<h2>Summary &amp; analysis</h2>{body}
+</body></html>"""
+
+    if out_path is None:
+        base = datas[0]["run_dir"]
+        name = "report.html" if not multi else "compare_report.html"
+        out_path = os.path.join(base, name)
+    with open(out_path, "w") as f:
+        f.write(html)
+    return out_path
 
 
 def save_pngs(run_dir: str, out_dir: str | None = None, dpi: int = 110) -> list[str]:

@@ -276,6 +276,7 @@ Both modes run on the **same code path** — only the weight vector changes.
 | `CMD_KILL` | PC → Pi | `CMD_KILL` | Shutdown robot process |
 | `CMD_AIMODE` | UI → PC | `CMD_AIMODE#<0/1/2>` | Mode change from operator |
 | `CMD_LOGGING` | UI → PC | `CMD_LOGGING#<0/1>` | Toggle PC-side run logging |
+| `CMD_FEATUREVIZ` | UI → PC | `CMD_FEATUREVIZ#<0\|1>` | Toggle the "what V-JEPA 2 sees" dense-feature HUD panel (PCA of the world model's patch features, shown side-by-side with the camera; on by default) |
 | `CMD_GOAL` | UI → PC | `CMD_GOAL#<x‰>#<y‰>` | Set navigation goal at normalized image coords ×1000 (per-mille, since the parser is integer-only). Tracked (CSRT/template); bearing + depth drawn on the HUD |
 | `CMD_GOAL_CLEAR` | UI → PC | `CMD_GOAL_CLEAR` | Clear the navigation goal |
 | `CMD_GOALFOLLOW` | UI → PC | `CMD_GOALFOLLOW#<0\|1>` | Nav mode: **1 = Goal Following** (robot steers to the goal; obstacle avoidance always overrides), **0 = Obstacle Avoidance** (no goal needed) |

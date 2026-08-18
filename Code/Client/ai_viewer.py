@@ -587,9 +587,18 @@ class AIViewer(QMainWindow):
         self._btn_reset_map = QPushButton("Reset trail")
         self._btn_reset_map.setToolTip("Clear the accumulated world map and start a fresh trajectory.")
         self._btn_reset_map.clicked.connect(self._world_map.reset)
+        # V-JEPA 2 dense-feature view: side-by-side PCA panel in the video HUD.
+        self._chk_featviz = QCheckBox("V-JEPA 2 view")
+        self._chk_featviz.setToolTip(
+            "Show what V-JEPA 2 sees beside the camera: a PCA visualization of its "
+            "dense patch features (on by default; switch off to reclaim video width)."
+        )
+        self._chk_featviz.setChecked(True)
+        self._chk_featviz.toggled.connect(self._send_featureviz)
         map_row.addStretch(1)
         map_row.addWidget(self._chk_map)
         map_row.addWidget(self._chk_world)
+        map_row.addWidget(self._chk_featviz)
         map_row.addWidget(self._btn_reset_map)
         map_row.addStretch(1)
         left_col.addLayout(map_row)
@@ -1008,6 +1017,8 @@ class AIViewer(QMainWindow):
             self._send_ai_mode(0)
             # Run logging is ON by default — push the checkbox state to the server.
             self._send_logging(self._chk_logging.isChecked())
+            # V-JEPA 2 feature view is ON by default — push its state too.
+            self._send_featureviz(self._chk_featviz.isChecked())
             self._update_activation_gate()
             self._status_bar.setText("Connected – pick a Navigation Mode to begin (or drive MANUAL).")
 
@@ -1396,6 +1407,23 @@ class AIViewer(QMainWindow):
             self._cmd_sock.sendall(f"CMD_LOGGING#{1 if on else 0}\n".encode("utf-8"))
             self._status_bar.setText(
                 f"Server run logging {'ENABLED' if on else 'disabled'}"
+            )
+        except Exception as exc:
+            self._status_bar.setText(f"Send error: {exc}")
+
+    def _send_featureviz(self, on: bool) -> None:
+        """Toggle the V-JEPA 2 dense-feature HUD panel (CMD_FEATUREVIZ#1|0)."""
+        if not (self._cmd_sock and self._connected):
+            self._status_bar.setText("Not connected – cannot toggle V-JEPA 2 view.")
+            # revert the checkbox to reflect that nothing was sent
+            self._chk_featviz.blockSignals(True)
+            self._chk_featviz.setChecked(False)
+            self._chk_featviz.blockSignals(False)
+            return
+        try:
+            self._cmd_sock.sendall(f"CMD_FEATUREVIZ#{1 if on else 0}\n".encode("utf-8"))
+            self._status_bar.setText(
+                f"V-JEPA 2 feature view {'ENABLED' if on else 'disabled'}"
             )
         except Exception as exc:
             self._status_bar.setText(f"Send error: {exc}")

@@ -90,6 +90,7 @@ class Visualizer:
         ssv2_sentence: str = "",
         depth=None,
         goal=None,
+        feature_rgb=None,
     ) -> np.ndarray:
         """Annotate a BGR frame with full AI pipeline state.
 
@@ -136,7 +137,29 @@ class Visualizer:
         if goal is not None and getattr(goal, "active", False):
             self._draw_goal(vis, goal, w, h)
 
+        # "What V-JEPA 2 sees": the PCA dense-feature map beside the camera, so the
+        # audience can see the model's representation next to the input.
+        if feature_rgb is not None:
+            vis = self._compose_feature_view(vis, feature_rgb)
+
         return vis
+
+    def _compose_feature_view(self, vis, feature_rgb):
+        """hstack the camera frame with an upscaled V-JEPA 2 dense-feature map.
+        feature_rgb is a small (grid×grid×3) uint8 RGB array from feature_viz."""
+        try:
+            fr = np.asarray(feature_rgb)
+            if fr.ndim != 3 or fr.shape[2] != 3:
+                return vis
+            h, w = vis.shape[:2]
+            bgr = cv2.cvtColor(fr.astype(np.uint8), cv2.COLOR_RGB2BGR)   # RGB→BGR
+            view = cv2.resize(bgr, (w, h), interpolation=cv2.INTER_LINEAR)
+            cv2.putText(view, "V-JEPA 2 sees", (8, 24), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, (255, 255, 255), 2, cv2.LINE_AA)
+            sep = np.full((h, 2, 3), 60, dtype=np.uint8)                 # thin divider
+            return np.hstack([vis, sep, view])
+        except Exception:
+            return vis
 
     def _draw_goal(self, vis, goal, w: int, h: int) -> None:
         """Draw the tracked navigation goal: marker + heading arrow + readout.

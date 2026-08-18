@@ -101,6 +101,11 @@ class AIPipeline:
         # Run logging (CSV + annotated frames) starts from config; toggled at
         # runtime from the UI (CMD_LOGGING) or at startup via env/CLI.
         self._logging_enabled = bool(self._cfg.get("logging", {}).get("enabled", False))
+        # "What V-JEPA 2 sees" HUD overlay (dense-feature PCA). On by default from
+        # config; toggled live from the UI (CMD_FEATUREVIZ). The map is still
+        # computed in the WM subprocess; this just controls whether it's drawn.
+        self._feature_viz_enabled = bool(
+            (self._cfg.get("world_model", {}) or {}).get("feature_viz", True))
 
         self._state = AIState(navigation_mode=self._nav_mode,
                               logging_enabled=self._logging_enabled)
@@ -323,6 +328,11 @@ class AIPipeline:
     def is_logging_enabled(self) -> bool:
         with self._state_lock:
             return self._logging_enabled
+
+    def set_feature_viz(self, enabled: bool) -> None:
+        """Show/hide the 'what V-JEPA 2 sees' dense-feature map in the HUD."""
+        self._feature_viz_enabled = bool(enabled)
+        logger.info("V-JEPA 2 feature view %s", "ON" if enabled else "off")
 
     def set_navigation_mode(self, mode: str) -> None:
         """Switch between 'predictive' and 'baseline' at runtime."""
@@ -660,9 +670,13 @@ class AIPipeline:
             map_objects = self._build_map_objects(det_result)
 
             # ── 8. Visualise ──────────────────────────────────────────────────
+            # "What V-JEPA 2 sees": the PCA dense-feature map (computed in the WM
+            # subprocess) is drawn beside the camera when the operator has it on.
+            feature_rgb = getattr(wm_result, "feature_rgb", None) if self._feature_viz_enabled else None
             annotated = self._visualizer.annotate(
                 frame_bgr, det_result, decision, temporal_result, sonic_cm,
                 ssv2_sentence=ssv2_sentence, depth=depth_result, goal=goal_state,
+                feature_rgb=feature_rgb,
             )
             with self._annotated_lock:
                 self._last_annotated_bgr = annotated
