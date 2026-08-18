@@ -29,6 +29,15 @@ detector:
     - "suitcase"
     - "backpack"
     - "box"
+    - "bus"
+    - "bench"
+    - "umbrella"
+    - "handbag"
+    - "bottle"
+    - "laptop"
+    - "potted plant"
+    - "microwave"
+    - "tv"
   # Horizontal thirds of the frame: left / center / right
   center_zone_ratio: 0.40   # fraction of frame width considered "center"
   # An obstacle is "close" when its bounding-box area exceeds this fraction
