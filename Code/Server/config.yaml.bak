@@ -138,12 +138,55 @@ world_model:
   anchors_path: ""
   prediction_horizon: 4        # future frames to predict
   risk_similarity_threshold: 0.55
-  # Apple Silicon GPU (Metal). "mps" runs V-JEPA 2 on the Mac GPU when the server
-  # is launched NATIVELY on macOS (Docker on a Mac has no Metal passthrough → CPU).
-  # Falls back to CUDA→CPU on other hardware. Use "auto" to prefer CUDA when present.
-  device: "mps"                # auto = CUDA → MPS → CPU; or force "cuda"/"mps"/"cpu"
-  # Run world-model inference every N frames (expensive on CPU)
-  run_every_n_frames: 8
+  # Compute device (portable). "auto" resolves CUDA → MPS → CPU and picks the best
+  # available: NVIDIA CUDA, AMD ROCm (which registers as CUDA in PyTorch — see the
+  # ROCm section in HOW_TO_RUN.md), or Apple MPS on a native Mac; else CPU. Force a
+  # specific one with "cuda"/"mps"/"cpu" (each degrades gracefully if unavailable).
+  device: "auto"               # auto = CUDA/ROCm → MPS → CPU; or force cuda/mps/cpu
+  # GPU compute precision (CUDA/ROCm only; ignored on CPU/MPS, which stay fp32).
+  # bf16 halves the attention ACTIVATION memory — the fix for the 12 GiB masked-
+  # forward OOM on a 16 GB card — and roughly doubles speed, with negligible impact
+  # on the cosine-similarity risk. On a GPU the model also loads with memory-
+  # efficient (SDPA) attention, and if a forward STILL OOMs it offloads THAT forward
+  # to CPU (correct but slow) instead of degrading the prediction.
+  #   bf16 = bfloat16 (best on RDNA4 / Ampere+; wide range, no NaNs)
+  #   fp16 = float16   (use if bf16 misbehaves)
+  #   fp32 = full precision (highest memory — only if you need it)
+  # NOTE: fp16 and bf16 use the SAME memory (both 16-bit) — if bf16 still OOMs,
+  # switching to fp16 won't help; free VRAM or use a smaller model_id/clip_length.
+  precision: "bf16"
+  # If a forward OOMs even at bf16, it runs on CPU and STAYS there (no per-tick
+  # GPU↔CPU thrash); re-probe the GPU every N CPU forwards in case VRAM frees up
+  # (0 = never re-probe, stay on CPU until restart).
+  gpu_retry_every_calls: 30
+  # "What V-JEPA 2 sees": PCA of the dense patch features → a colour map of the
+  # scene (like the V-JEPA 2 paper's Fig. 1). Small extra cost per forward; on by
+  # default, toggle live from the UI (CMD_FEATUREVIZ) or set false.
+  feature_viz: true
+  # How to show it. "overlay" (default) blends the feature colours SEMI-
+  # TRANSPARENTLY onto the camera so the real scene shows through and the colours
+  # line up with what they describe — the most legible for an audience. "side"
+  # draws it as a separate panel beside the camera (doubles the frame width).
+  feature_viz_mode: overlay
+  # Overlay opacity (0..1): higher = stronger feature colours, lower = more of the
+  # camera shows through. Only used in "overlay" mode.
+  feature_viz_alpha: 0.5
+  # Colour saturation of the feature map (0..1): the raw top-3-PCA→RGB is a garish
+  # rainbow; pulling toward luminance makes it read as coherent regions. 1 = raw.
+  feature_viz_saturation: 0.65
+  # How often to run V-JEPA 2 — smaller = fresher predictions (more decisions per
+  # second), at the cost of GPU compute (NOT extra VRAM; the same clip is scored,
+  # just more often). This value governs the IN-PROCESS fallback path
+  # (run_in_subprocess: false). In the default SUBPROCESS path the dedicated worker
+  # is forward-bound and runs V-JEPA 2 on EVERY clip, so this gate doesn't throttle
+  # it there. On a GPU with headroom, keep this low for the freshest risk signal.
+  run_every_n_frames: 4
+  # Run V-JEPA 2 (+ SSv2) in a SEPARATE process. V-JEPA 2 (ViT-L over a 64-frame
+  # clip) holds the GIL for seconds per call; on a thread that freezes the camera
+  # I/O and the robot stream stalls out. A separate process has its own GIL, so the
+  # main loop only pays a tiny pickle cost. Set false to run it in-process on a
+  # background thread (simpler, but the stream can stutter during inference).
+  run_in_subprocess: true
 
 # ── Temporal action recognition (Something-Something V2 style) ────────────────
 temporal_action:
@@ -164,14 +207,23 @@ ssv2:
   enabled: true
   model_id: "MCG-NJU/videomae-base-finetuned-ssv2"
   num_frames: 16
-  device: "mps"                # Apple GPU (Metal) when native on macOS; else CUDA→CPU
+  device: "auto"               # CUDA/ROCm → MPS (native Mac) → CPU (see HOW_TO_RUN.md)
+  precision: "bf16"            # GPU compute dtype: bf16 | fp16 | fp32 (CPU/MPS → fp32)
   # SSv2 (VideoMAE) is the heaviest single stage (~100 ms/tick on CPU) and is
   # ANNOTATION/LOG ONLY — it does not drive navigation. Profiling on a live run
   # showed its ticks caused ~31% of camera frames to be dropped (pipeline 20 fps
   # vs 30 fps received) and pushed p95 latency to ~130 ms, making the UI feel
-  # laggy and slowing the STOP reaction. Run it less often (was 16); lower it if
-  # you want a snappier SSv2 caption at the cost of throughput, or disable it.
-  run_every_n_frames: 32       # CPU cadence; auto-halved on a GPU
+  # laggy and slowing the STOP reaction. This value is the CPU/in-process cadence
+  # (auto-halved on a GPU). In the default subprocess path SSv2 runs off the main
+  # process on its own job-based cadence, so a snappier caption there no longer
+  # steals from the drive loop; lower it for a fresher caption at more GPU cost.
+  run_every_n_frames: 16       # CPU cadence; auto-halved on a GPU
+  # Subprocess cadence: in the default run_in_subprocess path SSv2 runs off the
+  # main process, so this counts CLIPS handled by the worker (not camera frames).
+  # 1 = every clip (freshest caption, but each clip then also pays the SSv2
+  # forward, slowing the V-JEPA 2 update rate); 2 = every other clip (default,
+  # keeps V-JEPA 2 fresh). Raise it to spend even less time on the caption.
+  subprocess_run_every: 2
   min_confidence: 0.15         # below this the sentence is shown as tentative
   # Fills the SSv2 "something" slot when YOLO has no named object (a wall, or
   # nothing detected this frame) so the caption reads e.g. "Moving obstacle
@@ -187,7 +239,8 @@ ssv2:
 depth:
   enabled: true
   model_id: "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
-  device: "mps"                # Apple GPU (Metal) when native on macOS; else CUDA→CPU
+  device: "auto"               # CUDA/ROCm → MPS (native Mac) → CPU (see HOW_TO_RUN.md)
+  precision: "bf16"            # GPU compute dtype: bf16 | fp16 | fp32 (CPU/MPS → fp32)
   run_every_n_frames: 6        # depth is expensive; auto-raised on CPU
   max_range_m: 5.0             # ceiling for depth readings (m)
   near_percentile: 15          # per-region percentile = "nearest obstacle" (robust to noise)
@@ -195,7 +248,7 @@ depth:
   direction_margin_m: 0.3      # a side must be this much more open than centre to turn
   # Linear scale correction (see CALIBRATION.md): measure a known distance, read
   # what the HUD reports, set scale = actual / reported. 1.0 = raw model metres.
-  scale: 1.218
+  scale: 0.976
 
 # ── Goal-point navigation (Phase 2: track a clicked goal; HUD only, no motion) ──
 # The operator clicks a point on the video (CMD_GOAL); the PC tracks it across
@@ -278,13 +331,22 @@ decision:
   # governor") — the defaults are conservative guesses, not measured values:
   governor:
     enabled: true
-    forward_speed_mps: 0.022  # measured robot speed at the FORWARD action (m/s)
-    slow_speed_mps: 0.18       # measured robot speed at the SLOW action (m/s)
-    max_decel_mps2: 0.6        # measured hardest deceleration the robot achieves
+    forward_speed_mps: 0.324  # measured robot speed at the FORWARD action (m/s)
+    slow_speed_mps: 0.284  # measured robot speed at the SLOW action (m/s)
+    max_decel_mps2: 0.136  # measured hardest deceleration the robot achieves
     target_speed_mps: 0.0      # speed to reach before contact (0 = full stop; >0 = reduce impact)
     safety_margin_m: 0.10      # extra buffer added to every stopping distance
     min_reaction_s: 0.2        # floor on the measured pipeline latency
     max_reaction_s: 3.0        # cap on it (a stalled pipeline → near-stop, bounded)
+
+# ── World-anchored map: dead-reckoned pose ──────────────────────────────────────
+# The robot has NO odometry, so its world position is ESTIMATED by integrating the
+# commanded action × calibrated speed × dt (pose_estimator.py). FORWARD/SLOW reuse
+# the governor's forward_speed_mps / slow_speed_mps above (single source of truth);
+# these two add the missing constants. Open-loop → drifts; CALIBRATE on the robot.
+pose:
+  turn_rate_dps: 45.0        # measured in-place turn rate (deg/s) for TURN / REROUTE
+  backup_speed_mps: 0.04     # measured reverse speed at the BACKUP action (m/s)
 
 # ── Robot motor control ────────────────────────────────────────────────────────
 robot:
@@ -319,10 +381,14 @@ logging:
   save_raw_frames: false
   raw_frame_interval: 5
   csv_log: true
-  # Initial state of run logging (CSV + annotated frames). The operator can flip
-  # this at runtime from the UI toggle, or at startup with --logging on/off or
-  # the NAV_LOGGING=1/0 env var.
-  enabled: false
+  # Initial state of run logging (CSV + annotated frames). ON by default so a run
+  # is captured to logs_rpi/ without any extra step (matches the UI toggle, which
+  # also defaults on). The operator can flip it at runtime from the UI toggle, or
+  # override at startup with --logging on/off or the NAV_LOGGING=1/0 env var.
+  # NOTE (Docker): logs are written INSIDE the container — mount the host dir
+  # (`-v "$(pwd)/logs_rpi:/app/logs_rpi"`, or use docker-compose) or they vanish
+  # when a `--rm` container exits.
+  enabled: true
 
 # ── TCP / Server ───────────────────────────────────────────────────────────────
 server:
