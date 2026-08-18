@@ -73,7 +73,7 @@ decision:
   # Hysteresis: must cross threshold by this margin before changing action
   hysteresis: 0.05
   # Seconds to hold a STOP decision before re-evaluating
-  stop_hold_seconds: 1.5
+  stop_hold_seconds: 2.5
 
 # ── Robot Motor Control ───────────────────────────────────────────────────────
 robot:
@@ -82,8 +82,8 @@ robot:
   baud: 115200
   connection_timeout: 3.0
   # Speed values (0-4095 for the Freenove PWM range)
-  speed_full: 1400
-  speed_slow: 900
+  speed_full: 1500
+  speed_slow: 1000
   speed_stop: 0
   # Reroute: turn for this many seconds then continue
   reroute_turn_seconds: 1.2
@@ -96,7 +96,7 @@ logging:
   log_dir: "logs"
   log_level: "INFO"           # DEBUG | INFO | WARNING | ERROR
   save_annotated_frames: true
-  annotated_frame_interval: 5  # save every N frames
+  annotated_frame_interval: 2  # save every N frames
   csv_log: true
 
 # ── Visualization ─────────────────────────────────────────────────────────────
