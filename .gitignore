@@ -34,3 +34,5 @@ Code/Server/params.json
 .env
 .DS_Store
 **/.DS_Store
+config.yaml
+config.yaml.bak
