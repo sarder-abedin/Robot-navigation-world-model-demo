@@ -130,6 +130,19 @@ real corridor sits almost exactly between them → `diff ≈ 0` → the label is
    You can snapshot from the robot, save frames from the run log
    (`logs_rpi/<run>/frames/`), or grab frames from the demo video.
 
+   **Skip the manual sorting** — `build_anchor_set.py` auto-fills those two folders
+   for you (balanced + capped) from either a logged run or a video:
+
+   ```bash
+   cd Code/Server
+   python build_anchor_set.py --run ../../logs_rpi/<run> --out anchorset      # labels via YOLO+sonar+action
+   python build_anchor_set.py --video ../../assets/demo_clips/corridor.mp4 --out anchorset  # labels via YOLO
+   # then point calibrate_anchors.py at anchorset/blocked + anchorset/clear (below),
+   # or add --build anchors.npz [--apply config.yaml] to do it in one shot.
+   ```
+   A run needs BOTH blocked and clear stretches; prefer a run recorded with
+   `save_raw_frames` on (clean, no HUD overlay).
+
 2. **Build the anchors** — run **where V-JEPA 2 actually loads** (the native
    GPU/MPS PC, *not* a CPU-only Docker container), so the anchors come from the
    real encoder and not the stub:
