@@ -27,8 +27,8 @@ FULL_COLS = [
 ]
 
 
-def _write_run(tmp_path, n=40, cols=FULL_COLS):
-    run = tmp_path / "run_test"
+def _write_run(tmp_path, n=40, cols=FULL_COLS, name="run_test"):
+    run = tmp_path / name
     run.mkdir()
     rows = []
     for i in range(n):
@@ -95,6 +95,70 @@ def test_processed_fps_is_frames_minus_one_over_span(tmp_path):
     # 11 frames spanning 1.0 s (0.1 s steps) → 10 intervals → 10 fps, not 11.
     d = rr.load_run(_write_run(tmp_path, n=11))
     assert rr.summary(d)["processed_fps"] == 10.0
+
+
+def test_analyze_insights_and_notes(tmp_path):
+    d = rr.load_run(_write_run(tmp_path, n=40))
+    a = rr.analyze(d)
+    # 50% STOP + flat wm(0.49) + det always 0 → all three characteristic notes fire.
+    assert a["stop_pct"] == 50.0
+    assert a["det_active_pct"] == 0.0 and a["wm_active_pct"] == 100.0
+    assert a["wm_label_pct"] == {"MIXED": 100.0}
+    # risk drivers normalize to ~100% and V-JEPA 2 is the top driver (only nonzero one)
+    assert a["top_driver"] == "world_model"
+    assert abs(sum(a["risk_drivers_pct"].values()) - 100.0) < 0.5
+    joined = " ".join(a["notes"]).lower()
+    assert "uncalibrated" in joined            # flat V-JEPA2
+    assert "yolo rarely fires" in joined       # det always 0
+    assert "ultrasonic-driven" in joined       # STOP 50%
+    txt = rr.analysis_text(d)
+    assert "risk drivers" in txt and "•" in txt
+
+
+def test_analyze_healthy_run_has_fallback_note(tmp_path):
+    # A run with active YOLO, varied wm and little STOP → the healthy fallback note.
+    cols = FULL_COLS
+    run = tmp_path / "run_ok"; run.mkdir()
+    rows = []
+    for i in range(30):
+        r = {c: 0 for c in cols}
+        r.update(timestamp=1000 + i * 0.1, frame_idx=i + 1, action="FORWARD",
+                 risk_score=0.2, detector_risk=0.3, world_model_risk=0.2 + 0.3 * (i % 3),
+                 temporal_risk=0.1, wm_label="CLEAR", ultrasonic_cm=150,
+                 depth_center_m=2.0, lat_total_ms=30,
+                 net_recv_fps=30, net_frames_recv=(i + 1) * 2, net_frames_dropped=0)
+        rows.append({k: r.get(k, "") for k in cols})
+    with open(run / "navigation_log.csv", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols); w.writeheader(); w.writerows(rows)
+    a = rr.analyze(rr.load_run(str(run)))
+    assert any("healthy" in n.lower() for n in a["notes"])
+
+
+def test_compare_figures_and_table(tmp_path):
+    d1 = rr.load_run(_write_run(tmp_path, n=20, name="run_a"))
+    d2 = rr.load_run(_write_run(tmp_path, n=30, name="run_b"))
+    figs = rr.build_compare_figures([d1, d2])
+    assert set(figs) == {"risk", "distance", "latency", "actions"}
+    for fig in figs.values():
+        assert fig.axes
+    rows = rr.compare_table([d1, d2])
+    assert len(rows) == 2
+    assert {r["run"] for r in rows} == {"run_a", "run_b"}
+    assert all("stop_pct" in r and "top_driver" in r for r in rows)
+
+
+def test_save_report_single_and_multi(tmp_path):
+    d_a = _write_run(tmp_path, n=20, name="run_a")
+    d_b = _write_run(tmp_path, n=25, name="run_b")
+    # single run → report.html with embedded PNGs + findings
+    p1 = rr.save_report(d_a)
+    assert p1.endswith("report.html") and os.path.getsize(p1) > 0
+    html1 = open(p1).read()
+    assert "data:image/png;base64," in html1 and "Findings" in html1
+    # multiple runs → comparison report with a per-run table
+    p2 = rr.save_report([d_a, d_b], out_path=str(tmp_path / "cmp.html"))
+    html2 = open(p2).read()
+    assert "run_a" in html2 and "run_b" in html2 and "<table>" in html2
 
 
 def test_older_csv_without_new_columns(tmp_path):
