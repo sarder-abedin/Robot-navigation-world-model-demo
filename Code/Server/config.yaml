@@ -163,8 +163,13 @@ world_model:
   # the camera in the HUD (like the V-JEPA 2 paper's Fig. 1). Small extra cost per
   # forward; on by default, toggle live from the UI (CMD_FEATUREVIZ) or set false.
   feature_viz: true
-  # Run world-model inference every N frames (expensive on CPU)
-  run_every_n_frames: 8
+  # How often to run V-JEPA 2 — smaller = fresher predictions (more decisions per
+  # second), at the cost of GPU compute (NOT extra VRAM; the same clip is scored,
+  # just more often). This value governs the IN-PROCESS fallback path
+  # (run_in_subprocess: false). In the default SUBPROCESS path the dedicated worker
+  # is forward-bound and runs V-JEPA 2 on EVERY clip, so this gate doesn't throttle
+  # it there. On a GPU with headroom, keep this low for the freshest risk signal.
+  run_every_n_frames: 4
   # Run V-JEPA 2 (+ SSv2) in a SEPARATE process. V-JEPA 2 (ViT-L over a 64-frame
   # clip) holds the GIL for seconds per call; on a thread that freezes the camera
   # I/O and the robot stream stalls out. A separate process has its own GIL, so the
@@ -197,9 +202,17 @@ ssv2:
   # ANNOTATION/LOG ONLY — it does not drive navigation. Profiling on a live run
   # showed its ticks caused ~31% of camera frames to be dropped (pipeline 20 fps
   # vs 30 fps received) and pushed p95 latency to ~130 ms, making the UI feel
-  # laggy and slowing the STOP reaction. Run it less often (was 16); lower it if
-  # you want a snappier SSv2 caption at the cost of throughput, or disable it.
-  run_every_n_frames: 32       # CPU cadence; auto-halved on a GPU
+  # laggy and slowing the STOP reaction. This value is the CPU/in-process cadence
+  # (auto-halved on a GPU). In the default subprocess path SSv2 runs off the main
+  # process on its own job-based cadence, so a snappier caption there no longer
+  # steals from the drive loop; lower it for a fresher caption at more GPU cost.
+  run_every_n_frames: 16       # CPU cadence; auto-halved on a GPU
+  # Subprocess cadence: in the default run_in_subprocess path SSv2 runs off the
+  # main process, so this counts CLIPS handled by the worker (not camera frames).
+  # 1 = every clip (freshest caption, but each clip then also pays the SSv2
+  # forward, slowing the V-JEPA 2 update rate); 2 = every other clip (default,
+  # keeps V-JEPA 2 fresh). Raise it to spend even less time on the caption.
+  subprocess_run_every: 2
   min_confidence: 0.15         # below this the sentence is shown as tentative
   # Fills the SSv2 "something" slot when YOLO has no named object (a wall, or
   # nothing detected this frame) so the caption reads e.g. "Moving obstacle
